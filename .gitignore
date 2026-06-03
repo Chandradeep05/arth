@@ -1,0 +1,63 @@
+# ── Python ──
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+.venv/
+venv/
+env/
+
+# ── Node ──
+node_modules/
+.next/
+out/
+
+# ── Environment (NEVER commit real keys) ──
+.env
+.env.local
+.env.production
+.env.development
+.env.staging
+backend/.env
+
+# ── IDE ──
+.vscode/
+.idea/
+*.swp
+*.swo
+*.sublime-*
+
+# ── OS ──
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Docker ──
+docker-compose.override.yml
+
+# ── Testing ──
+htmlcov/
+.coverage
+.pytest_cache/
+.mypy_cache/
+
+# ── Misc ──
+*.log
+.cache/
+*.bak
+*.tmp
+
+# ── Build artifacts ──
+*.whl
+*.tar.gz
+
+# ── Database ──
+*.db
+*.sqlite3
+
+# ── Temporary scripts ──
+rename.ps1

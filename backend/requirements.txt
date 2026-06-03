@@ -1,0 +1,46 @@
+# ── Core Framework ──
+fastapi==0.115.12
+uvicorn[standard]==0.34.3
+pydantic==2.11.3
+pydantic-settings==2.9.1
+
+# ── Database ──
+sqlalchemy[asyncio]==2.0.41
+asyncpg==0.30.0
+alembic==1.15.2
+greenlet==3.2.2
+
+# ── Redis ──
+redis[hiredis]==6.2.0
+
+# ── Data Sources ──
+yfinance==0.2.58
+httpx==0.28.1
+
+# ── Technical Analysis ──
+pandas==2.2.3
+# pandas-ta is not used in indicators.py
+numpy==1.26.4
+
+# ── AI / LLM ──
+groq==0.25.0
+
+# ── Logging & Observability ──
+structlog==25.4.0
+prometheus-client==0.22.1
+
+# ── Security ──
+python-jose[cryptography]==3.4.0
+passlib[bcrypt]==1.7.4
+python-multipart==0.0.20
+
+# ── Utilities ──
+python-dotenv==1.1.0
+orjson==3.10.18
+eval_type_backport==0.3.1
+
+# ── Testing ──
+pytest==8.4.0
+pytest-asyncio==1.0.0
+pytest-cov==6.1.1
+

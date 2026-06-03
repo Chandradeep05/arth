@@ -1,0 +1,45 @@
+version: '3.8'
+
+services:
+  # TimescaleDB — PostgreSQL with time-series extension
+  # Used for: OHLCV price data (hypertables), companies, indicators, users
+  timescaledb:
+    image: timescale/timescaledb:latest-pg16
+    container_name: arth-timescaledb
+    environment:
+      POSTGRES_DB: arth
+      POSTGRES_USER: arth_user
+      POSTGRES_PASSWORD: arth_dev_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - timescaledb_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U arth_user -d arth"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # Redis — Cache + Pub/Sub
+  # Used for: TTL-based price caching, WebSocket pub/sub, rate limiting
+  redis:
+    image: redis:7-alpine
+    container_name: arth-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    restart: unless-stopped
+
+volumes:
+  timescaledb_data:
+    driver: local
+  redis_data:
+    driver: local
