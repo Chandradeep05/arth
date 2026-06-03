@@ -66,21 +66,26 @@ async function handleResponse<T>(response: Response): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+/**
+ * Build a full URL string from base + endpoint + optional query params.
+ * Works with both absolute (http://...) and relative (/api/...) base URLs.
+ */
+function buildUrl(endpoint: string, params?: Record<string, string>): string {
+  let urlString = `${API_BASE_URL}${endpoint}`;
+  if (params && Object.keys(params).length > 0) {
+    const qs = new URLSearchParams(params).toString();
+    urlString += `?${qs}`;
+  }
+  return urlString;
+}
+
 export const apiClient = {
   /**
    * GET request with typed response
    */
   async get<T>(endpoint: string, params?: Record<string, string>): Promise<T> {
     const traceId = generateTraceId();
-    const url = new URL(`${API_BASE_URL}${endpoint}`);
-
-    if (params) {
-      Object.entries(params).forEach(([key, value]) => {
-        url.searchParams.set(key, value);
-      });
-    }
-
-    const urlString = url.toString();
+    const urlString = buildUrl(endpoint, params);
     logRequest('GET', urlString, traceId);
     const start = performance.now();
 
@@ -124,15 +129,7 @@ export const apiClient = {
    */
   async *stream<T>(endpoint: string, params?: Record<string, string>): AsyncGenerator<T> {
     const traceId = generateTraceId();
-    const url = new URL(`${API_BASE_URL}${endpoint}`);
-
-    if (params) {
-      Object.entries(params).forEach(([key, value]) => {
-        url.searchParams.set(key, value);
-      });
-    }
-
-    const urlString = url.toString();
+    const urlString = buildUrl(endpoint, params);
     logRequest('SSE', urlString, traceId);
 
     const response = await fetch(urlString, {

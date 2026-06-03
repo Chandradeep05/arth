@@ -3,8 +3,12 @@
  * Central configuration for the ARTH platform
  */
 
+// In production, use relative URLs so requests go through Next.js rewrites
+// (same-origin, no CORS). In dev, hit the backend directly.
 export const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000';
+  typeof window !== 'undefined' && window.location.hostname !== 'localhost'
+    ? ''  // Production: relative URL → Next.js rewrites → backend
+    : (process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000');
 
 export const WS_BASE_URL =
   process.env.NEXT_PUBLIC_WS_URL ?? 'ws://localhost:8000';
