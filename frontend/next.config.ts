@@ -5,7 +5,10 @@ const nextConfig: NextConfig = {
     root: ".",
   },
   async rewrites() {
-    const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+    let apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+    if (apiUrl && !apiUrl.startsWith("http://") && !apiUrl.startsWith("https://") && !apiUrl.startsWith("/")) {
+      apiUrl = `https://${apiUrl}`;
+    }
     return [
       {
         source: "/api/:path*",
