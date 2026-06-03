@@ -1,0 +1,35 @@
+# ═══════════════════════════════════════════════════════════════
+# ARTH — Render Deployment Configuration
+# ═══════════════════════════════════════════════════════════════
+# Docs: https://render.com/docs/yaml-spec
+
+services:
+  - type: web
+    name: arth-api
+    runtime: python
+    region: oregon
+
+    # Build
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+
+    # Health check
+    healthCheckPath: /health
+
+    # Free tier
+    plan: free
+
+    # Auto-deploy on push to main
+    autoDeploy: true
+
+    # Environment variables (set secrets in Render dashboard)
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: DEBUG
+        value: "false"
+      - key: LOG_LEVEL
+        value: INFO
+      - key: PYTHON_VERSION
+        value: "3.11.0"

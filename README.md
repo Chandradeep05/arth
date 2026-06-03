@@ -49,7 +49,7 @@
                       │ REST + SSE (Server-Sent Events)
 ┌─────────────────────▼───────────────────────────────────────────┐
 │                     FastAPI Backend                              │
-│                (Railway / localhost:8000)                        │
+│            (Render Free Tier / localhost:8000)                    │
 │                                                                 │
 │  ┌─────────────────────────────────────────────────────────┐   │
 │  │              Intelligence Engines                        │   │
@@ -84,6 +84,7 @@
 | **Sector-aware D/E scoring** | Banks (D/E 7x normal) vs IT (D/E 0.1x normal) require different risk thresholds. |
 | **SSE for research streaming** | Research reports generate in real-time. SSE streams tokens as they arrive. |
 | **TimescaleDB/Redis optional** | Phase 1 works without them. App degrades gracefully — no caching, fresh data. |
+| **Self-ping keepalive** | Background task pings `/health` every 4 min to prevent Render free-tier sleep. UptimeRobot as external backup. |
 
 ---
 
@@ -231,7 +232,7 @@ docker compose up -d
 | **TimescaleDB** | Time-series PostgreSQL (optional) |
 | **Redis** | TTL-based cache (optional) |
 | **Docker Compose** | Local infrastructure |
-| **Railway** | Backend deployment |
+| **Render** | Backend deployment (free tier + keepalive) |
 | **Vercel** | Frontend deployment |
 
 ---
@@ -301,7 +302,7 @@ arth/
 │
 ├── .env.example                 # Environment template
 ├── docker-compose.yml           # TimescaleDB + Redis
-├── railway.toml                 # Railway deployment config
+├── render.yaml                  # Render deployment config
 └── README.md
 ```
 
@@ -309,19 +310,28 @@ arth/
 
 ## Deployment
 
-### Backend → Railway
+### Backend → Render (Free Tier)
 
 1. Push code to GitHub
-2. Connect Railway to your GitHub repo
-3. Set root directory to `backend`
-4. Add environment variables:
+2. Go to [render.com](https://render.com) → **New** → **Web Service**
+3. Connect your GitHub repo (`Chandradeep05/arth`)
+4. Set **Root Directory** to `backend`
+5. Set **Build Command** to `pip install -r requirements.txt`
+6. Set **Start Command** to `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
+7. Add environment variables:
    ```
    GROQ_API_KEY=your_key_here
    APP_ENV=production
    DEBUG=false
    ALLOWED_ORIGINS=https://your-frontend.vercel.app
    ```
-5. Railway auto-detects Python and uses `railway.toml` for config
+8. Deploy! Render auto-sets `RENDER_EXTERNAL_URL` (used by self-ping keepalive)
+
+> **Anti-Sleep Setup**: The backend has a built-in self-ping that hits `/health` every 4 minutes.
+> For extra reliability, add an [UptimeRobot](https://uptimerobot.com) monitor:
+> - **Monitor Type**: HTTP(s)
+> - **URL**: `https://your-render-url.onrender.com/health`
+> - **Interval**: 5 minutes
 
 ### Frontend → Vercel
 
@@ -329,7 +339,7 @@ arth/
 2. Set root directory to `frontend`
 3. Add environment variable:
    ```
-   NEXT_PUBLIC_API_URL=https://your-backend.railway.app
+   NEXT_PUBLIC_API_URL=https://your-backend.onrender.com
    ```
 4. Vercel auto-detects Next.js
 
@@ -343,6 +353,7 @@ arth/
 | `ALLOWED_ORIGINS` | No | `http://localhost:3000` | CORS allowed origins |
 | `DATABASE_URL` | No | SQLite fallback | PostgreSQL connection string |
 | `REDIS_URL` | No | In-memory fallback | Redis connection string |
+| `RENDER_EXTERNAL_URL` | Auto | — | Set automatically by Render. Used by self-ping keepalive. |
 
 ---
 
@@ -410,8 +421,8 @@ This project is licensed under the MIT License — see the [LICENSE](LICENSE) fi
 - **Yahoo Finance** via [yfinance](https://github.com/ranaroussi/yfinance) — Market data
 - **Groq** — Ultra-fast LLM inference
 - **Meta AI** — LLaMA 3.3 70B model
-- **Vercel** — Frontend hosting
-- **Railway** — Backend hosting
+- **Render** — Backend hosting (free tier)
+- **UptimeRobot** — Keepalive monitoring
 
 ---
 

@@ -8,15 +8,19 @@ Configures:
 - Trace ID middleware (every request gets a UUID)
 - Structured JSON logging
 - Lifespan events for DB/Redis initialization
+- Self-ping keepalive (prevents Render free-tier cold starts)
 - Exception handlers
 - API route registration
 """
 
 from __future__ import annotations
 
+import asyncio
+import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
+import httpx
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import ORJSONResponse
@@ -28,6 +32,34 @@ from app.core.tracing import TraceIDMiddleware
 from app.dependencies import close_db, close_redis, init_db, init_redis
 
 logger = get_logger(__name__)
+
+# ── Self-Ping Keepalive ──────────────────────────────────────────
+# Render free tier spins down after 15 min of inactivity.
+# This background task pings /health every 4 minutes to stay warm.
+# Works in tandem with UptimeRobot (external, every 5 min).
+
+SELF_PING_INTERVAL = 4 * 60  # 4 minutes
+
+
+async def _keepalive_loop():
+    """Background task: ping own /health endpoint to prevent cold starts."""
+    # Detect own URL — Render sets RENDER_EXTERNAL_URL automatically
+    base_url = os.environ.get("RENDER_EXTERNAL_URL", "")
+    if not base_url:
+        logger.info("keepalive_disabled", reason="RENDER_EXTERNAL_URL not set (local dev)")
+        return
+
+    health_url = f"{base_url}/health"
+    logger.info("keepalive_started", url=health_url, interval_s=SELF_PING_INTERVAL)
+
+    async with httpx.AsyncClient(timeout=10) as client:
+        while True:
+            await asyncio.sleep(SELF_PING_INTERVAL)
+            try:
+                resp = await client.get(health_url)
+                logger.debug("keepalive_ping", status=resp.status_code)
+            except Exception as e:
+                logger.warning("keepalive_ping_failed", error=str(e))
 
 
 @asynccontextmanager
@@ -62,12 +94,20 @@ async def lifespan(app: FastAPI):
         logger.warning("redis_init_failed", error=str(e))
         # Don't crash — cache misses are acceptable
 
+    # Start self-ping keepalive (Render free tier anti-sleep)
+    keepalive_task = asyncio.create_task(_keepalive_loop())
+
     logger.info("application_started")
 
     yield  # Application runs here
 
     # ── Shutdown ──
     logger.info("application_shutting_down")
+    keepalive_task.cancel()
+    try:
+        await keepalive_task
+    except asyncio.CancelledError:
+        pass
     await close_db()
     await close_redis()
     logger.info("application_stopped")
@@ -85,8 +125,8 @@ def create_app() -> FastAPI:
             "sentiment analysis, and risk detection."
         ),
         version="1.0.0",
-        docs_url="/docs" if settings.is_development else None,
-        redoc_url="/redoc" if settings.is_development else None,
+        docs_url="/docs",
+        redoc_url="/redoc",
         default_response_class=ORJSONResponse,
         lifespan=lifespan,
     )
@@ -120,7 +160,7 @@ def create_app() -> FastAPI:
     app.include_router(sentiment.router, prefix=settings.api_prefix)
     app.include_router(risk.router, prefix=settings.api_prefix)
 
-    # Root health endpoint (no prefix, for Railway health checks)
+    # Root health endpoint (no prefix, for Render health checks + self-ping keepalive)
     @app.get("/health")
     async def root_health():
         return {
