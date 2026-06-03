@@ -38,7 +38,11 @@ function formatMarketCap(n: number | null): string {
 
 export default function StockDetailPage() {
   const params = useParams();
-  const symbol = decodeURIComponent(params.symbol as string);
+  // Catch-all route [...symbol]: params.symbol is string[] e.g. ['RELIANCE.NS']
+  const rawSymbol = Array.isArray(params.symbol)
+    ? params.symbol.join('/')
+    : (params.symbol as string);
+  const symbol = decodeURIComponent(rawSymbol);
 
   const [quote, setQuote] = useState<StockQuote | null>(null);
   const [ohlcv, setOhlcv] = useState<OHLCVBar[]>([]);
