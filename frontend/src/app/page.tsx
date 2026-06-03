@@ -242,6 +242,8 @@ export default function DashboardPage() {
         setIndices(indicesRes.indices);
         setApiConnected(true);
       }
+      // Set loading to false once indices are loaded so cards and system status display immediately
+      setLoading(false);
 
       // 2. Fetch stock quotes for gainers/losers/sectors
       const quotePromises = NIFTY_STOCKS.map(sym =>
