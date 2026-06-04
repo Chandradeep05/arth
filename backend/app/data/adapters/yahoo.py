@@ -26,11 +26,16 @@ import yfinance as yf
 
 from app.core.logging import get_logger
 from app.data.adapters.base import BaseDataAdapter
+from app.engines.data_quality.validator import DataQualityValidator
 
 logger = get_logger(__name__)
 
 # Thread pool for yfinance (it's synchronous)
-_executor = ThreadPoolExecutor(max_workers=4)
+# Limit to 2 workers to avoid memory spikes on Render free tier (512MB)
+_executor = ThreadPoolExecutor(max_workers=2)
+
+# Module-level data quality validator
+_validator = DataQualityValidator()
 
 
 class YahooFinanceAdapter(BaseDataAdapter):
@@ -53,40 +58,52 @@ class YahooFinanceAdapter(BaseDataAdapter):
         return loop.run_in_executor(_executor, lambda: func(*args, **kwargs))
 
     async def get_quote(self, symbol: str) -> Optional[Dict[str, Any]]:
-        """Get current stock quote with basic info."""
+        """Get current stock quote with basic info.
+
+        Uses fast_info (lightweight, ~0.5s) as primary source.
+        Falls back to full ticker.info only if fast_info fails.
+        """
 
         async def _fetch():
             ticker = yf.Ticker(symbol)
-            # Capture ticker in default arg to avoid closure bug
+            market, exchange, currency = self._detect_market(symbol)
+
+            # Try fast_info FIRST — it's 10x faster and uses 10x less memory
+            try:
+                fast = await self._run_sync(lambda t=ticker: t.fast_info)
+                if fast and getattr(fast, "last_price", 0):
+                    price = getattr(fast, "last_price", 0)
+                    prev_close = getattr(fast, "previous_close", 0)
+                    change = price - prev_close if price and prev_close else 0
+                    change_pct = (change / prev_close * 100) if prev_close else 0
+
+                    return {
+                        "symbol": symbol.upper(),
+                        "name": symbol.replace(".NS", "").replace(".BO", ""),
+                        "price": round(price, 2),
+                        "change": round(change, 2),
+                        "change_percent": round(change_pct, 2),
+                        "volume": getattr(fast, "last_volume", 0) or 0,
+                        "high": round(getattr(fast, "day_high", 0) or 0, 2),
+                        "low": round(getattr(fast, "day_low", 0) or 0, 2),
+                        "open": round(getattr(fast, "open", 0) or 0, 2),
+                        "previous_close": round(prev_close or 0, 2),
+                        "market_cap": getattr(fast, "market_cap", None),
+                        "pe_ratio": None,  # fast_info doesn't have P/E
+                        "timestamp": datetime.now(timezone.utc),
+                        "exchange": exchange,
+                        "market": market,
+                        "currency": currency,
+                    }
+            except Exception as e:
+                logger.debug("fast_info_failed", symbol=symbol, error=str(e))
+
+            # Fallback to full info (slower, heavier)
             info = await self._run_sync(lambda t=ticker: t.info)
 
             if not info or "regularMarketPrice" not in info:
-                # Try fast_info as fallback
-                fast = await self._run_sync(lambda t=ticker: t.fast_info)
-                if not fast:
-                    return None
+                return None
 
-                market, exchange, currency = self._detect_market(symbol)
-                return {
-                    "symbol": symbol.upper(),
-                    "name": info.get("shortName", info.get("longName", symbol)),
-                    "price": getattr(fast, "last_price", 0),
-                    "change": 0,
-                    "change_percent": 0,
-                    "volume": getattr(fast, "last_volume", 0),
-                    "high": getattr(fast, "day_high", 0),
-                    "low": getattr(fast, "day_low", 0),
-                    "open": getattr(fast, "open", 0),
-                    "previous_close": getattr(fast, "previous_close", 0),
-                    "market_cap": getattr(fast, "market_cap", None),
-                    "pe_ratio": None,
-                    "timestamp": datetime.now(timezone.utc),
-                    "exchange": exchange,
-                    "market": market,
-                    "currency": currency,
-                }
-
-            market, exchange, currency = self._detect_market(symbol)
             price = info.get("regularMarketPrice", info.get("currentPrice", 0))
             prev_close = info.get("regularMarketPreviousClose", info.get("previousClose", 0))
             change = price - prev_close if price and prev_close else 0
@@ -111,7 +128,29 @@ class YahooFinanceAdapter(BaseDataAdapter):
                 "currency": currency,
             }
 
-        return await self.execute_with_resilience(_fetch)
+        result = await self.execute_with_resilience(_fetch)
+
+        # ── Data quality validation (non-blocking) ──
+        if result is not None:
+            try:
+                validation = _validator.validate_quote(result)
+                result["_validation"] = validation.to_dict()
+                if validation.errors:
+                    logger.warning(
+                        "quote_validation_errors",
+                        symbol=symbol,
+                        errors=validation.errors,
+                    )
+                if validation.warnings:
+                    logger.info(
+                        "quote_validation_warnings",
+                        symbol=symbol,
+                        warnings=validation.warnings,
+                    )
+            except Exception as e:
+                logger.error("quote_validation_failed", symbol=symbol, error=str(e))
+
+        return result
 
     async def get_ohlcv(
         self, symbol: str, period: str = "1mo", interval: str = "1d"
@@ -150,7 +189,35 @@ class YahooFinanceAdapter(BaseDataAdapter):
                 bars.append(bar)
             return bars
 
-        return await self.execute_with_resilience(_fetch)
+        result = await self.execute_with_resilience(_fetch)
+
+        # ── Data quality validation (non-blocking) ──
+        if result is not None:
+            try:
+                validation = _validator.validate_ohlcv_bars(result)
+                if validation.warnings:
+                    logger.info(
+                        "ohlcv_validation_warnings",
+                        symbol=symbol,
+                        count=len(result),
+                        warnings=validation.warnings,
+                    )
+                if validation.errors:
+                    logger.warning(
+                        "ohlcv_validation_errors",
+                        symbol=symbol,
+                        errors=validation.errors,
+                    )
+                # Attach validation as a dict wrapper so consumers can inspect it
+                # We return a dict with data + validation instead of a bare list
+                # only if the consumer opts in; for backward compat we keep the list.
+                # Attach as an attribute on the list object.
+                result = {"bars": result, "_validation": validation.to_dict()}
+            except Exception as e:
+                logger.error("ohlcv_validation_failed", symbol=symbol, error=str(e))
+                result = {"bars": result, "_validation": None}
+
+        return result
 
     async def get_company_info(self, symbol: str) -> Optional[Dict[str, Any]]:
         """Get company fundamentals and metadata."""
@@ -237,35 +304,178 @@ class YahooFinanceAdapter(BaseDataAdapter):
 
         async def _fetch():
             results = []
-            for idx in indices:
-                try:
-                    ticker = yf.Ticker(idx["symbol"])
-                    # CRITICAL: capture ticker via default arg to avoid
-                    # the classic Python closure-in-a-loop bug
-                    info = await self._run_sync(lambda t=ticker: t.info)
-                    if info:
-                        price = info.get("regularMarketPrice", 0)
-                        prev = info.get("regularMarketPreviousClose", 0)
+            symbols = [idx["symbol"] for idx in indices]
+            symbol_str = " ".join(symbols)
+
+            try:
+                # Batch download all indices in ONE call
+                df = await self._run_sync(
+                    lambda: yf.download(
+                        symbol_str,
+                        period="2d",  # 2 days to compute change vs previous close
+                        interval="1d",
+                        group_by="ticker",
+                        progress=False,
+                        threads=False,
+                    )
+                )
+
+                if df is None or df.empty:
+                    return results
+
+                for idx in indices:
+                    sym = idx["symbol"]
+                    try:
+                        if len(symbols) == 1:
+                            ticker_df = df
+                        else:
+                            if sym not in df.columns.get_level_values(0):
+                                continue
+                            ticker_df = df[sym]
+
+                        if ticker_df.empty or len(ticker_df) < 1:
+                            continue
+
+                        last_row = ticker_df.iloc[-1]
+                        price = float(last_row.get("Close", 0) or 0)
+
+                        # Previous close from prior day row
+                        if len(ticker_df) >= 2:
+                            prev_row = ticker_df.iloc[-2]
+                            prev = float(prev_row.get("Close", 0) or 0)
+                        else:
+                            prev = float(last_row.get("Open", 0) or 0)
+
+                        if price == 0:
+                            continue
+
                         change = price - prev if price and prev else 0
                         change_pct = (change / prev * 100) if prev else 0
 
                         results.append({
-                            "symbol": idx["symbol"],
+                            "symbol": sym,
                             "name": idx["name"],
                             "value": round(price, 2),
                             "change": round(change, 2),
                             "change_percent": round(change_pct, 2),
                             "timestamp": datetime.now(timezone.utc),
                         })
-                except Exception as e:
-                    logger.warning(
-                        "index_fetch_failed",
-                        symbol=idx["symbol"],
-                        error=str(e),
-                    )
+                    except Exception as e:
+                        logger.warning(
+                            "index_parse_failed",
+                            symbol=sym,
+                            error=str(e),
+                        )
+            except Exception as e:
+                logger.error("indices_batch_fetch_failed", error=str(e))
+
             return results
 
         return await self.execute_with_resilience(_fetch)
+
+    async def get_batch_quotes(
+        self, symbols: list[str]
+    ) -> list[dict[str, Any]]:
+        """Batch-fetch quotes for multiple symbols using yf.download().
+
+        This is MUCH more efficient than calling get_quote() N times:
+        - yf.download() makes ONE HTTP request for all symbols
+        - Uses ~10x less memory than N separate Ticker().info calls
+        - Avoids triggering Yahoo's rate limiter
+
+        Returns a list of quote dicts (same shape as get_quote output).
+        Symbols that fail silently return None and are filtered out.
+        """
+
+        async def _fetch():
+            import pandas as pd
+
+            if not symbols:
+                return []
+
+            symbol_str = " ".join(symbols)
+
+            # yf.download fetches all tickers in one batch HTTP call
+            df = await self._run_sync(
+                lambda: yf.download(
+                    symbol_str,
+                    period="1d",
+                    interval="1d",
+                    group_by="ticker",
+                    progress=False,
+                    threads=False,  # Single thread to save memory
+                )
+            )
+
+            if df is None or df.empty:
+                return []
+
+            results: list[dict[str, Any]] = []
+
+            for sym in symbols:
+                try:
+                    market, exchange, currency = self._detect_market(sym)
+
+                    if len(symbols) == 1:
+                        # Single ticker: columns are flat (Open, High, Low, Close, Volume)
+                        row = df.iloc[-1]
+                        price = float(row.get("Close", 0) or 0)
+                        high = float(row.get("High", 0) or 0)
+                        low = float(row.get("Low", 0) or 0)
+                        opn = float(row.get("Open", 0) or 0)
+                        volume = int(row.get("Volume", 0) or 0)
+                    else:
+                        # Multi-ticker: columns are MultiIndex (ticker, field)
+                        if sym not in df.columns.get_level_values(0):
+                            continue
+                        ticker_df = df[sym]
+                        if ticker_df.empty or ticker_df.iloc[-1].isna().all():
+                            continue
+                        row = ticker_df.iloc[-1]
+                        price = float(row.get("Close", 0) or 0)
+                        high = float(row.get("High", 0) or 0)
+                        low = float(row.get("Low", 0) or 0)
+                        opn = float(row.get("Open", 0) or 0)
+                        volume = int(row.get("Volume", 0) or 0)
+
+                    if price == 0:
+                        continue
+
+                    # We don't have previous_close from download(), so use open as proxy
+                    prev_close = opn if opn > 0 else price
+                    change = round(price - prev_close, 2)
+                    change_pct = round((change / prev_close * 100), 2) if prev_close else 0
+
+                    results.append({
+                        "symbol": sym.upper(),
+                        "name": sym.replace(".NS", "").replace(".BO", ""),
+                        "price": round(price, 2),
+                        "change": change,
+                        "change_percent": change_pct,
+                        "volume": volume,
+                        "high": round(high, 2),
+                        "low": round(low, 2),
+                        "open": round(opn, 2),
+                        "previous_close": round(prev_close, 2),
+                        "market_cap": None,
+                        "pe_ratio": None,
+                        "timestamp": datetime.now(timezone.utc),
+                        "exchange": exchange,
+                        "market": market,
+                        "currency": currency,
+                    })
+                except Exception as e:
+                    logger.warning(
+                        "batch_quote_parse_failed",
+                        symbol=sym,
+                        error=str(e),
+                    )
+                    continue
+
+            return results
+
+        result = await self.execute_with_resilience(_fetch)
+        return result or []
 
     async def health_check(self) -> bool:
         """Check if Yahoo Finance is reachable by fetching NIFTY 50."""

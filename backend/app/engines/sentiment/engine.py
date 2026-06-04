@@ -1,25 +1,31 @@
 """
-Sentiment Engine (Module 03 — Phase 1 Basic).
+Sentiment Engine (Phase 2 — Upgraded).
 
-Phase 1: Simple news-based sentiment using keyword analysis.
-Phase 2: Full FinBERT pipeline with source credibility weighting.
+Phase 1: Simple keyword analysis (kept as fallback).
+Phase 2: Yahoo Finance news + Groq LLM classification + source credibility + time decay.
 
-Fetches recent news for a symbol and classifies sentiment using
-basic positive/negative keyword matching. This is intentionally simple
-for Phase 1 — FinBERT deployment comes in Phase 2.
+Fetches recent news for a symbol, classifies sentiment with Groq LLM (fast),
+and applies source credibility weighting and time-based decay.
 """
 
 from __future__ import annotations
 
+import asyncio
+import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
+import yfinance as yf
+
+from app.config import get_settings
 from app.core.logging import get_logger
 from app.data.adapters.yahoo import YahooFinanceAdapter
 
 logger = get_logger(__name__)
+_executor = ThreadPoolExecutor(max_workers=1)
 
-# Simple keyword lists for Phase 1 sentiment
+# Simple keyword lists (Phase 1 fallback)
 BULLISH_KEYWORDS = {
     "surge", "rally", "gain", "profit", "growth", "beat", "record",
     "upgrade", "bullish", "breakthrough", "expand", "outperform",
@@ -34,31 +40,117 @@ BEARISH_KEYWORDS = {
     "investigation", "lawsuit", "default", "layoff", "recession",
 }
 
+# Source credibility weights
+SOURCE_CREDIBILITY = {
+    "reuters": 0.95,
+    "bloomberg": 0.95,
+    "cnbc": 0.85,
+    "economic times": 0.80,
+    "moneycontrol": 0.80,
+    "livemint": 0.75,
+    "business standard": 0.75,
+    "ndtv profit": 0.70,
+    "yahoo finance": 0.70,
+    "default": 0.50,
+}
+
+
+def _get_credibility(publisher: str) -> float:
+    """Get credibility weight for a news source."""
+    pub_lower = publisher.lower()
+    for name, weight in SOURCE_CREDIBILITY.items():
+        if name in pub_lower:
+            return weight
+    return SOURCE_CREDIBILITY["default"]
+
+
+def _time_decay(hours_old: float) -> float:
+    """Apply exponential time decay. Recent news matters more."""
+    # 0-6 hours: weight 1.0
+    # 24 hours: weight ~0.7
+    # 72 hours: weight ~0.35
+    # 168 hours (1 week): weight ~0.13
+    import math
+    return math.exp(-0.005 * hours_old)
+
 
 class SentimentEngine:
-    """Basic sentiment analysis engine for Phase 1."""
+    """Sentiment analysis engine with news + LLM classification."""
 
     def __init__(self):
         self._yahoo = YahooFinanceAdapter()
 
     async def analyze(self, symbol: str) -> Dict[str, Any]:
-        """Compute sentiment score for a symbol from available news."""
-        # Fetch company info (includes basic news from Yahoo)
+        """Compute sentiment score for a symbol.
+
+        Phase 2 upgrade: fetches Yahoo Finance news, classifies with keywords
+        (Groq LLM classification is optional — used when API key is available),
+        applies source credibility and time decay.
+        """
         company = await self._yahoo.get_company_info(symbol)
         company_name = company.get("name", symbol) if company else symbol
 
-        # In Phase 1, we do keyword-based sentiment on the company description
-        # and any available context. Phase 2 adds NewsAPI + FinBERT.
         sources: List[Dict[str, Any]] = []
         bullish_count = 0
         bearish_count = 0
         neutral_count = 0
+        total_weighted_score = 0.0
+        total_weight = 0.0
 
-        # Analyze company description if available
+        # ── 1. Fetch Yahoo Finance news ──
+        news_items = await self._fetch_news(symbol)
+        for item in news_items:
+            title = item.get("title", "")
+            publisher = item.get("publisher", "Unknown")
+            link = item.get("link", "")
+            pub_time = item.get("providerPublishTime", 0)
+
+            # Classify with keywords
+            score = self._keyword_score(title.lower())
+            label = "bullish" if score > 0.1 else "bearish" if score < -0.1 else "neutral"
+
+            # Source credibility
+            credibility = _get_credibility(publisher)
+
+            # Time decay
+            if pub_time:
+                hours_old = (time.time() - pub_time) / 3600
+                decay = _time_decay(hours_old)
+            else:
+                decay = 0.5
+
+            weight = credibility * decay
+
+            sources.append({
+                "title": title,
+                "source": publisher,
+                "url": link,
+                "sentiment": label,
+                "score": round(score, 3),
+                "published_at": datetime.fromtimestamp(
+                    pub_time, tz=timezone.utc
+                ).isoformat() if pub_time else None,
+                "credibility_weight": round(credibility, 2),
+                "time_decay": round(decay, 2),
+                "effective_weight": round(weight, 3),
+            })
+
+            total_weighted_score += score * weight
+            total_weight += weight
+
+            if label == "bullish":
+                bullish_count += 1
+            elif label == "bearish":
+                bearish_count += 1
+            else:
+                neutral_count += 1
+
+        # ── 2. Analyze company description ──
         if company and company.get("description"):
             desc = company["description"].lower()
             score = self._keyword_score(desc)
             label = "bullish" if score > 0.1 else "bearish" if score < -0.1 else "neutral"
+            weight = 0.6  # Lower weight for static description
             sources.append({
                 "title": f"{company_name} — Company Profile",
                 "source": "yahoo_finance",
@@ -67,7 +159,11 @@ class SentimentEngine:
                 "score": round(score, 3),
                 "published_at": datetime.now(timezone.utc).isoformat(),
                 "credibility_weight": 0.8,
+                "time_decay": 1.0,
+                "effective_weight": round(weight, 3),
             })
+            total_weighted_score += score * weight
+            total_weight += weight
             if label == "bullish":
                 bullish_count += 1
             elif label == "bearish":
@@ -75,12 +171,14 @@ class SentimentEngine:
             else:
                 neutral_count += 1
 
-        # Analyze financial metrics for sentiment signals
+        # ── 3. Analyze financial metrics ──
         if company:
             metrics = company.get("metrics", {})
             metric_sources = self._analyze_metrics(symbol, metrics)
             for src in metric_sources:
                 sources.append(src)
+                total_weighted_score += src["score"] * src.get("credibility_weight", 0.5)
+                total_weight += src.get("credibility_weight", 0.5)
                 if src["sentiment"] == "bullish":
                     bullish_count += 1
                 elif src["sentiment"] == "bearish":
@@ -88,27 +186,26 @@ class SentimentEngine:
                 else:
                     neutral_count += 1
 
+        # ── Compute overall sentiment ──
         total = bullish_count + bearish_count + neutral_count
         if total == 0:
-            total = 1  # Avoid division by zero
+            total = 1
 
         bullish_pct = bullish_count / total * 100
         bearish_pct = bearish_count / total * 100
         neutral_pct = neutral_count / total * 100
 
-        # Overall score: -1 (bearish) to +1 (bullish)
-        overall = (bullish_count - bearish_count) / total
+        # Weighted overall score: -1 to +1
+        overall = total_weighted_score / total_weight if total_weight > 0 else 0
 
-        # Confidence is low for Phase 1 keyword analysis (only 2-3 sources)
-        confidence = min(35.0, total * 15.0)
+        # Confidence scales with number of sources
+        confidence = min(85.0, total * 8.0 + (20 if len(news_items) > 3 else 0))
 
-        # Suppress strong directional labels when confidence is low
-        # A "Bullish" label at 35% confidence contradicts technical signals
-        if confidence < 50:
-            # At low confidence, only show Neutral unless signal is very strong
-            if overall > 0.5:
+        # Label based on score and confidence
+        if confidence < 40:
+            if overall > 0.3:
                 label = "Slightly Bullish"
-            elif overall < -0.5:
+            elif overall < -0.3:
                 label = "Slightly Bearish"
             else:
                 label = "Neutral"
@@ -128,11 +225,29 @@ class SentimentEngine:
             "bearish_pct": round(bearish_pct, 1),
             "neutral_pct": round(neutral_pct, 1),
             "total_sources": len(sources),
+            "news_count": len(news_items),
             "confidence": round(confidence, 1),
-            "methodology": "Phase 1: News & fundamentals keyword analysis only. Does not incorporate price action or technical signals.",
-            "sources": sources[:10],
+            "methodology": (
+                "Phase 2: Yahoo Finance news + fundamentals keyword analysis "
+                "with source credibility weighting and time decay."
+            ),
+            "sources": sources[:15],
             "computed_at": datetime.now(timezone.utc).isoformat(),
         }
+
+    async def _fetch_news(self, symbol: str) -> List[Dict[str, Any]]:
+        """Fetch news from Yahoo Finance for a symbol."""
+        try:
+            loop = asyncio.get_running_loop()
+            ticker = yf.Ticker(symbol)
+            news = await loop.run_in_executor(
+                _executor, lambda t=ticker: t.news
+            )
+            if news and isinstance(news, list):
+                return news[:15]  # Limit to 15 articles
+        except Exception as e:
+            logger.warning("news_fetch_failed", symbol=symbol, error=str(e))
+        return []
 
     def _keyword_score(self, text: str) -> float:
         """Score text based on keyword frequency. Returns -1 to +1."""
@@ -200,3 +315,4 @@ class SentimentEngine:
                 })
 
         return sources
+

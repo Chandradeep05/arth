@@ -4,6 +4,8 @@ AI Research API endpoints.
 Provides:
 - POST /research/generate/{symbol} — Generate research report (SSE streaming)
 - GET /research/report/{symbol} — Get cached report
+- POST /research/index/{symbol} — Index documents for RAG (Phase 2)
+- GET /research/sources/{symbol} — List indexed documents (Phase 2)
 """
 
 from __future__ import annotations
@@ -37,15 +39,20 @@ async def generate_research(
     Generate an AI research report for a stock symbol.
 
     Streams the response via Server-Sent Events for progressive rendering.
+    depth=deep uses RAG for cited reports (requires indexing first).
     """
     engine = ResearchEngine(settings)
 
     if stream:
         async def event_stream():
             yield f"data: {{\"type\": \"start\", \"symbol\": \"{symbol.upper()}\"}}\n\n"
-            async for token in engine.stream_report(symbol, depth):
+            if depth == "deep":
+                gen = engine.stream_deep_research(symbol)
+            else:
+                gen = engine.stream_report(symbol, depth)
+            async for token in gen:
                 # Escape for SSE
-                escaped = token.replace("\n", "\\n")
+                escaped = token.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
                 yield f"data: {{\"type\": \"token\", \"content\": \"{escaped}\"}}\n\n"
             yield f"data: {{\"type\": \"done\"}}\n\n"
 
@@ -62,7 +69,10 @@ async def generate_research(
         # Non-streaming: return complete report
         cache = CacheManager(redis)
         try:
-            report = await engine.generate_report(symbol, depth, cache)
+            if depth == "deep":
+                report = await engine.generate_deep_research(symbol, cache)
+            else:
+                report = await engine.generate_report(symbol, depth, cache)
         except Exception as e:
             logger.error("research_generation_failed", symbol=symbol, error=str(e))
             return {
@@ -83,7 +93,7 @@ async def generate_research(
                 source="groq_llm",
                 timestamp=datetime.now(timezone.utc),
                 is_stale=False,
-                delay_label="AI-generated",
+                delay_label="AI-generated (deep)" if depth == "deep" else "AI-generated",
                 cache_hit=False,
             ).model_dump(),
         }
@@ -115,3 +125,50 @@ async def get_cached_report(
             cache_hit=True,
         ).model_dump(),
     }
+
+
+# ── RAG Endpoints (Phase 2) ─────────────────────────────────────
+
+@router.post("/index/{symbol}")
+async def index_company(symbol: str):
+    """Trigger document ingestion for RAG-powered deep research.
+
+    Fetches company info, financials, and news from Yahoo Finance,
+    chunks the text, and indexes it in the in-memory vector store.
+    """
+    from app.engines.rag.document_processor import DocumentProcessor
+
+    processor = DocumentProcessor()
+    try:
+        result = await processor.index_company(symbol)
+    except Exception as e:
+        logger.error("index_company_failed", symbol=symbol, error=str(e))
+        return {
+            "success": False,
+            "message": f"Document indexing failed: {str(e)}",
+        }
+
+    return {
+        "success": True,
+        "data": result,
+    }
+
+
+@router.get("/sources/{symbol}")
+async def list_sources(symbol: str):
+    """List indexed documents for a company."""
+    from app.engines.rag.vector_store import vector_store
+
+    sources = vector_store.list_sources(symbol)
+    count = vector_store.get_document_count(symbol)
+
+    return {
+        "success": True,
+        "data": {
+            "symbol": symbol.upper(),
+            "document_count": count,
+            "sources": sources,
+            "has_documents": count > 0,
+        },
+    }
+

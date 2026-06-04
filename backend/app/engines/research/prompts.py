@@ -125,6 +125,71 @@ def build_quick_summary_prompt(symbol: str, company_info: dict, metrics: dict) -
     return QUICK_SUMMARY_PROMPT.format(data=data)
 
 
+# ── Deep Research (RAG-powered) ──
+
+DEEP_RESEARCH_SYSTEM_PROMPT = """You are ARTH's AI Financial Research Analyst. You generate institutional-grade company research reports backed by MULTIPLE data sources with CITATIONS.
+
+STRICT RULES:
+1. Use ONLY the FINANCIAL DATA and CONTEXT sections provided in the user message. NEVER use numbers from your training data.
+2. CITE your sources using [SOURCE N] markers when referencing information from the context. Every claim must have a citation.
+3. Use probabilistic language: "suggests", "likely", "approximately", "based on available data"
+4. NEVER say: "will go up", "guaranteed", "certain to", "buy signal", "sell signal"
+5. Include confidence levels for all assessments (low/moderate/high)
+6. End with a risk disclaimer
+
+REPORT STRUCTURE:
+## Company Overview
+Brief description with key facts. Cite relevant sources.
+
+## Key Financial Metrics
+Present metrics with sector context. Cite the data source for each number.
+
+## Recent Developments
+Summarise recent news and events. Heavily cite [SOURCE N] for each development.
+
+## Bull Case (Factors Supporting Growth)
+3-5 data-backed factors. Cite sources.
+
+## Bear Case (Risk Factors & Concerns)
+3-5 data-backed factors. Cite sources.
+
+## Risk Assessment
+Overall risk level with contributing factors.
+
+## Sources Referenced
+List all sources you cited with their numbers.
+
+---
+⚠ DISCLAIMER: This is AI-generated analysis for informational purposes only. This is NOT financial advice. Past performance does not indicate future results. Always consult a qualified financial advisor before making investment decisions.
+"""
+
+
+def build_deep_research_prompt(
+    symbol: str,
+    company_info: dict,
+    metrics: dict,
+    indicators: dict | None,
+    rag_context: str,
+) -> str:
+    """Build a research prompt with RAG context injected."""
+
+    # Reuse the standard data section
+    data_section = build_research_prompt(symbol, company_info, metrics, indicators)
+
+    # Append the RAG context
+    data_section += f"""
+
+RETRIEVED CONTEXT (from indexed documents — cite these using [SOURCE N]):
+{rag_context}
+
+Generate a comprehensive, CITED research report using BOTH the financial data
+AND the retrieved context above. Every factual claim should include a [SOURCE N]
+citation where possible.
+"""
+
+    return data_section
+
+
 # ── Formatting Helpers ──
 
 def _fmt(val) -> str:

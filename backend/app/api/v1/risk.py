@@ -63,3 +63,57 @@ async def get_risk_score(
             cache_hit=False,
         ).model_dump(),
     }
+
+
+@router.get("/governance/{symbol}")
+async def get_governance(
+    symbol: str,
+    redis=Depends(get_redis),
+    settings: Settings = Depends(get_settings),
+):
+    """Get governance data and score for a stock symbol.
+
+    Includes: institutional ownership, insider ownership, pledge %,
+    major holders, and a governance score (0-100).
+    """
+    from app.engines.governance.engine import get_governance_data
+
+    cache = CacheManager(redis)
+    cache_key = f"governance:{symbol.upper()}"
+
+    # Try cache (governance data changes slowly — 1hr TTL)
+    cached = await cache.get(cache_key)
+    if cached:
+        cached.pop("_cache_hit", None)
+        cached.pop("_cached_at", None)
+        return {
+            "success": True,
+            "data": cached,
+            "freshness": FreshnessMetadata(
+                source="cache",
+                timestamp=datetime.now(timezone.utc),
+                is_stale=False,
+                delay_label="Cached",
+                cache_hit=True,
+            ).model_dump(),
+        }
+
+    result = await get_governance_data(symbol)
+
+    if result.get("error"):
+        return {"success": False, "message": result.get("message")}
+
+    await cache.set(cache_key, result, ttl=3600)
+
+    return {
+        "success": True,
+        "data": result,
+        "freshness": FreshnessMetadata(
+            source="yahoo_finance",
+            timestamp=datetime.now(timezone.utc),
+            is_stale=False,
+            delay_label="~15s delayed",
+            cache_hit=False,
+        ).model_dump(),
+    }
+

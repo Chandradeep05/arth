@@ -172,3 +172,15 @@ class CacheManager:
     @staticmethod
     def indices_key() -> str:
         return "market:indices"
+
+    @staticmethod
+    def financials_key(symbol: str) -> str:
+        return f"financials:{symbol.upper()}"
+
+    @staticmethod
+    def ratios_key(symbol: str) -> str:
+        return f"ratios:{symbol.upper()}"
+
+    @staticmethod
+    def health_key(symbol: str) -> str:
+        return f"health:{symbol.upper()}"

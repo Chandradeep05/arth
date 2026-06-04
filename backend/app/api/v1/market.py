@@ -88,6 +88,7 @@ async def get_quote(
 
     cache_hit = data.pop("_cache_hit", False)
     data.pop("_cached_at", None)
+    data.pop("_validation", None)  # Validation metadata from DataQualityValidator
 
     return StockQuoteResponse(
         data=StockQuote(**data),
@@ -117,9 +118,16 @@ async def get_ohlcv(
         cache_hit = True
     else:
         # Fetch fresh from Yahoo
-        bars = await _yahoo_adapter.get_ohlcv(symbol, period=period, interval=interval)
-        if bars is None:
+        result = await _yahoo_adapter.get_ohlcv(symbol, period=period, interval=interval)
+        if result is None:
             raise SymbolNotFoundError(symbol)
+        # Result is now {"bars": [...], "_validation": {...}}
+        if isinstance(result, dict):
+            bars = result.get("bars", result)
+            validation = result.get("_validation")
+        else:
+            bars = result
+            validation = None
         # Cache as a dict wrapper so CacheManager can add metadata
         await cache.set(cache_key, {"bars": bars}, ttl=settings.redis_cache_ttl_indicators)
 
@@ -227,9 +235,15 @@ async def get_indicators(
         }
 
     # Fetch OHLCV and compute indicators
-    ohlcv = await _yahoo_adapter.get_ohlcv(symbol, period="3mo", interval="1d")
-    if not ohlcv:
+    result = await _yahoo_adapter.get_ohlcv(symbol, period="3mo", interval="1d")
+    if not result:
         raise SymbolNotFoundError(symbol)
+
+    # Unwrap new dict format from validator integration
+    if isinstance(result, dict):
+        ohlcv = result.get("bars", result)
+    else:
+        ohlcv = result
 
     indicators = compute_indicators(ohlcv)
     if indicators is None:
@@ -244,6 +258,56 @@ async def get_indicators(
     return {
         "success": True,
         "data": {"symbol": symbol.upper(), **indicators},
+        "freshness": _make_freshness(cache_hit=False).model_dump(),
+    }
+
+
+@router.post("/batch-quotes")
+async def batch_quotes(
+    request: dict,
+    redis=Depends(get_redis),
+    settings: Settings = Depends(get_settings),
+):
+    """Batch-fetch quotes for multiple symbols in ONE Yahoo Finance call.
+
+    Body: {"symbols": ["RELIANCE.NS", "TCS.NS", ...]}
+
+    This is the FAST path for the dashboard — uses yf.download() internally
+    which makes a single HTTP request to Yahoo for all symbols.
+    Results are cached for 30 seconds.
+    """
+    symbols = request.get("symbols", [])
+    if not symbols:
+        return {"success": True, "data": []}
+
+    # Cap at 50 symbols
+    symbols = symbols[:50]
+
+    cache = CacheManager(redis)
+    cache_key = "batch_quotes:" + ":".join(sorted(s.upper() for s in symbols))
+
+    # Try cache first (30s TTL for dashboard freshness)
+    cached = await cache.get(cache_key)
+    if cached and "quotes" in cached:
+        cached.pop("_cache_hit", None)
+        cached.pop("_cached_at", None)
+        return {
+            "success": True,
+            "data": cached["quotes"],
+            "count": len(cached["quotes"]),
+            "freshness": _make_freshness(cache_hit=True).model_dump(),
+        }
+
+    # Fetch fresh — single yf.download() call
+    quotes = await _yahoo_adapter.get_batch_quotes(symbols)
+
+    if quotes:
+        await cache.set(cache_key, {"quotes": quotes}, ttl=30)
+
+    return {
+        "success": True,
+        "data": quotes,
+        "count": len(quotes),
         "freshness": _make_freshness(cache_hit=False).model_dump(),
     }
 

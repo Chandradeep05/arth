@@ -46,9 +46,9 @@ class CircuitBreaker:
     - OPEN: service is down, calls are rejected immediately (serves cached data)
     - HALF_OPEN: after timeout, allows one test call to check recovery
     """
-    failure_threshold: int = 5        # Failures before opening
-    recovery_timeout: float = 60.0    # Seconds before trying again
-    half_open_max_calls: int = 1      # Test calls in half-open state
+    failure_threshold: int = 15       # Failures before opening (was 5 — too aggressive)
+    recovery_timeout: float = 30.0    # Seconds before trying again (was 60 — too long)
+    half_open_max_calls: int = 3      # Test calls in half-open state (was 1)
 
     state: CircuitState = CircuitState.CLOSED
     failure_count: int = 0
@@ -122,8 +122,8 @@ class BaseDataAdapter(ABC):
     """
 
     adapter_name: str = "base"
-    max_retries: int = 3
-    base_retry_delay: float = 1.0  # seconds
+    max_retries: int = 2              # Was 3 — fewer retries = less memory + faster failure
+    base_retry_delay: float = 0.5     # Was 1.0 — shorter backoff for free tier
 
     def __init__(self):
         self._circuit = CircuitBreaker()

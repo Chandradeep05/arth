@@ -153,12 +153,16 @@ def create_app() -> FastAPI:
     register_exception_handlers(app)
 
     # ── Routes ──
-    from app.api.v1 import system, market, research, sentiment, risk
+    from app.api.v1 import system, market, research, sentiment, risk, websocket, financials, watchlist, assistant
     app.include_router(system.router, prefix=settings.api_prefix)
     app.include_router(market.router, prefix=settings.api_prefix)
     app.include_router(research.router, prefix=settings.api_prefix)
     app.include_router(sentiment.router, prefix=settings.api_prefix)
     app.include_router(risk.router, prefix=settings.api_prefix)
+    app.include_router(websocket.router, prefix=settings.api_prefix)
+    app.include_router(financials.router, prefix=settings.api_prefix)
+    app.include_router(watchlist.router, prefix=settings.api_prefix)
+    app.include_router(assistant.router, prefix=settings.api_prefix)
 
     # Root health endpoint (no prefix, for Render health checks + self-ping keepalive)
     @app.get("/health")

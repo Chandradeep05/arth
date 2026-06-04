@@ -150,3 +150,15 @@ async def redis_health():
         return {"status": "unhealthy", "error": "Redis client not available"}
     except Exception as e:
         return {"status": "unhealthy", "error": str(e)}
+
+
+@router.get("/metrics")
+async def get_metrics():
+    """Return in-memory application metrics (request counts, latencies, cache ratios, etc.)."""
+    from app.engines.observability.metrics import metrics_collector
+
+    return {
+        "status": "ok",
+        "metrics": metrics_collector.get_metrics(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
