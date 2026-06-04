@@ -33,6 +33,27 @@
 
 ---
 
+## Interface Preview
+
+### 🖥️ Live Market Dashboard
+![ARTH Intelligence Dashboard](docs/screenshots/dashboard.jpg)
+
+### 📈 Stock Deep-Dive (Markets Explorer)
+| Indian Markets (`RELIANCE.NS`) | US Markets (`AAPL`) |
+|---|---|
+| ![Reliance Markets Explorer](docs/screenshots/markets_reliance.jpg) | ![Apple Markets Explorer](docs/screenshots/markets_aapl.jpg) |
+
+> ℹ️ **Vercel Dynamic Routing**: Dot-separated extensions (e.g. `.NS`) are fully routed correctly on Vercel deployment:
+> ![Vercel Dynamic Routing Detail](docs/screenshots/markets_clean.jpg)
+
+### 🛡️ Risk Intelligence Engine
+![Risk Intelligence Assessment](docs/screenshots/risk_intelligence.jpg)
+
+### 💬 AI Assistant (Coming in Phase 2)
+![AI Assistant Preview](docs/screenshots/ai_assistant.jpg)
+
+---
+
 ## Architecture
 
 ```
