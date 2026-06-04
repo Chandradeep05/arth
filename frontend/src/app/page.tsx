@@ -12,6 +12,8 @@ import {
 import Link from 'next/link';
 import { apiClient } from '@/lib/api';
 import { REFRESH_INTERVALS } from '@/lib/constants';
+import { useWebSocket } from '@/lib/useWebSocket';
+import type { WSStatus } from '@/lib/useWebSocket';
 import DataFreshness from '@/components/shared/DataFreshness';
 import LoadingSkeleton from '@/components/shared/LoadingSkeleton';
 import type { MarketIndex } from '@/types/market';
@@ -225,6 +227,14 @@ function MoversTable({
 /* ═══════════════════════════════════════════════════════════════
    Dashboard Home Page
    ═══════════════════════════════════════════════════════════════ */
+/* ── WebSocket status badge ── */
+const WS_BADGE: Record<WSStatus, { dot: string; label: string; bg: string; color: string }> = {
+  connected:     { dot: '🟢', label: 'Live',         bg: 'rgba(0,212,160,0.15)', color: 'var(--green)' },
+  reconnecting:  { dot: '🟡', label: 'Reconnecting', bg: 'rgba(255,180,0,0.15)', color: 'var(--accent-orange)' },
+  connecting:    { dot: '🟡', label: 'Connecting',   bg: 'rgba(255,180,0,0.15)', color: 'var(--accent-orange)' },
+  disconnected:  { dot: '🔴', label: 'Offline',      bg: 'rgba(255,68,68,0.15)', color: 'var(--red)' },
+};
+
 export default function DashboardPage() {
   const [indices, setIndices] = useState<MarketIndex[]>([]);
   const [gainers, setGainers] = useState<StockMover[]>([]);
@@ -233,6 +243,9 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [lastUpdated, setLastUpdated] = useState<Date>(new Date());
   const [apiConnected, setApiConnected] = useState(false);
+
+  // WebSocket connection for real-time price streaming
+  const { status: wsStatus } = useWebSocket();
 
   const fetchDashboard = useCallback(async () => {
     try {
@@ -245,14 +258,13 @@ export default function DashboardPage() {
       // Set loading to false once indices are loaded so cards and system status display immediately
       setLoading(false);
 
-      // 2. Fetch stock quotes for gainers/losers/sectors
-      const quotePromises = NIFTY_STOCKS.map(sym =>
-        apiClient.get<{ data: any }>(`/api/v1/market/quote/${encodeURIComponent(sym)}`)
-          .then(res => res.data)
-          .catch(() => null)
+      // 2. Batch-fetch all stock quotes in ONE call (instead of 30 individual calls)
+      const batchRes = await apiClient.post<{ success: boolean; data: any[] }>(
+        '/api/v1/market/batch-quotes',
+        { symbols: NIFTY_STOCKS }
       );
 
-      const quotes = (await Promise.all(quotePromises)).filter(Boolean) as StockMover[];
+      const quotes = (batchRes.data || []) as StockMover[];
 
       if (quotes.length > 0) {
         // Sort by change_percent descending for gainers
@@ -299,11 +311,21 @@ export default function DashboardPage() {
         </div>
 
         <div className="flex items-center gap-3">
+          {/* WebSocket status badge */}
+          <span
+            className="badge text-[10px] flex items-center gap-1"
+            style={{ background: WS_BADGE[wsStatus].bg, color: WS_BADGE[wsStatus].color }}
+            title={`WebSocket: ${wsStatus}`}
+          >
+            <span className="text-[8px] leading-none">{WS_BADGE[wsStatus].dot}</span>
+            {WS_BADGE[wsStatus].label}
+          </span>
+
           {!apiConnected && !loading && (
-            <span className="badge badge-yellow text-[10px]">Connecting...</span>
+            <span className="badge badge-yellow text-[10px]">API Connecting...</span>
           )}
           {apiConnected && (
-            <span className="badge text-[10px]" style={{ background: 'rgba(0,212,160,0.15)', color: 'var(--green)' }}>Live</span>
+            <span className="badge text-[10px]" style={{ background: 'rgba(0,212,160,0.15)', color: 'var(--green)' }}>API Live</span>
           )}
           <DataFreshness timestamp={lastUpdated} thresholdMs={60000} />
           <button

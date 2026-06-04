@@ -38,9 +38,9 @@ function formatMarketCap(n: number | null): string {
 
 export default function StockDetailPage() {
   const params = useParams();
-  // Catch-all route [...symbol]: params.symbol is string[] e.g. ['RELIANCE.NS']
+  // Dynamic route [symbol]: params.symbol is a string
   const rawSymbol = Array.isArray(params.symbol)
-    ? params.symbol.join('/')
+    ? params.symbol[0]
     : (params.symbol as string);
   const symbol = decodeURIComponent(rawSymbol);
 
@@ -55,27 +55,36 @@ export default function StockDetailPage() {
 
   const fetchAll = useCallback(async () => {
     try {
-      // Fetch quote + OHLCV + company in parallel
-      const [quoteRes, ohlcvRes, companyRes] = await Promise.allSettled([
-        apiClient.get<{ data: StockQuote }>(`/api/v1/market/quote/${encodeURIComponent(symbol)}`),
+      // Phase 1: Fetch quote (via batch for speed) + OHLCV in parallel
+      // Using batch endpoint even for 1 stock — it uses yf.download which is lighter than ticker.info
+      const [batchRes, ohlcvRes] = await Promise.allSettled([
+        apiClient.post<{ success: boolean; data: any[] }>(
+          '/api/v1/market/batch-quotes',
+          { symbols: [symbol] }
+        ),
         apiClient.get<{ data: OHLCVBar[] }>(`/api/v1/market/ohlcv/${encodeURIComponent(symbol)}?period=3mo&interval=1d`),
-        apiClient.get<{ data: any }>(`/api/v1/market/company/${encodeURIComponent(symbol)}`),
       ]);
 
-      if (quoteRes.status === 'fulfilled') setQuote(quoteRes.value.data);
+      if (batchRes.status === 'fulfilled' && batchRes.value.data?.[0]) {
+        setQuote(batchRes.value.data[0]);
+      }
       if (ohlcvRes.status === 'fulfilled') {
         const d = ohlcvRes.value.data;
         setOhlcv(Array.isArray(d) ? d : []);
       }
-      if (companyRes.status === 'fulfilled') setCompany(companyRes.value.data);
 
-      // Fetch sentiment + risk + indicators (lower priority)
-      const [sentRes, riskRes, indRes] = await Promise.allSettled([
+      // Show chart + price ASAP
+      setLoading(false);
+
+      // Phase 2: Fetch company + sentiment + risk + indicators (deferred — lower priority)
+      const [companyRes, sentRes, riskRes, indRes] = await Promise.allSettled([
+        apiClient.get<{ data: any }>(`/api/v1/market/company/${encodeURIComponent(symbol)}`),
         apiClient.get<{ data: any }>(`/api/v1/sentiment/${encodeURIComponent(symbol)}`),
         apiClient.get<{ data: any }>(`/api/v1/risk/${encodeURIComponent(symbol)}`),
         apiClient.get<{ data: any }>(`/api/v1/market/indicators/${encodeURIComponent(symbol)}`),
       ]);
 
+      if (companyRes.status === 'fulfilled') setCompany(companyRes.value.data);
       if (sentRes.status === 'fulfilled') setSentiment(sentRes.value.data);
       if (riskRes.status === 'fulfilled') setRisk(riskRes.value.data);
       if (indRes.status === 'fulfilled') setIndicators(indRes.value.data);

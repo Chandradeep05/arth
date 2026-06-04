@@ -27,7 +27,7 @@ export const DATA_DELAY_LABEL = '~15s delayed';
 
 /** Auto-refresh intervals in milliseconds */
 export const REFRESH_INTERVALS = {
-  tick: 15_000,         // Price tick data
+  tick: 60_000,         // Price tick data (was 15s — too aggressive for free tier)
   indicators: 60_000,  // Technical indicators
   sentiment: 300_000,  // Sentiment scores
   research: 3_600_000, // Research reports
@@ -55,7 +55,9 @@ export const NAV_ITEMS = [
   { href: '/', label: 'Dashboard', icon: 'LayoutDashboard' },
   { href: '/markets', label: 'Markets', icon: 'TrendingUp' },
   { href: '/research', label: 'Research', icon: 'FileText' },
+  { href: '/financials', label: 'Financials', icon: 'BarChart3' },
   { href: '/risk', label: 'Risk', icon: 'ShieldAlert' },
+  { href: '/watchlist', label: 'Watchlist', icon: 'Star' },
   { href: '/assistant', label: 'Assistant', icon: 'Bot' },
   { href: '/system', label: 'System', icon: 'Activity' },
 ] as const;
@@ -71,3 +73,9 @@ export const MARKET_HOURS = {
   NYSE: { open: { hour: 9, minute: 30 }, close: { hour: 16, minute: 0 }, timezone: 'America/New_York' },
   NASDAQ: { open: { hour: 9, minute: 30 }, close: { hour: 16, minute: 0 }, timezone: 'America/New_York' },
 } as const;
+
+/** WebSocket configuration */
+export const WS_RECONNECT_MAX_DELAY = 30_000;
+export const WS_RECONNECT_BASE_DELAY = 1_000;
+export const WS_PRICE_UPDATE_INTERVAL = 5_000;
+export const WS_MAX_SYMBOLS = 10;
