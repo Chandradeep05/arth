@@ -124,24 +124,37 @@ class StatementParser:
         try:
             ticker = yf.Ticker(symbol)
 
-            # Fetch all six DataFrames in the thread pool
+            # yfinance 0.2.58 renamed some properties:
+            # .financials → .income_stmt, .quarterly_financials → .quarterly_income_stmt
+            # Try new names first, fall back to old names
+            def _get_df(t, *attrs):
+                """Try multiple attribute names, return first non-empty DataFrame."""
+                for attr in attrs:
+                    try:
+                        df = getattr(t, attr, None)
+                        if df is not None and not df.empty:
+                            return df
+                    except Exception:
+                        continue
+                return None
+
             financials = await loop.run_in_executor(
-                _executor, lambda t=ticker: t.financials
+                _executor, lambda t=ticker: _get_df(t, 'income_stmt', 'financials')
             )
             quarterly_financials = await loop.run_in_executor(
-                _executor, lambda t=ticker: t.quarterly_financials
+                _executor, lambda t=ticker: _get_df(t, 'quarterly_income_stmt', 'quarterly_financials')
             )
             balance_sheet = await loop.run_in_executor(
-                _executor, lambda t=ticker: t.balance_sheet
+                _executor, lambda t=ticker: _get_df(t, 'balance_sheet')
             )
             quarterly_balance_sheet = await loop.run_in_executor(
-                _executor, lambda t=ticker: t.quarterly_balance_sheet
+                _executor, lambda t=ticker: _get_df(t, 'quarterly_balance_sheet')
             )
             cashflow = await loop.run_in_executor(
-                _executor, lambda t=ticker: t.cashflow
+                _executor, lambda t=ticker: _get_df(t, 'cash_flow', 'cashflow')
             )
             quarterly_cashflow = await loop.run_in_executor(
-                _executor, lambda t=ticker: t.quarterly_cashflow
+                _executor, lambda t=ticker: _get_df(t, 'quarterly_cash_flow', 'quarterly_cashflow')
             )
 
             income_annual = _df_to_periods(financials)

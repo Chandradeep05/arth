@@ -136,7 +136,9 @@ export default function WatchlistTable({
                   {item.name || '—'}
                 </td>
                 <td className="text-right font-mono text-xs text-[var(--text)]">
-                  {item.price != null ? item.price.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '—'}
+                  {item.price != null && item.price > 0
+                    ? item.price.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+                    : <span className="text-[var(--text-dim)]">Unavailable</span>}
                 </td>
                 <td className="text-right font-mono text-xs">
                   <span

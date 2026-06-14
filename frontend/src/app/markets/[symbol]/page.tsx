@@ -67,6 +67,16 @@ export default function StockDetailPage() {
 
       if (batchRes.status === 'fulfilled' && batchRes.value.data?.[0]) {
         setQuote(batchRes.value.data[0]);
+      } else {
+        // Fallback: try individual quote endpoint (uses fast_info/ticker.info)
+        try {
+          const quoteRes = await apiClient.get<{ data: StockQuote }>(
+            `/api/v1/market/quote/${encodeURIComponent(symbol)}`
+          );
+          if (quoteRes.data) setQuote(quoteRes.data);
+        } catch {
+          // Both batch and individual failed — quote stays null
+        }
       }
       if (ohlcvRes.status === 'fulfilled') {
         const d = ohlcvRes.value.data;

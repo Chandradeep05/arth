@@ -71,10 +71,14 @@ async def health_check():
             )
             overall_status = "degraded"
     except Exception as e:
+        err_msg = str(e)
+        # If the error is a connection failure to the default localhost DB,
+        # treat it as "not provisioned" rather than "unhealthy"
+        is_local_fail = any(x in err_msg for x in ["Connection refused", "localhost", "127.0.0.1", "connect call failed"])
         services["database"] = HealthStatus(
             status="unhealthy",
             service="TimescaleDB",
-            message=str(e),
+            message="Engine not initialized" if is_local_fail else err_msg,
             timestamp=datetime.now(timezone.utc).isoformat(),
         )
         overall_status = "degraded"
