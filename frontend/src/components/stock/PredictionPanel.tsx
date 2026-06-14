@@ -149,11 +149,17 @@ export default function PredictionPanel({ symbol }: { symbol: string }) {
           </div>
         )}
 
-        {/* Error */}
-        {error && (
+        {/* Error — either local fetch error or API-returned error */}
+        {(error || (data && data.error)) && !loading && (
           <div className="text-center py-6">
             <AlertTriangle className="w-5 h-5 text-[var(--red)] mx-auto mb-2" />
-            <p className="text-xs text-[var(--red)]">{error}</p>
+            <p className="text-xs text-[var(--red)]">{error || data?.message || 'Prediction failed'}</p>
+            <button
+              onClick={generateForecast}
+              className="mt-3 px-3 py-1.5 rounded bg-[var(--accent)]/10 text-[var(--accent)] text-xs hover:bg-[var(--accent)]/20 transition-colors cursor-pointer"
+            >
+              Retry
+            </button>
           </div>
         )}
 

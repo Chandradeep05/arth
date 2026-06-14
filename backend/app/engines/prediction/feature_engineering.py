@@ -68,9 +68,12 @@ class FeatureEngineer:
         loop = asyncio.get_running_loop()
 
         # Fetch historical data in executor (yfinance is sync)
+        # Using yf.download() instead of ticker.history() because the latter
+        # gets HTTP 401 on Render (Yahoo requires auth cookies that
+        # yf.download handles automatically via session management).
         def _fetch():
+            hist = yf.download(symbol, period=period, interval="1d", progress=False, auto_adjust=True)
             ticker = yf.Ticker(symbol)
-            hist = ticker.history(period=period, interval="1d")
             info = ticker.info
             return hist, info
 
@@ -80,6 +83,11 @@ class FeatureEngineer:
             raise ValueError(f"Insufficient data for {symbol}: need 30+ daily bars")
 
         df = hist.copy()
+
+        # yf.download() returns multi-level columns for single symbols:
+        # e.g., ('Close', 'AAPL'). Flatten to just 'Close', 'Open', etc.
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
 
         # ── Price features ──
         df["return_1d"] = df["Close"].pct_change(1)
@@ -135,8 +143,8 @@ class FeatureEngineer:
         loop = asyncio.get_running_loop()
 
         def _fetch():
+            hist = yf.download(symbol, period="3mo", interval="1d", progress=False, auto_adjust=True)
             ticker = yf.Ticker(symbol)
-            hist = ticker.history(period="3mo", interval="1d")
             info = ticker.info
             return hist, info
 
@@ -146,6 +154,10 @@ class FeatureEngineer:
             raise ValueError(f"Insufficient recent data for {symbol}")
 
         df = hist.copy()
+
+        # Flatten multi-level columns from yf.download()
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
 
         # Compute all features on last 3mo, take the last row
         df["return_1d"] = df["Close"].pct_change(1)
