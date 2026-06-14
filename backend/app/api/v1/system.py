@@ -183,3 +183,31 @@ async def get_metrics():
         "metrics": metrics_collector.get_metrics(),
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
+
+
+@router.get("/debug")
+async def get_debug():
+    """Diagnostic endpoint — verify curl_cffi session and yfinance connectivity."""
+    from app.data.adapters.yahoo import _yf_session
+
+    result = {
+        "curl_cffi_session": _yf_session is not None,
+        "session_type": type(_yf_session).__name__ if _yf_session else "None",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+    # Quick yfinance connectivity test
+    try:
+        import yfinance as yf
+        ticker = yf.Ticker("AAPL", session=_yf_session)
+        info = ticker.info
+        result["yfinance_test"] = {
+            "symbol": "AAPL",
+            "price": info.get("regularMarketPrice"),
+            "name": info.get("shortName"),
+            "status": "ok" if info.get("regularMarketPrice") else "no_data",
+        }
+    except Exception as e:
+        result["yfinance_test"] = {"status": "error", "error": str(e)}
+
+    return result

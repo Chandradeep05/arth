@@ -15,6 +15,7 @@ redis[hiredis]==6.2.0
 
 # ── Data Sources ──
 yfinance==0.2.58
+curl_cffi>=0.5.0  # Required for Yahoo Finance auth on cloud IPs (Render/AWS)
 httpx==0.28.1
 
 # ── Technical Analysis ──

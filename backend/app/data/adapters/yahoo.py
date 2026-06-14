@@ -41,14 +41,18 @@ _validator = DataQualityValidator()
 # Yahoo Finance returns HTTP 401 for requests from cloud IPs (Render, AWS, etc.)
 # curl_cffi impersonates Chrome's TLS fingerprint, making Yahoo think
 # the request comes from a real browser. This is the official yfinance fix.
-# curl_cffi is already a yfinance dependency — no extra install needed.
+# IMPORTANT: curl_cffi is an OPTIONAL yfinance dependency — must be in requirements.txt.
 try:
     from curl_cffi import requests as curl_requests
-    _yf_session = curl_requests.Session(impersonate="chrome")
-    logger.info("yfinance_session", session_type="curl_cffi", impersonate="chrome")
+    _yf_session = curl_requests.Session(impersonate="chrome110")
+    logger.info("yfinance_session_ready", session_type="curl_cffi", impersonate="chrome110")
 except ImportError:
     _yf_session = None
-    logger.warning("curl_cffi_unavailable", fallback="default_session")
+    logger.error(
+        "curl_cffi_NOT_INSTALLED",
+        msg="curl_cffi is missing — ALL yfinance calls will get HTTP 401 on cloud IPs. "
+            "Add 'curl_cffi>=0.5.0' to requirements.txt.",
+    )
 
 
 class YahooFinanceAdapter(BaseDataAdapter):
