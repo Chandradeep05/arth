@@ -124,45 +124,42 @@ class StatementParser:
         try:
             ticker = yf.Ticker(symbol)
 
-            # yfinance 0.2.58 renamed some properties:
-            # .financials → .income_stmt, .quarterly_financials → .quarterly_income_stmt
-            # Try new names first, fall back to old names
-            def _get_df(t, *attrs):
-                """Try multiple attribute names, return first non-empty DataFrame."""
-                for attr in attrs:
-                    try:
-                        df = getattr(t, attr, None)
-                        if df is not None and not df.empty:
-                            return df
-                    except Exception:
-                        continue
-                return None
+            # Fetch ALL financial DataFrames in a single executor call.
+            # yfinance caches data internally after the first property access,
+            # so doing all 6 accesses in the same thread means only ~1 HTTP call.
+            # (6 separate executor calls would each trigger separate fetches,
+            # totaling 15-30s and timing out on Render free tier.)
+            def _fetch_all_statements(t):
+                """Fetch all statement DataFrames in one thread."""
+                def _try_df(*attrs):
+                    for attr in attrs:
+                        try:
+                            df = getattr(t, attr, None)
+                            if df is not None and not df.empty:
+                                return df
+                        except Exception:
+                            continue
+                    return None
 
-            financials = await loop.run_in_executor(
-                _executor, lambda t=ticker: _get_df(t, 'income_stmt', 'financials')
-            )
-            quarterly_financials = await loop.run_in_executor(
-                _executor, lambda t=ticker: _get_df(t, 'quarterly_income_stmt', 'quarterly_financials')
-            )
-            balance_sheet = await loop.run_in_executor(
-                _executor, lambda t=ticker: _get_df(t, 'balance_sheet')
-            )
-            quarterly_balance_sheet = await loop.run_in_executor(
-                _executor, lambda t=ticker: _get_df(t, 'quarterly_balance_sheet')
-            )
-            cashflow = await loop.run_in_executor(
-                _executor, lambda t=ticker: _get_df(t, 'cash_flow', 'cashflow')
-            )
-            quarterly_cashflow = await loop.run_in_executor(
-                _executor, lambda t=ticker: _get_df(t, 'quarterly_cash_flow', 'quarterly_cashflow')
+                return {
+                    "financials": _try_df("income_stmt", "financials"),
+                    "quarterly_financials": _try_df("quarterly_income_stmt", "quarterly_financials"),
+                    "balance_sheet": _try_df("balance_sheet", "balancesheet"),
+                    "quarterly_balance_sheet": _try_df("quarterly_balance_sheet", "quarterly_balancesheet"),
+                    "cashflow": _try_df("cash_flow", "cashflow"),
+                    "quarterly_cashflow": _try_df("quarterly_cash_flow", "quarterly_cashflow"),
+                }
+
+            raw = await loop.run_in_executor(
+                _executor, lambda t=ticker: _fetch_all_statements(t)
             )
 
-            income_annual = _df_to_periods(financials)
-            income_quarterly = _df_to_periods(quarterly_financials)
-            bs_annual = _df_to_periods(balance_sheet)
-            bs_quarterly = _df_to_periods(quarterly_balance_sheet)
-            cf_annual = _df_to_periods(cashflow)
-            cf_quarterly = _df_to_periods(quarterly_cashflow)
+            income_annual = _df_to_periods(raw["financials"])
+            income_quarterly = _df_to_periods(raw["quarterly_financials"])
+            bs_annual = _df_to_periods(raw["balance_sheet"])
+            bs_quarterly = _df_to_periods(raw["quarterly_balance_sheet"])
+            cf_annual = _df_to_periods(raw["cashflow"])
+            cf_quarterly = _df_to_periods(raw["quarterly_cashflow"])
 
             return {
                 "symbol": symbol.upper(),

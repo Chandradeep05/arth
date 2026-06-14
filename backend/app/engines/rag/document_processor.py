@@ -174,6 +174,10 @@ class DocumentProcessor:
                     metrics_parts.append(
                         f"{label}: {self._fmt_large_num(val)}"
                     )
+                elif key == "debtToEquity":
+                    # yfinance returns D/E as percentage (e.g., 22.85 = 0.2285 ratio)
+                    normalized = val / 100.0
+                    metrics_parts.append(f"{label}: {normalized:.2f}")
                 else:
                     metrics_parts.append(f"{label}: {val:.2f}")
 

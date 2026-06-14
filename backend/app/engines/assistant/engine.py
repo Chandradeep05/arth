@@ -214,7 +214,7 @@ class AssistantEngine:
                     f"Change: {quote.get('change', 0)} ({quote.get('change_percent', 0):.2f}%) | "
                     f"Volume: {quote.get('volume', 'N/A')} | "
                     f"High: {quote.get('high', 'N/A')} | Low: {quote.get('low', 'N/A')} | "
-                    f"Market Cap: {quote.get('market_cap', 'N/A')} | "
+                    f"Market Cap: {self._fmt_market_cap(quote.get('market_cap'))} | "
                     f"P/E: {quote.get('pe_ratio', 'N/A')}"
                 )
         except Exception as e:
@@ -235,13 +235,44 @@ class AssistantEngine:
                         f"ROE: {metrics.get('roe', 'N/A')} | "
                         f"Revenue Growth: {metrics.get('revenue_growth', 'N/A')} | "
                         f"Profit Margin: {metrics.get('profit_margin', 'N/A')} | "
-                        f"D/E: {metrics.get('debt_to_equity', 'N/A')}"
+                        f"D/E: {self._fmt_de_ratio(metrics.get('debt_to_equity'))}"
                     )
         except Exception:
             pass
 
         parts.append("[END MARKET DATA]\n")
         return "\n".join(parts)
+
+    @staticmethod
+    def _fmt_market_cap(val) -> str:
+        """Format market cap as human-readable string."""
+        if val is None:
+            return "N/A"
+        try:
+            v = float(val)
+            if v >= 1e12:
+                return f"{v / 1e12:.2f}T"
+            if v >= 1e9:
+                return f"{v / 1e9:.2f}B"
+            if v >= 1e6:
+                return f"{v / 1e6:.2f}M"
+            return f"{v:,.0f}"
+        except (TypeError, ValueError):
+            return str(val)
+
+    @staticmethod
+    def _fmt_de_ratio(val) -> str:
+        """Normalize D/E ratio from yfinance (returns %-based, e.g. 22.85 = 0.23)."""
+        if val is None:
+            return "N/A"
+        try:
+            v = float(val)
+            # yfinance debtToEquity is percentage-based
+            if v > 5:  # Likely percentage format
+                v = v / 100.0
+            return f"{v:.2f}"
+        except (TypeError, ValueError):
+            return str(val)
 
     # ── Chat ────────────────────────────────────────────────────
 
