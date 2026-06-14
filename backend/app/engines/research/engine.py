@@ -17,7 +17,7 @@ from typing import Any, AsyncGenerator, Dict, Optional
 
 from app.config import Settings, get_settings
 from app.core.logging import get_logger
-from app.data.adapters.yahoo import YahooFinanceAdapter
+from app.data.adapters.yahoo import yahoo_adapter
 from app.data.cache import CacheManager
 from app.engines.market.indicators import compute_indicators
 from app.engines.research.prompts import (
@@ -39,7 +39,7 @@ class ResearchEngine:
 
     def __init__(self, settings: Settings | None = None):
         self._settings = settings or get_settings()
-        self._yahoo = YahooFinanceAdapter()
+        self._yahoo = yahoo_adapter
         self._llm: GroqClient | None = None
 
         # Initialize LLM client

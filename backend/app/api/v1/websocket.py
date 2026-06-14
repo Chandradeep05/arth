@@ -36,14 +36,13 @@ from starlette.websockets import WebSocketState
 
 from app.config import get_settings
 from app.core.logging import get_logger
-from app.data.adapters.yahoo import YahooFinanceAdapter
+from app.data.adapters.yahoo import yahoo_adapter
 
 logger = get_logger(__name__)
 
 router = APIRouter()
 
-# Shared adapter instance for all WebSocket connections
-_adapter = YahooFinanceAdapter()
+_adapter = yahoo_adapter
 
 # ── Constants ──────────────────────────────────────────────────────
 MAX_SYMBOLS_PER_CONNECTION = 10

@@ -17,7 +17,7 @@ from fastapi import APIRouter, Depends
 
 from app.config import Settings, get_settings
 from app.core.logging import get_logger
-from app.data.adapters.yahoo import YahooFinanceAdapter
+from app.data.adapters.yahoo import yahoo_adapter
 from app.data.cache import CacheManager
 from app.dependencies import get_redis
 from app.engines.risk.engine import RiskEngine
@@ -29,7 +29,7 @@ logger = get_logger(__name__)
 router = APIRouter(prefix="/watchlist", tags=["watchlist"])
 
 # Reusable singleton instances (stateless)
-_yahoo = YahooFinanceAdapter()
+_yahoo = yahoo_adapter
 _risk_engine = RiskEngine()
 _sentiment_engine = SentimentEngine()
 

@@ -493,3 +493,11 @@ class YahooFinanceAdapter(BaseDataAdapter):
             return info is not None and "regularMarketPrice" in info
         except Exception:
             return False
+
+
+# ── Module-level singleton ──────────────────────────────────────
+# All routers and engines should import this instead of creating
+# their own YahooFinanceAdapter instances. This ensures a single
+# shared circuit breaker and thread pool across the application.
+yahoo_adapter = YahooFinanceAdapter()
+

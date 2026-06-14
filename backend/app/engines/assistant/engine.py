@@ -23,7 +23,7 @@ from typing import Any, AsyncGenerator, Dict, List, Optional
 
 from app.config import Settings, get_settings
 from app.core.logging import get_logger
-from app.data.adapters.yahoo import YahooFinanceAdapter
+from app.data.adapters.yahoo import yahoo_adapter
 from app.data.cache import CacheManager
 from app.llm.base import LLMConfig, LLMMessage, LLMResponse
 from app.llm.groq_client import GroqClient
@@ -109,7 +109,7 @@ class AssistantEngine:
 
     def __init__(self, settings: Settings | None = None):
         self._settings = settings or get_settings()
-        self._yahoo = YahooFinanceAdapter()
+        self._yahoo = yahoo_adapter
         self._llm: GroqClient | None = None
 
         api_key = self._settings.groq_api_key or ""

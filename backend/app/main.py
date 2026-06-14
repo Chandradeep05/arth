@@ -149,11 +149,35 @@ def create_app() -> FastAPI:
     # Trace ID (adds UUID to every request)
     app.add_middleware(TraceIDMiddleware)
 
+    # ── Metrics Middleware ──
+    # Records request count, latency, and status for every API call.
+    # Feeds data to /system/metrics endpoint (was returning zeros before).
+    from app.engines.observability.metrics import MetricsCollector
+    _metrics = MetricsCollector()
+
+    @app.middleware("http")
+    async def metrics_middleware(request: Request, call_next):
+        import time as _time
+        start = _time.perf_counter()
+        response = await call_next(request)
+        duration_ms = (_time.perf_counter() - start) * 1000
+        # Skip health/docs endpoints to avoid noise
+        path = request.url.path
+        if not path.startswith(("/health", "/docs", "/redoc", "/openapi")):
+            _metrics.record_request(
+                endpoint=f"{request.method} {path}",
+                latency_ms=duration_ms,
+            )
+        return response
+
+    # Store metrics on app state so system.py can access it
+    app.state.metrics = _metrics
+
     # ── Exception Handlers ──
     register_exception_handlers(app)
 
     # ── Routes ──
-    from app.api.v1 import system, market, research, sentiment, risk, websocket, financials, watchlist, assistant
+    from app.api.v1 import system, market, research, sentiment, risk, websocket, financials, watchlist, assistant, prediction
     app.include_router(system.router, prefix=settings.api_prefix)
     app.include_router(market.router, prefix=settings.api_prefix)
     app.include_router(research.router, prefix=settings.api_prefix)
@@ -163,6 +187,7 @@ def create_app() -> FastAPI:
     app.include_router(financials.router, prefix=settings.api_prefix)
     app.include_router(watchlist.router, prefix=settings.api_prefix)
     app.include_router(assistant.router, prefix=settings.api_prefix)
+    app.include_router(prediction.router, prefix=settings.api_prefix)
 
     # Root health endpoint (no prefix, for Render health checks + self-ping keepalive)
     @app.get("/health")

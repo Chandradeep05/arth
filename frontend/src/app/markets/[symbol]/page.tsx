@@ -22,6 +22,7 @@ import RiskScore from '@/components/stock/RiskScore';
 import DataFreshness from '@/components/shared/DataFreshness';
 import Disclaimer from '@/components/shared/Disclaimer';
 import LoadingSkeleton from '@/components/shared/LoadingSkeleton';
+import PredictionPanel from '@/components/stock/PredictionPanel';
 import type { StockQuote, OHLCVBar, TechnicalIndicators } from '@/types/market';
 
 function formatNumber(n: number): string {
@@ -227,6 +228,9 @@ export default function StockDetailPage() {
 
       {/* Chart */}
       <PriceChart data={ohlcv} symbol={symbol} />
+
+      {/* AI Forecast */}
+      <PredictionPanel symbol={symbol} />
 
       {/* Two-column: Technicals + Sentiment/Risk */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">

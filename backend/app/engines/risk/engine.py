@@ -32,7 +32,7 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 
 from app.core.logging import get_logger
-from app.data.adapters.yahoo import YahooFinanceAdapter
+from app.data.adapters.yahoo import yahoo_adapter
 
 logger = get_logger(__name__)
 
@@ -75,7 +75,7 @@ class RiskEngine:
     """Computes multi-dimensional risk scores for stocks."""
 
     def __init__(self):
-        self._yahoo = YahooFinanceAdapter()
+        self._yahoo = yahoo_adapter
 
     async def compute_risk(self, symbol: str) -> Dict[str, Any]:
         """Compute composite risk score for a symbol."""

@@ -23,7 +23,7 @@ from fastapi import APIRouter, Depends, Query
 from app.config import Settings, get_settings
 from app.core.exceptions import SymbolNotFoundError
 from app.core.logging import get_logger
-from app.data.adapters.yahoo import YahooFinanceAdapter
+from app.data.adapters.yahoo import yahoo_adapter
 from app.data.cache import CacheManager
 from app.dependencies import get_redis
 from app.models.schemas.market import (
@@ -41,8 +41,8 @@ from app.models.schemas.market import (
 logger = get_logger(__name__)
 router = APIRouter(prefix="/market", tags=["market"])
 
-# Singleton adapter (stateless except for circuit breaker)
-_yahoo_adapter = YahooFinanceAdapter()
+# Shared singleton adapter (single circuit breaker for all routes)
+_yahoo_adapter = yahoo_adapter
 
 
 def _make_freshness(

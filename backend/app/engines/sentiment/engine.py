@@ -20,7 +20,7 @@ import yfinance as yf
 
 from app.config import get_settings
 from app.core.logging import get_logger
-from app.data.adapters.yahoo import YahooFinanceAdapter
+from app.data.adapters.yahoo import yahoo_adapter
 
 logger = get_logger(__name__)
 _executor = ThreadPoolExecutor(max_workers=1)
@@ -78,7 +78,7 @@ class SentimentEngine:
     """Sentiment analysis engine with news + LLM classification."""
 
     def __init__(self):
-        self._yahoo = YahooFinanceAdapter()
+        self._yahoo = yahoo_adapter
 
     async def analyze(self, symbol: str) -> Dict[str, Any]:
         """Compute sentiment score for a symbol.

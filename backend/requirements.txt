@@ -22,6 +22,11 @@ pandas==2.2.3
 # pandas-ta is not used in indicators.py
 numpy==1.26.4
 
+# ── ML / Prediction ──
+xgboost>=2.0.0
+shap>=0.43.0
+scikit-learn>=1.4.0
+
 # ── AI / LLM ──
 groq==0.25.0
 chromadb>=0.4.0
