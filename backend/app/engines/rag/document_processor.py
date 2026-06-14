@@ -21,6 +21,7 @@ from typing import Any, Dict, List
 import yfinance as yf
 
 from app.core.logging import get_logger
+from app.data.adapters.yahoo import _yf_session
 from app.engines.rag.vector_store import vector_store
 
 logger = get_logger(__name__)
@@ -43,7 +44,7 @@ class DocumentProcessor:
             ``{"symbol", "documents_indexed", "sources": [...]}}``
         """
         loop = asyncio.get_running_loop()
-        ticker = yf.Ticker(symbol)
+        ticker = yf.Ticker(symbol, session=_yf_session)
 
         # Fetch data in parallel via thread pool (yfinance is sync)
         info_future = loop.run_in_executor(_executor, lambda: ticker.info)

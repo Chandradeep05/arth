@@ -26,6 +26,7 @@ from typing import Any, Dict, List, Optional
 import yfinance as yf
 
 from app.core.logging import get_logger
+from app.data.adapters.yahoo import _yf_session
 
 logger = get_logger(__name__)
 _executor = ThreadPoolExecutor(max_workers=2)
@@ -122,7 +123,7 @@ class StatementParser:
         loop = asyncio.get_running_loop()
 
         try:
-            ticker = yf.Ticker(symbol)
+            ticker = yf.Ticker(symbol, session=_yf_session)
 
             # Fetch ALL financial DataFrames in a single executor call.
             # yfinance caches data internally after the first property access,

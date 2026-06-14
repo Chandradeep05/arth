@@ -20,7 +20,7 @@ import yfinance as yf
 
 from app.config import get_settings
 from app.core.logging import get_logger
-from app.data.adapters.yahoo import yahoo_adapter
+from app.data.adapters.yahoo import yahoo_adapter, _yf_session
 
 logger = get_logger(__name__)
 _executor = ThreadPoolExecutor(max_workers=1)
@@ -239,7 +239,7 @@ class SentimentEngine:
         """Fetch news from Yahoo Finance for a symbol."""
         try:
             loop = asyncio.get_running_loop()
-            ticker = yf.Ticker(symbol)
+            ticker = yf.Ticker(symbol, session=_yf_session)
             news = await loop.run_in_executor(
                 _executor, lambda t=ticker: t.news
             )
