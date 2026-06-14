@@ -311,15 +311,17 @@ export default function DashboardPage() {
         </div>
 
         <div className="flex items-center gap-3">
-          {/* WebSocket status badge */}
-          <span
-            className="badge text-[10px] flex items-center gap-1"
-            style={{ background: WS_BADGE[wsStatus].bg, color: WS_BADGE[wsStatus].color }}
-            title={`WebSocket: ${wsStatus}`}
-          >
-            <span className="text-[8px] leading-none">{WS_BADGE[wsStatus].dot}</span>
-            {WS_BADGE[wsStatus].label}
-          </span>
+          {/* WebSocket status badge — only show when connected or actively reconnecting */}
+          {(wsStatus === 'connected' || wsStatus === 'reconnecting' || wsStatus === 'connecting') && (
+            <span
+              className="badge text-[10px] flex items-center gap-1"
+              style={{ background: WS_BADGE[wsStatus].bg, color: WS_BADGE[wsStatus].color }}
+              title={`WebSocket: ${wsStatus}`}
+            >
+              <span className="text-[8px] leading-none">{WS_BADGE[wsStatus].dot}</span>
+              {WS_BADGE[wsStatus].label}
+            </span>
+          )}
 
           {!apiConnected && !loading && (
             <span className="badge badge-yellow text-[10px]">API Connecting...</span>
@@ -386,7 +388,7 @@ export default function DashboardPage() {
         <span>•</span>
         <span>NSE/BSE + NYSE/NASDAQ</span>
         <span>•</span>
-        <span>Auto-refresh: 15s</span>
+        <span>Auto-refresh: 60s</span>
       </motion.div>
     </div>
   );

@@ -142,11 +142,20 @@ export function useWebSocket(initialSymbols?: string[]) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sendMessage]);
 
-  /* ── Exponential backoff reconnect ── */
+  /* ── Exponential backoff reconnect — max 3 attempts, then silent fallback ── */
+  const MAX_RECONNECT_ATTEMPTS = 3;
+
   const scheduleReconnect = useCallback(() => {
     if (unmountedRef.current) return;
 
     const attempt = reconnectAttemptRef.current;
+
+    // After max attempts, stop trying — fall back to HTTP polling silently
+    if (attempt >= MAX_RECONNECT_ATTEMPTS) {
+      setStatus('disconnected');
+      return;
+    }
+
     const delay = Math.min(
       WS_RECONNECT_BASE_DELAY * Math.pow(2, attempt),
       WS_RECONNECT_MAX_DELAY,

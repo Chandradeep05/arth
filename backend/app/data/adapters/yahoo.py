@@ -395,11 +395,12 @@ class YahooFinanceAdapter(BaseDataAdapter):
 
             symbol_str = " ".join(symbols)
 
-            # yf.download fetches all tickers in one batch HTTP call
+            # Use period="2d" so we always have yesterday's close for change calculation
+            # (period="1d" returns empty during off-hours / weekends)
             df = await self._run_sync(
                 lambda: yf.download(
                     symbol_str,
-                    period="1d",
+                    period="2d",
                     interval="1d",
                     group_by="ticker",
                     progress=False,
@@ -418,32 +419,39 @@ class YahooFinanceAdapter(BaseDataAdapter):
 
                     if len(symbols) == 1:
                         # Single ticker: columns are flat (Open, High, Low, Close, Volume)
-                        row = df.iloc[-1]
-                        price = float(row.get("Close", 0) or 0)
-                        high = float(row.get("High", 0) or 0)
-                        low = float(row.get("Low", 0) or 0)
-                        opn = float(row.get("Open", 0) or 0)
-                        volume = int(row.get("Volume", 0) or 0)
+                        ticker_df = df
                     else:
                         # Multi-ticker: columns are MultiIndex (ticker, field)
                         if sym not in df.columns.get_level_values(0):
                             continue
                         ticker_df = df[sym]
-                        if ticker_df.empty or ticker_df.iloc[-1].isna().all():
-                            continue
-                        row = ticker_df.iloc[-1]
-                        price = float(row.get("Close", 0) or 0)
-                        high = float(row.get("High", 0) or 0)
-                        low = float(row.get("Low", 0) or 0)
-                        opn = float(row.get("Open", 0) or 0)
-                        volume = int(row.get("Volume", 0) or 0)
+
+                    if ticker_df.empty or len(ticker_df) < 1:
+                        continue
+
+                    # Drop rows where all values are NaN
+                    ticker_df = ticker_df.dropna(how="all")
+                    if ticker_df.empty:
+                        continue
+
+                    last_row = ticker_df.iloc[-1]
+                    price = float(last_row.get("Close", 0) or 0)
+                    high = float(last_row.get("High", 0) or 0)
+                    low = float(last_row.get("Low", 0) or 0)
+                    opn = float(last_row.get("Open", 0) or 0)
+                    volume = int(last_row.get("Volume", 0) or 0)
 
                     if price == 0:
                         continue
 
-                    # We don't have previous_close from download(), so use open as proxy
-                    prev_close = opn if opn > 0 else price
-                    change = round(price - prev_close, 2)
+                    # Get previous day's close for proper change calculation
+                    if len(ticker_df) >= 2:
+                        prev_row = ticker_df.iloc[-2]
+                        prev_close = float(prev_row.get("Close", 0) or 0)
+                    else:
+                        prev_close = opn if opn > 0 else price
+
+                    change = round(price - prev_close, 2) if prev_close else 0
                     change_pct = round((change / prev_close * 100), 2) if prev_close else 0
 
                     results.append({

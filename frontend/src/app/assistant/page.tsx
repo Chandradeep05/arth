@@ -8,7 +8,7 @@ import {
 } from 'lucide-react';
 import Disclaimer from '@/components/shared/Disclaimer';
 import { apiClient } from '@/lib/api';
-import { API_BASE_URL } from '@/lib/constants';
+import { STREAMING_API_URL } from '@/lib/constants';
 
 interface ChatMessage {
   id: string;
@@ -177,7 +177,8 @@ export default function AssistantPage() {
 
     try {
       // SSE streaming
-      const url = `${API_BASE_URL}/api/v1/assistant/chat`;
+      // Use direct backend URL for SSE (Next.js rewrites may buffer streams)
+      const url = `${STREAMING_API_URL}/api/v1/assistant/chat`;
       const response = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -244,11 +245,14 @@ export default function AssistantPage() {
         }
       }
     } catch (error) {
+      const errMsg = error instanceof Error && error.message.includes('fetch')
+        ? 'Could not connect to the backend server. Make sure it is running.'
+        : 'AI assistant encountered an error. The GROQ_API_KEY may not be configured, or the backend may be unavailable.';
       setMessages(prev => prev.map(m =>
         m.id === assistantId
           ? {
             ...m,
-            content: 'Sorry, I encountered an error connecting to the backend. Please check that the GROQ_API_KEY is configured.',
+            content: errMsg,
             isStreaming: false,
           }
           : m

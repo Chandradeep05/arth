@@ -110,9 +110,26 @@ async def health_check():
         )
         overall_status = "degraded"
 
+    # Determine overall status
+    # If DB and Redis are just "not initialized" (intentionally absent in free tier),
+    # the system is still operational — just without caching/persistence.
+    # Only mark as truly "degraded" if a service was expected but crashed.
+    db_status = services.get("database", HealthStatus(status="unhealthy", service="TimescaleDB", timestamp=""))
+    redis_status = services.get("redis", HealthStatus(status="unhealthy", service="Redis", timestamp=""))
+
+    db_missing = db_status.status == "unhealthy" and db_status.message == "Engine not initialized"
+    redis_missing = redis_status.status == "unhealthy" and redis_status.message == "Client not initialized"
+
+    if db_missing and redis_missing:
+        # Both intentionally absent → system is operational in lite mode
+        overall_status = "operational"
+    elif overall_status == "degraded":
+        # At least one service was expected but failed → truly degraded
+        pass
+
     return SystemHealth(
         status=overall_status,
-        version="0.1.0",
+        version="2.0.0",
         environment=settings.app_env.value,
         services=services,
         timestamp=datetime.now(timezone.utc).isoformat(),

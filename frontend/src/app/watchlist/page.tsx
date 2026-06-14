@@ -103,11 +103,22 @@ export default function WatchlistPage() {
       }
 
       try {
-        const res = await apiClient.post<{ items: WatchlistItem[] }>(
+        const res = await apiClient.post<{ success: boolean; data: any[] }>(
           '/api/v1/watchlist/batch',
           { symbols: syms }
         );
-        setItems(res.items ?? []);
+        // Backend returns nested { quote: { price, name, ... }, risk_score, sentiment_label }
+        // Map to flat WatchlistItem shape
+        const mapped: WatchlistItem[] = (res.data ?? []).map((item: any) => ({
+          symbol: item.symbol,
+          name: item.quote?.name || item.symbol.replace('.NS', '').replace('.BO', ''),
+          price: item.quote?.price ?? 0,
+          change_percent: item.quote?.change_percent ?? 0,
+          risk_score: item.risk_score,
+          risk_label: item.risk_label,
+          sentiment: item.sentiment_label,
+        }));
+        setItems(mapped);
         setError('');
       } catch {
         // If batch fails, create skeleton items from symbols

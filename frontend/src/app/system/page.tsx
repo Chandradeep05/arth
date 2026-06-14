@@ -23,14 +23,15 @@ interface SystemHealthData {
 
 function StatusDot({ status }: { status: string }) {
   const color =
-    status === 'healthy' ? 'bg-[var(--green)]' :
+    status === 'healthy' || status === 'operational' ? 'bg-[var(--green)]' :
     status === 'degraded' ? 'bg-[var(--gold)]' :
+    status === 'not_provisioned' ? 'bg-[var(--text-dim)]' :
     'bg-[var(--red)]';
-  return <div className={`w-2.5 h-2.5 rounded-full ${color} animate-pulse-dot`} />;
+  return <div className={`w-2.5 h-2.5 rounded-full ${color} ${status === 'not_provisioned' ? '' : 'animate-pulse-dot'}`} />;
 }
 
 function StatusIcon({ status }: { status: string }) {
-  if (status === 'healthy') return <CheckCircle className="w-5 h-5 text-[var(--green)]" />;
+  if (status === 'healthy' || status === 'operational') return <CheckCircle className="w-5 h-5 text-[var(--green)]" />;
   if (status === 'degraded') return <AlertTriangle className="w-5 h-5 text-[var(--gold)]" />;
   return <XCircle className="w-5 h-5 text-[var(--red)]" />;
 }
@@ -98,7 +99,7 @@ export default function SystemPage() {
             <StatusIcon status={health.status} />
             <div>
               <div className="font-heading text-lg font-bold text-[var(--text)] capitalize">
-                System {health.status}
+                {health.status === 'operational' ? 'System Operational (Lite Mode)' : `System ${health.status}`}
               </div>
               <div className="text-xs font-mono text-[var(--text-dim)]">
                 v{health.version} · {health.environment}
@@ -117,12 +118,19 @@ export default function SystemPage() {
               <Database className="w-4 h-4 text-[var(--accent-purple)]" />
               <span className="font-heading text-sm font-bold text-[var(--text)]">TimescaleDB</span>
             </div>
-            <StatusDot status={health?.services?.database?.status ?? 'unhealthy'} />
+            <StatusDot status={
+              health?.services?.database?.status === 'healthy' ? 'healthy' :
+              health?.services?.database?.message === 'Engine not initialized' ? 'not_provisioned' : 'unhealthy'
+            } />
           </div>
           <div className="space-y-1 text-xs font-mono">
             <div className="flex justify-between">
               <span className="text-[var(--text-dim)]">Status</span>
-              <span className="text-[var(--text-muted)] capitalize">{health?.services?.database?.status ?? 'offline'}</span>
+              <span className="text-[var(--text-muted)] capitalize">
+                {health?.services?.database?.message === 'Engine not initialized'
+                  ? 'Not provisioned'
+                  : (health?.services?.database?.status ?? 'offline')}
+              </span>
             </div>
             {health?.services?.database?.latency_ms && (
               <div className="flex justify-between">
@@ -130,8 +138,11 @@ export default function SystemPage() {
                 <span className="text-[var(--text-muted)]">{health.services.database.latency_ms}ms</span>
               </div>
             )}
-            {health?.services?.database?.message && (
+            {health?.services?.database?.message && health.services.database.message !== 'Engine not initialized' && (
               <p className="text-[var(--red)] text-[10px] mt-2 break-all">{health.services.database.message}</p>
+            )}
+            {health?.services?.database?.message === 'Engine not initialized' && (
+              <p className="text-[var(--text-dim)] text-[10px] mt-2">Optional — system operates without DB in lite mode</p>
             )}
           </div>
         </motion.div>
@@ -143,12 +154,19 @@ export default function SystemPage() {
               <Server className="w-4 h-4 text-[var(--accent-orange)]" />
               <span className="font-heading text-sm font-bold text-[var(--text)]">Redis Cache</span>
             </div>
-            <StatusDot status={health?.services?.redis?.status ?? 'unhealthy'} />
+            <StatusDot status={
+              health?.services?.redis?.status === 'healthy' ? 'healthy' :
+              health?.services?.redis?.message === 'Client not initialized' ? 'not_provisioned' : 'unhealthy'
+            } />
           </div>
           <div className="space-y-1 text-xs font-mono">
             <div className="flex justify-between">
               <span className="text-[var(--text-dim)]">Status</span>
-              <span className="text-[var(--text-muted)] capitalize">{health?.services?.redis?.status ?? 'offline'}</span>
+              <span className="text-[var(--text-muted)] capitalize">
+                {health?.services?.redis?.message === 'Client not initialized'
+                  ? 'Not provisioned'
+                  : (health?.services?.redis?.status ?? 'offline')}
+              </span>
             </div>
             {health?.services?.redis?.latency_ms && (
               <div className="flex justify-between">
@@ -156,8 +174,8 @@ export default function SystemPage() {
                 <span className="text-[var(--text-muted)]">{health.services.redis.latency_ms}ms</span>
               </div>
             )}
-            {health?.services?.redis?.message && (
-              <p className="text-[var(--accent-orange)] text-[10px] mt-2">Cache disabled — serving fresh data</p>
+            {health?.services?.redis?.message === 'Client not initialized' && (
+              <p className="text-[var(--text-dim)] text-[10px] mt-2">Optional — serving fresh data without cache</p>
             )}
           </div>
         </motion.div>
@@ -201,12 +219,12 @@ export default function SystemPage() {
         </h3>
         <div className="space-y-2 text-xs font-mono">
           {[
-            ['Application', 'ARTH v0.1.0'],
+            ['Application', 'ARTH v2.0.0'],
             ['Backend', 'FastAPI + Uvicorn'],
             ['Frontend', 'Next.js 16 (Turbopack)'],
             ['LLM Provider', 'Groq (Llama 3.3 70B)'],
             ['Data Source', 'Yahoo Finance (~15s delay)'],
-            ['Phase', '1 — Core Infrastructure'],
+            ['Phase', '2 — Intelligence Expansion'],
           ].map(([label, value]) => (
             <div key={label} className="flex justify-between">
               <span className="text-[var(--text-dim)]">{label}</span>

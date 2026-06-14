@@ -10,6 +10,16 @@ export const API_BASE_URL =
     ? ''  // Production: relative URL → Next.js rewrites → backend
     : (process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000');
 
+// SSE/streaming endpoints bypass Next.js rewrites (Vercel may buffer SSE responses).
+// In production, connect directly to the Render backend URL.
+// In dev, use localhost (no rewrite needed for direct connections).
+export const STREAMING_API_URL =
+  process.env.NEXT_PUBLIC_API_URL
+    ? (process.env.NEXT_PUBLIC_API_URL.startsWith('http') ? process.env.NEXT_PUBLIC_API_URL : `https://${process.env.NEXT_PUBLIC_API_URL}`)
+    : (typeof window !== 'undefined' && window.location.hostname !== 'localhost'
+        ? ''  // Fallback: use rewrite if no env var set
+        : 'http://localhost:8000');
+
 export const WS_BASE_URL =
   process.env.NEXT_PUBLIC_WS_URL ?? 'ws://localhost:8000';
 

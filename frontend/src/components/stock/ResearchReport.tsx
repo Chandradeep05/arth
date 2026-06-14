@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { motion } from 'framer-motion';
 import { FileText, Loader2, AlertTriangle } from 'lucide-react';
-import { API_BASE_URL } from '@/lib/constants';
+import { STREAMING_API_URL } from '@/lib/constants';
 
 interface ResearchReportProps {
   symbol: string;
@@ -22,7 +22,7 @@ export default function ResearchReport({ symbol }: ResearchReportProps) {
 
     try {
       const response = await fetch(
-        `${API_BASE_URL}/api/v1/research/generate/${encodeURIComponent(symbol)}?stream=true&depth=standard`,
+        `${STREAMING_API_URL}/api/v1/research/generate/${encodeURIComponent(symbol)}?stream=true&depth=standard`,
         {
           method: 'POST',
           headers: { 'Accept': 'text/event-stream' },

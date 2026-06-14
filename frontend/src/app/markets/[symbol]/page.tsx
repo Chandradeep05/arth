@@ -13,7 +13,7 @@ import {
 } from 'lucide-react';
 import Link from 'next/link';
 import { apiClient } from '@/lib/api';
-import { API_BASE_URL, REFRESH_INTERVALS } from '@/lib/constants';
+import { REFRESH_INTERVALS } from '@/lib/constants';
 import PriceChart from '@/components/charts/PriceChart';
 import TechnicalPanel from '@/components/stock/TechnicalPanel';
 import ResearchReport from '@/components/stock/ResearchReport';
