@@ -123,10 +123,35 @@ class AssistantEngine:
                 logger.warning("assistant_llm_init_failed", error=str(e))
 
     # ── Session management ──────────────────────────────────────
+    SESSION_TTL_SECONDS = 1800  # 30 minutes of inactivity → evict
+    MAX_SESSIONS = 50           # Safety cap for Render 512MB RAM
+
+    def _evict_stale_sessions(self) -> None:
+        """Remove sessions inactive for longer than SESSION_TTL_SECONDS."""
+        now = datetime.now(timezone.utc)
+        stale = [
+            sid for sid, session in self._sessions.items()
+            if (now - session.last_active).total_seconds() > self.SESSION_TTL_SECONDS
+        ]
+        for sid in stale:
+            del self._sessions[sid]
+        if stale:
+            logger.info("sessions_evicted", count=len(stale), remaining=len(self._sessions))
 
     def get_or_create_session(self, session_id: str | None = None) -> AssistantSession:
+        # Sweep stale sessions on every creation
+        self._evict_stale_sessions()
+
         if session_id and session_id in self._sessions:
             return self._sessions[session_id]
+
+        # Cap total sessions to prevent OOM
+        if len(self._sessions) >= self.MAX_SESSIONS:
+            # Evict oldest session
+            oldest_id = min(self._sessions, key=lambda s: self._sessions[s].last_active)
+            del self._sessions[oldest_id]
+            logger.warning("session_cap_eviction", evicted=oldest_id, cap=self.MAX_SESSIONS)
+
         session = AssistantSession(session_id)
         self._sessions[session.session_id] = session
         return session
