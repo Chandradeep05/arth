@@ -37,22 +37,10 @@ _executor = ThreadPoolExecutor(max_workers=2)
 # Module-level data quality validator
 _validator = DataQualityValidator()
 
-# ── Browser-impersonating session ──────────────────────────────
-# Yahoo Finance returns HTTP 401 for requests from cloud IPs (Render, AWS, etc.)
-# curl_cffi impersonates Chrome's TLS fingerprint, making Yahoo think
-# the request comes from a real browser. This is the official yfinance fix.
-# IMPORTANT: curl_cffi is an OPTIONAL yfinance dependency — must be in requirements.txt.
-try:
-    from curl_cffi import requests as curl_requests
-    _yf_session = curl_requests.Session(impersonate="chrome110")
-    logger.info("yfinance_session_ready", session_type="curl_cffi", impersonate="chrome110")
-except ImportError:
-    _yf_session = None
-    logger.error(
-        "curl_cffi_NOT_INSTALLED",
-        msg="curl_cffi is missing — ALL yfinance calls will get HTTP 401 on cloud IPs. "
-            "Add 'curl_cffi>=0.5.0' to requirements.txt.",
-    )
+# NOTE: yfinance >= 1.x handles curl_cffi session internally.
+# No manual session management needed — the library automatically
+# impersonates Chrome for Yahoo Finance auth on cloud IPs.
+_yf_session = None  # Kept for backward compat with engines that import it
 
 
 class YahooFinanceAdapter(BaseDataAdapter):
@@ -82,7 +70,7 @@ class YahooFinanceAdapter(BaseDataAdapter):
         """
 
         async def _fetch():
-            ticker = yf.Ticker(symbol, session=_yf_session)
+            ticker = yf.Ticker(symbol)
             market, exchange, currency = self._detect_market(symbol)
 
             # Try fast_info FIRST — it's 10x faster and uses 10x less memory
@@ -175,7 +163,7 @@ class YahooFinanceAdapter(BaseDataAdapter):
         """Get historical OHLCV data."""
 
         async def _fetch():
-            ticker = yf.Ticker(symbol, session=_yf_session)
+            ticker = yf.Ticker(symbol)
             # Capture variables in default args to avoid closure bugs
             hist = await self._run_sync(
                 lambda t=ticker, p=period, i=interval: t.history(period=p, interval=i)
@@ -240,7 +228,7 @@ class YahooFinanceAdapter(BaseDataAdapter):
         """Get company fundamentals and metadata."""
 
         async def _fetch():
-            ticker = yf.Ticker(symbol, session=_yf_session)
+            ticker = yf.Ticker(symbol)
             info = await self._run_sync(lambda t=ticker: t.info)
 
             if not info:
@@ -290,7 +278,7 @@ class YahooFinanceAdapter(BaseDataAdapter):
 
             for sym in candidates:
                 try:
-                    ticker = yf.Ticker(sym, session=_yf_session)
+                    ticker = yf.Ticker(sym)
                     # Capture ticker in default arg to avoid closure bug
                     info = await self._run_sync(lambda t=ticker: t.info)
                     if info and info.get("regularMarketPrice") is not None:
@@ -334,7 +322,6 @@ class YahooFinanceAdapter(BaseDataAdapter):
                         group_by="ticker",
                         progress=False,
                         threads=False,
-                        session=_yf_session,
                     )
                 )
 
@@ -423,7 +410,6 @@ class YahooFinanceAdapter(BaseDataAdapter):
                     group_by="ticker",
                     progress=False,
                     threads=False,  # Single thread to save memory
-                    session=_yf_session,
                 )
             )
 
@@ -507,7 +493,7 @@ class YahooFinanceAdapter(BaseDataAdapter):
     async def health_check(self) -> bool:
         """Check if Yahoo Finance is reachable by fetching NIFTY 50."""
         try:
-            ticker = yf.Ticker("^NSEI", session=_yf_session)
+            ticker = yf.Ticker("^NSEI")
             info = await self._run_sync(lambda t=ticker: t.info)
             return info is not None and "regularMarketPrice" in info
         except Exception:

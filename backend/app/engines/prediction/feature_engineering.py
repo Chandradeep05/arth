@@ -26,7 +26,7 @@ import pandas as pd
 import yfinance as yf
 
 from app.core.logging import get_logger
-from app.data.adapters.yahoo import _yf_session
+
 
 logger = get_logger(__name__)
 _executor = ThreadPoolExecutor(max_workers=2)
@@ -73,8 +73,8 @@ class FeatureEngineer:
         # gets HTTP 401 on Render (Yahoo requires auth cookies that
         # yf.download handles automatically via session management).
         def _fetch():
-            hist = yf.download(symbol, period=period, interval="1d", progress=False, auto_adjust=True, session=_yf_session)
-            ticker = yf.Ticker(symbol, session=_yf_session)
+            hist = yf.download(symbol, period=period, interval="1d", progress=False, auto_adjust=True)
+            ticker = yf.Ticker(symbol)
             info = ticker.info
             return hist, info
 
@@ -144,8 +144,8 @@ class FeatureEngineer:
         loop = asyncio.get_running_loop()
 
         def _fetch():
-            hist = yf.download(symbol, period="3mo", interval="1d", progress=False, auto_adjust=True, session=_yf_session)
-            ticker = yf.Ticker(symbol, session=_yf_session)
+            hist = yf.download(symbol, period="3mo", interval="1d", progress=False, auto_adjust=True)
+            ticker = yf.Ticker(symbol)
             info = ticker.info
             return hist, info
 

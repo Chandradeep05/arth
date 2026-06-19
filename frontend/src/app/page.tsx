@@ -21,7 +21,7 @@ import type { MarketIndex } from '@/types/market';
 /* ── Stocks to scan for gainers/losers ── */
 const NIFTY_STOCKS = [
   'RELIANCE.NS', 'TCS.NS', 'HDFCBANK.NS', 'INFY.NS', 'ICICIBANK.NS',
-  'SBIN.NS', 'BAJFINANCE.NS', 'WIPRO.NS', 'TATAMOTORS.NS', 'ADANIENT.NS',
+  'SBIN.NS', 'BAJFINANCE.NS', 'WIPRO.NS', 'EICHERMOT.NS', 'ADANIENT.NS',
   'ITC.NS', 'KOTAKBANK.NS', 'LT.NS', 'HCLTECH.NS', 'AXISBANK.NS',
   'SUNPHARMA.NS', 'MARUTI.NS', 'TATASTEEL.NS', 'BHARTIARTL.NS', 'NTPC.NS',
   'POWERGRID.NS', 'HINDALCO.NS', 'DRREDDY.NS', 'CIPLA.NS', 'TECHM.NS',
@@ -53,7 +53,7 @@ function formatVolume(v: number): string {
 const SECTOR_MAP: Record<string, string[]> = {
   IT: ['TCS.NS', 'INFY.NS', 'WIPRO.NS', 'HCLTECH.NS', 'TECHM.NS'],
   Banking: ['HDFCBANK.NS', 'ICICIBANK.NS', 'SBIN.NS', 'KOTAKBANK.NS', 'AXISBANK.NS'],
-  Auto: ['TATAMOTORS.NS', 'MARUTI.NS'],
+  Auto: ['EICHERMOT.NS', 'MARUTI.NS'],
   Pharma: ['SUNPHARMA.NS', 'DRREDDY.NS', 'CIPLA.NS'],
   Energy: ['RELIANCE.NS', 'NTPC.NS', 'POWERGRID.NS', 'ONGC.NS'],
   FMCG: ['ITC.NS'],

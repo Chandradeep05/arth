@@ -23,7 +23,6 @@ from typing import Any, Dict, List, Optional
 import yfinance as yf
 
 from app.core.logging import get_logger
-from app.data.adapters.yahoo import _yf_session
 
 logger = get_logger(__name__)
 _executor = ThreadPoolExecutor(max_workers=1)
@@ -117,7 +116,7 @@ async def get_governance_data(symbol: str) -> Dict[str, Any]:
     loop = asyncio.get_running_loop()
 
     try:
-        ticker = yf.Ticker(symbol, session=_yf_session)
+        ticker = yf.Ticker(symbol)
 
         # Fetch info, major_holders, and institutional_holders
         info = await loop.run_in_executor(_executor, lambda t=ticker: t.info)

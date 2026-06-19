@@ -199,7 +199,7 @@ async def get_debug():
     # Quick yfinance connectivity test
     try:
         import yfinance as yf
-        ticker = yf.Ticker("AAPL", session=_yf_session)
+        ticker = yf.Ticker("AAPL")
         info = ticker.info
         result["yfinance_test"] = {
             "symbol": "AAPL",
