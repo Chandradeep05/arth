@@ -67,7 +67,9 @@ const SECTOR_MAP: Record<string, string[]> = {
 
 /* ── Index Card Component ── */
 function IndexCard({ index, delay }: { index: MarketIndex; delay: number }) {
-  const isPositive = index.change >= 0;
+  const change = index.change ?? 0;
+  const changePct = index.change_percent ?? 0;
+  const isPositive = change >= 0;
   return (
     <motion.div
       initial={{ opacity: 0, y: 12 }}
@@ -83,7 +85,7 @@ function IndexCard({ index, delay }: { index: MarketIndex; delay: number }) {
       </div>
 
       <div className="font-heading text-2xl font-extrabold tracking-tight text-[var(--text)] mb-1">
-        {formatNumber(index.value)}
+        {formatNumber(index.value ?? 0)}
       </div>
 
       <div className="flex items-center gap-2">
@@ -93,10 +95,10 @@ function IndexCard({ index, delay }: { index: MarketIndex; delay: number }) {
           <TrendingDown className="w-4 h-4 text-[var(--red)]" />
         )}
         <span className={`text-sm font-mono font-medium ${isPositive ? 'text-[var(--green)]' : 'text-[var(--red)]'}`}>
-          {isPositive ? '+' : ''}{formatNumber(index.change)}
+          {isPositive ? '+' : ''}{formatNumber(change)}
         </span>
         <span className={`text-xs font-mono ${isPositive ? 'text-[var(--green)]' : 'text-[var(--red)]'}`}>
-          ({isPositive ? '+' : ''}{index.change_percent.toFixed(2)}%)
+          ({isPositive ? '+' : ''}{changePct.toFixed(2)}%)
         </span>
       </div>
     </motion.div>
@@ -121,8 +123,9 @@ function SectorHeatmap({ sectors }: { sectors: { name: string; change: number }[
 
       <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-6 gap-1.5">
         {sectors.map((sector) => {
-          const isPositive = sector.change >= 0;
-          const intensity = Math.min(Math.abs(sector.change) / 4, 1);
+          const sectorChange = sector.change ?? 0;
+          const isPositive = sectorChange >= 0;
+          const intensity = Math.min(Math.abs(sectorChange) / 4, 1);
           const bg = isPositive
             ? `rgba(0, 212, 160, ${0.08 + intensity * 0.25})`
             : `rgba(255, 68, 68, ${0.08 + intensity * 0.25})`;
@@ -137,7 +140,7 @@ function SectorHeatmap({ sectors }: { sectors: { name: string; change: number }[
                 {sector.name}
               </div>
               <div className={`text-xs font-mono font-semibold ${isPositive ? 'text-[var(--green)]' : 'text-[var(--red)]'}`}>
-                {isPositive ? '+' : ''}{sector.change.toFixed(2)}%
+                {isPositive ? '+' : ''}{sectorChange.toFixed(2)}%
               </div>
             </div>
           );
@@ -205,15 +208,15 @@ function MoversTable({
                   </Link>
                 </td>
                 <td className="text-right font-mono text-sm">
-                  ₹{formatNumber(stock.price)}
+                  ₹{formatNumber(stock.price ?? 0)}
                 </td>
                 <td className="text-right">
-                  <div className={`font-mono text-sm font-medium ${stock.change >= 0 ? 'text-[var(--green)]' : 'text-[var(--red)]'}`}>
-                    {stock.change >= 0 ? '+' : ''}{stock.change_percent.toFixed(2)}%
+                  <div className={`font-mono text-sm font-medium ${(stock.change ?? 0) >= 0 ? 'text-[var(--green)]' : 'text-[var(--red)]'}`}>
+                    {(stock.change ?? 0) >= 0 ? '+' : ''}{(stock.change_percent ?? 0).toFixed(2)}%
                   </div>
                 </td>
                 <td className="text-right hidden sm:table-cell text-[var(--text-dim)] font-mono text-xs">
-                  {formatVolume(stock.volume)}
+                  {formatVolume(stock.volume ?? 0)}
                 </td>
               </tr>
             ))
