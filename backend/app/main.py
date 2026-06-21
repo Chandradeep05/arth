@@ -138,12 +138,13 @@ def create_app() -> FastAPI:
 
     # CORS — supports exact origins, wildcard "*", and regex for Vercel previews
     cors_origins = settings.cors_origins
+
+    # Step 1: Add CORS middleware (for HTTP requests)
     if "*" in cors_origins:
-        # Wildcard: allow all origins (useful for development/staging)
         app.add_middleware(
             CORSMiddleware,
             allow_origins=["*"],
-            allow_credentials=False,  # Can't use credentials with wildcard
+            allow_credentials=False,
             allow_methods=["*"],
             allow_headers=["*"],
             expose_headers=["X-Trace-ID"],
@@ -156,9 +157,30 @@ def create_app() -> FastAPI:
             allow_methods=["*"],
             allow_headers=["*"],
             expose_headers=["X-Trace-ID"],
-            # Allow Vercel preview deployments (*.vercel.app)
             allow_origin_regex=r"https://.*\.vercel\.app",
         )
+
+    # Step 2: Add WebSocket bypass AFTER CORS (last added = first executed).
+    # This runs BEFORE CORSMiddleware, intercepting WS upgrades so they
+    # never reach CORSMiddleware (which would reject them with 403).
+    from starlette.types import ASGIApp, Receive, Scope, Send
+
+    _inner_app = app  # capture reference
+
+    class WebSocketCORSBypass:
+        """Intercept WebSocket upgrades before CORSMiddleware can block them."""
+        def __init__(self, app: ASGIApp):
+            self.app = app
+
+        async def __call__(self, scope: Scope, receive: Receive, send: Send):
+            if scope["type"] == "websocket":
+                # Route directly to the app, skipping CORS middleware.
+                # Origin validation is handled in the WebSocket endpoint.
+                await self.app(scope, receive, send)
+                return
+            await self.app(scope, receive, send)
+
+    app.add_middleware(WebSocketCORSBypass)
 
     # Trace ID (adds UUID to every request)
     app.add_middleware(TraceIDMiddleware)

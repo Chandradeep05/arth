@@ -127,6 +127,7 @@ class FeatureEngineer:
         # Select feature columns and drop NaN rows
         # Replace inf with NaN, THEN drop NaN rows.
         # CRITICAL: dropna() does NOT remove inf — XGBoost crashes on inf values.
+        feature_cols = self.FEATURE_NAMES
         df_features = df[feature_cols + ["target_5d"]]
         df_features = df_features.replace([np.inf, -np.inf], np.nan).dropna()
 
