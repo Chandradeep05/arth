@@ -20,21 +20,18 @@ export const STREAMING_API_URL =
         ? ''  // Fallback: use rewrite if no env var set
         : 'http://localhost:8000');
 
-// WebSocket URL: use explicit env var, or derive from API URL, or disable in production
-// (Render free tier may not support persistent WebSocket connections reliably)
+// WebSocket URL: ONLY enabled when explicitly configured via NEXT_PUBLIC_WS_URL.
+// Render free tier doesn't support persistent WebSocket connections — they get
+// rejected with 403 by Starlette's CORSMiddleware. HTTP polling handles real-time data.
 export const WS_BASE_URL = (() => {
+  // Explicit WS URL configured — use it
   if (process.env.NEXT_PUBLIC_WS_URL) return process.env.NEXT_PUBLIC_WS_URL;
-  if (process.env.NEXT_PUBLIC_API_URL) {
-    // Derive wss:// from https:// API URL
-    return process.env.NEXT_PUBLIC_API_URL
-      .replace('https://', 'wss://')
-      .replace('http://', 'ws://');
+  // Local development — connect to local backend
+  if (typeof window !== 'undefined' && window.location.hostname === 'localhost') {
+    return 'ws://localhost:8000';
   }
-  // In browser (production): derive from the API URL or disable
-  if (typeof window !== 'undefined' && window.location.hostname !== 'localhost') {
-    return '';  // Empty = WebSocket disabled in production without explicit config
-  }
-  return 'ws://localhost:8000';
+  // Production without explicit WS config — disabled
+  return '';
 })();
 
 /** Market indices tracked by the dashboard */

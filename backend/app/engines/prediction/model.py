@@ -201,29 +201,32 @@ class PredictionModel:
         try:
             import shap
 
-            explainer = shap.TreeExplainer(model)
-            shap_values = explainer.shap_values(live_df)
-
-            # shap_values is a 1D array for single prediction
-            sv = shap_values[0] if len(shap_values.shape) > 1 else shap_values
-            sv = np.array(sv).flatten()
-
-            # Safely convert SHAP values to float — some versions return
-            # bracket-wrapped strings like '[2.9392587E-3]'
+            # Helper: safely convert SHAP values to float.
+            # Some environments return bracket-wrapped strings like '[2.939259E-3]'
             def _to_float(v) -> float:
                 try:
                     return float(v)
                 except (TypeError, ValueError):
-                    s = str(v).strip('[]')
+                    s = str(v).strip().strip('[]')
                     try:
                         return float(s)
                     except (TypeError, ValueError):
                         return 0.0
 
+            explainer = shap.TreeExplainer(model)
+            shap_values = explainer.shap_values(live_df)
+
+            # shap_values is a 1D array for single prediction
+            sv = shap_values[0] if len(shap_values.shape) > 1 else shap_values
+
+            # Convert to plain Python floats BEFORE numpy to avoid
+            # "could not convert string to float: '[2.939259E-3]'" crash
+            sv = [_to_float(x) for x in np.asarray(sv).flat]
+
             factors = []
             for i, name in enumerate(feature_names):
                 if i < len(sv):
-                    importance = _to_float(sv[i])
+                    importance = sv[i]
                     raw_val = live_df.iloc[0][name] if name in live_df.columns else 0.0
                     value = _to_float(raw_val)
                     factors.append({
