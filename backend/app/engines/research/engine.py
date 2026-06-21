@@ -78,9 +78,12 @@ class ResearchEngine:
 
         # Step 2: Compute technical indicators
         indicators = None
-        ohlcv = await self._yahoo.get_ohlcv(symbol, period="3mo", interval="1d")
-        if ohlcv:
-            indicators = compute_indicators(ohlcv)
+        ohlcv_result = await self._yahoo.get_ohlcv(symbol, period="3mo", interval="1d")
+        # get_ohlcv returns {"bars": [...], "_validation": {...}} or a plain list
+        if ohlcv_result:
+            ohlcv = ohlcv_result.get("bars", ohlcv_result) if isinstance(ohlcv_result, dict) else ohlcv_result
+            if ohlcv and isinstance(ohlcv, list):
+                indicators = compute_indicators(ohlcv)
 
         # Step 3: Build prompt with real data
         if depth == "quick":
@@ -159,9 +162,11 @@ class ResearchEngine:
 
         # Compute indicators
         indicators = None
-        ohlcv = await self._yahoo.get_ohlcv(symbol, period="3mo", interval="1d")
-        if ohlcv:
-            indicators = compute_indicators(ohlcv)
+        ohlcv_result = await self._yahoo.get_ohlcv(symbol, period="3mo", interval="1d")
+        if ohlcv_result:
+            ohlcv = ohlcv_result.get("bars", ohlcv_result) if isinstance(ohlcv_result, dict) else ohlcv_result
+            if ohlcv and isinstance(ohlcv, list):
+                indicators = compute_indicators(ohlcv)
 
         # Build prompt
         if depth == "quick":

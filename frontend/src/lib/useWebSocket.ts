@@ -74,6 +74,12 @@ export function useWebSocket(initialSymbols?: string[]) {
   const connect = useCallback(() => {
     if (unmountedRef.current) return;
 
+    // Skip WebSocket if URL is not configured (e.g. production without WS support)
+    if (!WS_BASE_URL) {
+      setStatus('disconnected');
+      return;
+    }
+
     // Clean up any existing connection
     if (wsRef.current) {
       wsRef.current.onopen = null;

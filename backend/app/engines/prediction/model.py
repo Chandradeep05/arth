@@ -124,6 +124,8 @@ class PredictionModel:
             # Predict live
             live_df = pd.DataFrame([live_features])
             live_df = live_df[X.columns]  # Ensure column order matches
+            # Sanitize: replace inf with NaN, then NaN with 0
+            live_df = live_df.replace([np.inf, -np.inf], np.nan).fillna(0)
             predicted_return = float(model.predict(live_df)[0])
 
             # SHAP explanations
@@ -204,13 +206,26 @@ class PredictionModel:
 
             # shap_values is a 1D array for single prediction
             sv = shap_values[0] if len(shap_values.shape) > 1 else shap_values
-            sv = sv.flatten()
+            sv = np.array(sv).flatten()
+
+            # Safely convert SHAP values to float — some versions return
+            # bracket-wrapped strings like '[2.9392587E-3]'
+            def _to_float(v) -> float:
+                try:
+                    return float(v)
+                except (TypeError, ValueError):
+                    s = str(v).strip('[]')
+                    try:
+                        return float(s)
+                    except (TypeError, ValueError):
+                        return 0.0
 
             factors = []
             for i, name in enumerate(feature_names):
                 if i < len(sv):
-                    importance = float(sv[i])
-                    value = float(live_df.iloc[0][name]) if name in live_df.columns else 0.0
+                    importance = _to_float(sv[i])
+                    raw_val = live_df.iloc[0][name] if name in live_df.columns else 0.0
+                    value = _to_float(raw_val)
                     factors.append({
                         "name": self._humanize_feature(name),
                         "feature_key": name,
@@ -230,12 +245,17 @@ class PredictionModel:
             importances = model.feature_importances_
             factors = []
             for i, name in enumerate(feature_names):
+                raw_val = live_df.iloc[0][name] if name in live_df.columns else 0.0
+                try:
+                    val = float(raw_val)
+                except (TypeError, ValueError):
+                    val = 0.0
                 factors.append({
                     "name": self._humanize_feature(name),
                     "feature_key": name,
                     "importance": round(float(importances[i]), 6),
                     "shap_value": None,
-                    "value": round(float(live_df.iloc[0][name]), 4) if name in live_df.columns else 0.0,
+                    "value": round(val, 4),
                     "direction": "unknown",
                 })
             factors.sort(key=lambda f: f["importance"], reverse=True)

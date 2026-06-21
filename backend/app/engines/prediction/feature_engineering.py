@@ -95,7 +95,7 @@ class FeatureEngineer:
         df["return_5d"] = df["Close"].pct_change(5)
         df["return_20d"] = df["Close"].pct_change(20)
         df["volatility_20d"] = df["return_1d"].rolling(20).std()
-        df["gap"] = (df["Open"] - df["Close"].shift(1)) / df["Close"].shift(1)
+        df["gap"] = (df["Open"] - df["Close"].shift(1)) / df["Close"].shift(1).replace(0, np.nan)
 
         # ── Technical features ──
         df["rsi_14"] = self._compute_rsi(df["Close"], 14)
@@ -125,8 +125,10 @@ class FeatureEngineer:
         df["target_5d"] = df["Close"].pct_change(5).shift(-5)
 
         # Select feature columns and drop NaN rows
-        feature_cols = self.FEATURE_NAMES
-        df_features = df[feature_cols + ["target_5d"]].dropna()
+        # Replace inf with NaN, THEN drop NaN rows.
+        # CRITICAL: dropna() does NOT remove inf — XGBoost crashes on inf values.
+        df_features = df[feature_cols + ["target_5d"]]
+        df_features = df_features.replace([np.inf, -np.inf], np.nan).dropna()
 
         if len(df_features) < 20:
             raise ValueError(f"Too few complete rows for {symbol}: {len(df_features)}")
@@ -165,7 +167,7 @@ class FeatureEngineer:
         df["return_5d"] = df["Close"].pct_change(5)
         df["return_20d"] = df["Close"].pct_change(20)
         df["volatility_20d"] = df["return_1d"].rolling(20).std()
-        df["gap"] = (df["Open"] - df["Close"].shift(1)) / df["Close"].shift(1)
+        df["gap"] = (df["Open"] - df["Close"].shift(1)) / df["Close"].shift(1).replace(0, np.nan)
         df["rsi_14"] = self._compute_rsi(df["Close"], 14)
         df["macd_signal"] = self._compute_macd_signal(df["Close"])
         df["bb_position"] = self._compute_bb_position(df["Close"], 20)

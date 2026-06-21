@@ -300,6 +300,8 @@ class YahooFinanceAdapter(BaseDataAdapter):
 
     async def get_market_indices(self) -> Optional[List[Dict[str, Any]]]:
         """Get major market indices (NIFTY 50, SENSEX, S&P 500, NASDAQ)."""
+        import math
+
         indices = [
             {"symbol": "^NSEI", "name": "NIFTY 50"},
             {"symbol": "^BSESN", "name": "SENSEX"},
@@ -317,7 +319,7 @@ class YahooFinanceAdapter(BaseDataAdapter):
                 df = await self._run_sync(
                     lambda: yf.download(
                         symbol_str,
-                        period="2d",  # 2 days to compute change vs previous close
+                        period="5d",  # 5 days for better coverage across timezones
                         interval="1d",
                         group_by="ticker",
                         progress=False,
@@ -328,31 +330,53 @@ class YahooFinanceAdapter(BaseDataAdapter):
                 if df is None or df.empty:
                     return results
 
+                fetched_symbols = set()
+
                 for idx in indices:
                     sym = idx["symbol"]
                     try:
                         if len(symbols) == 1:
                             ticker_df = df
                         else:
-                            if sym not in df.columns.get_level_values(0):
+                            # Check both column levels — yfinance may put
+                            # tickers at level 0 or level 1 depending on version
+                            if isinstance(df.columns, __import__('pandas').MultiIndex):
+                                level_0 = set(df.columns.get_level_values(0))
+                                if sym in level_0:
+                                    ticker_df = df[sym]
+                                else:
+                                    continue
+                            else:
                                 continue
-                            ticker_df = df[sym]
 
                         if ticker_df.empty or len(ticker_df) < 1:
                             continue
 
+                        # Drop rows where Close is NaN
+                        if hasattr(ticker_df, 'dropna'):
+                            ticker_df = ticker_df.dropna(subset=["Close"] if "Close" in ticker_df.columns else [], how="all")
+                        if ticker_df.empty:
+                            continue
+
                         last_row = ticker_df.iloc[-1]
-                        price = float(last_row.get("Close", 0) or 0)
+                        raw_price = last_row.get("Close", None)
+                        price = float(raw_price) if raw_price is not None else 0.0
+                        # Explicit NaN check — float(NaN) is truthy in Python!
+                        if math.isnan(price) or price == 0:
+                            continue
 
                         # Previous close from prior day row
                         if len(ticker_df) >= 2:
                             prev_row = ticker_df.iloc[-2]
-                            prev = float(prev_row.get("Close", 0) or 0)
+                            raw_prev = prev_row.get("Close", None)
+                            prev = float(raw_prev) if raw_prev is not None else 0.0
+                            if math.isnan(prev):
+                                prev = 0.0
                         else:
-                            prev = float(last_row.get("Open", 0) or 0)
-
-                        if price == 0:
-                            continue
+                            raw_open = last_row.get("Open", None)
+                            prev = float(raw_open) if raw_open is not None else 0.0
+                            if math.isnan(prev):
+                                prev = price
 
                         change = price - prev if price and prev else 0
                         change_pct = (change / prev * 100) if prev else 0
@@ -365,12 +389,64 @@ class YahooFinanceAdapter(BaseDataAdapter):
                             "change_percent": round(change_pct, 2),
                             "timestamp": datetime.now(timezone.utc),
                         })
+                        fetched_symbols.add(sym)
                     except Exception as e:
                         logger.warning(
                             "index_parse_failed",
                             symbol=sym,
                             error=str(e),
                         )
+
+                # Fallback: fetch missing indices individually
+                missing = [idx for idx in indices if idx["symbol"] not in fetched_symbols]
+                for idx in missing:
+                    try:
+                        single_df = await self._run_sync(
+                            lambda s=idx["symbol"]: yf.download(
+                                s, period="5d", interval="1d",
+                                progress=False, threads=False,
+                            )
+                        )
+                        if single_df is None or single_df.empty:
+                            continue
+                        # Flatten MultiIndex columns if present
+                        if isinstance(single_df.columns, __import__('pandas').MultiIndex):
+                            single_df.columns = single_df.columns.get_level_values(0)
+
+                        single_df = single_df.dropna(subset=["Close"])
+                        if single_df.empty:
+                            continue
+
+                        last_row = single_df.iloc[-1]
+                        price = float(last_row["Close"])
+                        if math.isnan(price) or price == 0:
+                            continue
+
+                        if len(single_df) >= 2:
+                            prev = float(single_df.iloc[-2]["Close"])
+                            if math.isnan(prev):
+                                prev = price
+                        else:
+                            prev = price
+
+                        change = price - prev if prev else 0
+                        change_pct = (change / prev * 100) if prev else 0
+
+                        results.append({
+                            "symbol": idx["symbol"],
+                            "name": idx["name"],
+                            "value": round(price, 2),
+                            "change": round(change, 2),
+                            "change_percent": round(change_pct, 2),
+                            "timestamp": datetime.now(timezone.utc),
+                        })
+                    except Exception as e:
+                        logger.warning(
+                            "index_individual_fetch_failed",
+                            symbol=idx["symbol"],
+                            error=str(e),
+                        )
+
             except Exception as e:
                 logger.error("indices_batch_fetch_failed", error=str(e))
 

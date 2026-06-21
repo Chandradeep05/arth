@@ -30,24 +30,79 @@ const TABS: { key: TabKey; label: string; icon: React.ElementType }[] = [
 
 type Period = 'annual' | 'quarterly';
 
-/* ── Interfaces ── */
-interface StatementsResponse {
-  symbol: string;
-  income_statement: StatementPeriod[];
-  balance_sheet: StatementPeriod[];
-  cash_flow: StatementPeriod[];
+/* ── Interfaces matching actual backend response ── */
+// Backend returns: { success: true, data: { income_statement: { annual: [...], quarterly: [...] }, ... } }
+interface StatementData {
+  annual: StatementPeriod[];
+  quarterly: StatementPeriod[];
 }
 
-interface RatiosResponse {
+interface StatementsData {
   symbol: string;
-  ratios: StatementPeriod[];
+  income_statement: StatementData;
+  balance_sheet: StatementData;
+  cash_flow: StatementData;
 }
 
-interface HealthResponse {
-  symbol: string;
-  overall_score: number;
-  categories: { name: string; score: number }[];
-  summary?: string;
+interface StatementsApiResponse {
+  success: boolean;
+  data: StatementsData;
+}
+
+interface RatiosApiResponse {
+  success: boolean;
+  data: {
+    symbol: string;
+    ratios: Record<string, { value: number | null; previous: number | null; change: number | null; direction: string }>;
+    periods_compared: { current: string | null; previous: string | null };
+  };
+}
+
+interface HealthApiResponse {
+  success: boolean;
+  data: {
+    symbol: string;
+    total_score: number;
+    label: string;
+    breakdown: Record<string, { score: number; factors: string[] }>;
+  };
+}
+
+/* ── Helper: convert backend statement periods to table-friendly format ── */
+function statementsToTable(periods: StatementPeriod[] | undefined): StatementPeriod[] {
+  if (!periods || !Array.isArray(periods)) return [];
+  // Each period has { period: "2024-03-31", items: { "Total Revenue": 123, ... } }
+  // StatementTable expects StatementPeriod[] with { period, ...lineItems }
+  return periods.map((p) => {
+    const row: StatementPeriod = { period: p.period };
+    const items = (p as Record<string, unknown>).items;
+    if (items && typeof items === 'object') {
+      for (const [key, val] of Object.entries(items as Record<string, unknown>)) {
+        row[key] = val as string | number | null;
+      }
+    }
+    return row;
+  });
+}
+
+/* ── Helper: convert ratios dict to table-friendly format ── */
+function ratiosToTable(ratios: Record<string, unknown> | undefined): StatementPeriod[] {
+  if (!ratios || typeof ratios !== 'object') return [];
+  const row: StatementPeriod = { period: 'Current' };
+  const prevRow: StatementPeriod = { period: 'Previous' };
+  let hasPrev = false;
+  for (const [key, val] of Object.entries(ratios)) {
+    const trend = val as { value?: number | null; previous?: number | null; direction?: string } | null;
+    if (trend && typeof trend === 'object') {
+      const label = key.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+      row[label] = trend.value ?? null;
+      if (trend.previous !== null && trend.previous !== undefined) {
+        prevRow[label] = trend.previous;
+        hasPrev = true;
+      }
+    }
+  }
+  return hasPrev ? [row, prevRow] : [row];
 }
 
 /* ── Page Component ── */
@@ -60,9 +115,9 @@ export default function FinancialsPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
-  const [statements, setStatements] = useState<StatementsResponse | null>(null);
-  const [ratios, setRatios] = useState<RatiosResponse | null>(null);
-  const [health, setHealth] = useState<HealthResponse | null>(null);
+  const [statementsData, setStatementsData] = useState<StatementsData | null>(null);
+  const [ratiosData, setRatiosData] = useState<RatiosApiResponse['data'] | null>(null);
+  const [healthData, setHealthData] = useState<HealthApiResponse['data'] | null>(null);
 
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -71,30 +126,36 @@ export default function FinancialsPage() {
 
     setLoading(true);
     setError('');
-    setStatements(null);
-    setRatios(null);
-    setHealth(null);
+    setStatementsData(null);
+    setRatiosData(null);
+    setHealthData(null);
     setActiveSymbol(sym);
 
     try {
       // Fetch all three in parallel
       const [stmtRes, ratiosRes, healthRes] = await Promise.allSettled([
-        apiClient.get<StatementsResponse>(
+        apiClient.get<StatementsApiResponse>(
           `/api/v1/financials/${encodeURIComponent(sym)}/statements`,
           { period }
         ),
-        apiClient.get<RatiosResponse>(
+        apiClient.get<RatiosApiResponse>(
           `/api/v1/financials/${encodeURIComponent(sym)}/ratios`,
           { period }
         ),
-        apiClient.get<HealthResponse>(
+        apiClient.get<HealthApiResponse>(
           `/api/v1/financials/${encodeURIComponent(sym)}/health-score`
         ),
       ]);
 
-      if (stmtRes.status === 'fulfilled') setStatements(stmtRes.value);
-      if (ratiosRes.status === 'fulfilled') setRatios(ratiosRes.value);
-      if (healthRes.status === 'fulfilled') setHealth(healthRes.value);
+      if (stmtRes.status === 'fulfilled' && stmtRes.value?.data) {
+        setStatementsData(stmtRes.value.data);
+      }
+      if (ratiosRes.status === 'fulfilled' && ratiosRes.value?.data) {
+        setRatiosData(ratiosRes.value.data);
+      }
+      if (healthRes.status === 'fulfilled' && healthRes.value?.data) {
+        setHealthData(healthRes.value.data);
+      }
 
       // If all failed, show error
       if (
@@ -120,18 +181,22 @@ export default function FinancialsPage() {
     setError('');
     try {
       const [stmtRes, ratiosRes] = await Promise.allSettled([
-        apiClient.get<StatementsResponse>(
+        apiClient.get<StatementsApiResponse>(
           `/api/v1/financials/${encodeURIComponent(activeSymbol)}/statements`,
           { period: newPeriod }
         ),
-        apiClient.get<RatiosResponse>(
+        apiClient.get<RatiosApiResponse>(
           `/api/v1/financials/${encodeURIComponent(activeSymbol)}/ratios`,
           { period: newPeriod }
         ),
       ]);
 
-      if (stmtRes.status === 'fulfilled') setStatements(stmtRes.value);
-      if (ratiosRes.status === 'fulfilled') setRatios(ratiosRes.value);
+      if (stmtRes.status === 'fulfilled' && stmtRes.value?.data) {
+        setStatementsData(stmtRes.value.data);
+      }
+      if (ratiosRes.status === 'fulfilled' && ratiosRes.value?.data) {
+        setRatiosData(ratiosRes.value.data);
+      }
     } catch {
       // keep existing data
     } finally {
@@ -150,39 +215,55 @@ export default function FinancialsPage() {
       );
     }
 
+    // Get the correct period data (annual or quarterly)
+    const incomeData = statementsData?.income_statement?.[period];
+    const balanceData = statementsData?.balance_sheet?.[period];
+    const cashflowData = statementsData?.cash_flow?.[period];
+
     switch (activeTab) {
-      case 'income':
-        return statements?.income_statement ? (
-          <StatementTable data={statements.income_statement} title="Income Statement" />
+      case 'income': {
+        const rows = statementsToTable(incomeData);
+        return rows.length > 0 ? (
+          <StatementTable data={rows} title="Income Statement" />
         ) : (
           <EmptyTab />
         );
-      case 'balance':
-        return statements?.balance_sheet ? (
-          <StatementTable data={statements.balance_sheet} title="Balance Sheet" />
+      }
+      case 'balance': {
+        const rows = statementsToTable(balanceData);
+        return rows.length > 0 ? (
+          <StatementTable data={rows} title="Balance Sheet" />
         ) : (
           <EmptyTab />
         );
-      case 'cashflow':
-        return statements?.cash_flow ? (
-          <StatementTable data={statements.cash_flow} title="Cash Flow Statement" />
+      }
+      case 'cashflow': {
+        const rows = statementsToTable(cashflowData);
+        return rows.length > 0 ? (
+          <StatementTable data={rows} title="Cash Flow Statement" />
         ) : (
           <EmptyTab />
         );
-      case 'ratios':
-        return ratios?.ratios ? (
-          <StatementTable data={ratios.ratios} title="Financial Ratios" />
+      }
+      case 'ratios': {
+        const rows = ratiosToTable(ratiosData?.ratios as Record<string, unknown> | undefined);
+        return rows.length > 0 ? (
+          <StatementTable data={rows} title="Financial Ratios" />
         ) : (
           <EmptyTab />
         );
+      }
       case 'health':
-        return health ? (
+        return healthData ? (
           <HealthScoreCard
             data={{
-              overall_score: health.overall_score,
-              categories: health.categories,
-              symbol: health.symbol,
-              summary: health.summary,
+              overall_score: healthData.total_score,
+              categories: Object.entries(healthData.breakdown).map(([name, d]) => ({
+                name: name.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
+                score: d.score,
+              })),
+              symbol: healthData.symbol,
+              summary: healthData.label,
             }}
           />
         ) : (
