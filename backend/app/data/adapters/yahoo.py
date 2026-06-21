@@ -42,6 +42,13 @@ _validator = DataQualityValidator()
 # impersonates Chrome for Yahoo Finance auth on cloud IPs.
 _yf_session = None  # Kept for backward compat with engines that import it
 
+# ── Rate limiting ──────────────────────────────────────────────────
+# Yahoo Finance rate-limits aggressively on cloud IPs (Render).
+# Limit concurrent requests and add delay between them.
+_request_semaphore = asyncio.Semaphore(2)  # Max 2 concurrent Yahoo requests
+_MIN_REQUEST_INTERVAL = 0.5  # Seconds between requests
+_last_request_time = [0.0]  # Mutable list for closure access
+
 
 class YahooFinanceAdapter(BaseDataAdapter):
     """Yahoo Finance data adapter using yfinance library."""
@@ -62,6 +69,23 @@ class YahooFinanceAdapter(BaseDataAdapter):
         loop = asyncio.get_running_loop()
         return loop.run_in_executor(_executor, lambda: func(*args, **kwargs))
 
+    async def _throttled_run_sync(self, func, *args, **kwargs):
+        """Run a synchronous yfinance call with rate limiting.
+
+        Uses a semaphore to limit concurrent requests and adds a small delay
+        between requests to avoid triggering Yahoo's rate limiter.
+        """
+        async with _request_semaphore:
+            # Add minimum delay between requests
+            import time as _time
+            now = _time.monotonic()
+            elapsed = now - _last_request_time[0]
+            if elapsed < _MIN_REQUEST_INTERVAL:
+                await asyncio.sleep(_MIN_REQUEST_INTERVAL - elapsed)
+            result = await self._run_sync(func, *args, **kwargs)
+            _last_request_time[0] = _time.monotonic()
+            return result
+
     async def get_quote(self, symbol: str) -> Optional[Dict[str, Any]]:
         """Get current stock quote with basic info.
 
@@ -75,7 +99,7 @@ class YahooFinanceAdapter(BaseDataAdapter):
 
             # Try fast_info FIRST — it's 10x faster and uses 10x less memory
             try:
-                fast = await self._run_sync(lambda t=ticker: t.fast_info)
+                fast = await self._throttled_run_sync(lambda t=ticker: t.fast_info)
                 if fast and getattr(fast, "last_price", 0):
                     price = getattr(fast, "last_price", 0)
                     prev_close = getattr(fast, "previous_close", 0)
@@ -104,7 +128,7 @@ class YahooFinanceAdapter(BaseDataAdapter):
                 logger.debug("fast_info_failed", symbol=symbol, error=str(e))
 
             # Fallback to full info (slower, heavier)
-            info = await self._run_sync(lambda t=ticker: t.info)
+            info = await self._throttled_run_sync(lambda t=ticker: t.info)
 
             if not info or "regularMarketPrice" not in info:
                 return None
@@ -165,7 +189,7 @@ class YahooFinanceAdapter(BaseDataAdapter):
         async def _fetch():
             ticker = yf.Ticker(symbol)
             # Capture variables in default args to avoid closure bugs
-            hist = await self._run_sync(
+            hist = await self._throttled_run_sync(
                 lambda t=ticker, p=period, i=interval: t.history(period=p, interval=i)
             )
 
@@ -229,7 +253,7 @@ class YahooFinanceAdapter(BaseDataAdapter):
 
         async def _fetch():
             ticker = yf.Ticker(symbol)
-            info = await self._run_sync(lambda t=ticker: t.info)
+            info = await self._throttled_run_sync(lambda t=ticker: t.info)
 
             if not info:
                 return None
@@ -280,7 +304,7 @@ class YahooFinanceAdapter(BaseDataAdapter):
                 try:
                     ticker = yf.Ticker(sym)
                     # Capture ticker in default arg to avoid closure bug
-                    info = await self._run_sync(lambda t=ticker: t.info)
+                    info = await self._throttled_run_sync(lambda t=ticker: t.info)
                     if info and info.get("regularMarketPrice") is not None:
                         market, exchange, currency = self._detect_market(sym)
                         results.append({
@@ -316,7 +340,7 @@ class YahooFinanceAdapter(BaseDataAdapter):
 
             try:
                 # Batch download all indices in ONE call
-                df = await self._run_sync(
+                df = await self._throttled_run_sync(
                     lambda: yf.download(
                         symbol_str,
                         period="5d",  # 5 days for better coverage across timezones
@@ -401,7 +425,7 @@ class YahooFinanceAdapter(BaseDataAdapter):
                 missing = [idx for idx in indices if idx["symbol"] not in fetched_symbols]
                 for idx in missing:
                     try:
-                        single_df = await self._run_sync(
+                        single_df = await self._throttled_run_sync(
                             lambda s=idx["symbol"]: yf.download(
                                 s, period="5d", interval="1d",
                                 progress=False, threads=False,
@@ -478,7 +502,7 @@ class YahooFinanceAdapter(BaseDataAdapter):
 
             # Use period="2d" so we always have yesterday's close for change calculation
             # (period="1d" returns empty during off-hours / weekends)
-            df = await self._run_sync(
+            df = await self._throttled_run_sync(
                 lambda: yf.download(
                     symbol_str,
                     period="2d",
@@ -570,7 +594,7 @@ class YahooFinanceAdapter(BaseDataAdapter):
         """Check if Yahoo Finance is reachable by fetching NIFTY 50."""
         try:
             ticker = yf.Ticker("^NSEI")
-            info = await self._run_sync(lambda t=ticker: t.info)
+            info = await self._throttled_run_sync(lambda t=ticker: t.info)
             return info is not None and "regularMarketPrice" in info
         except Exception:
             return False

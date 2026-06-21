@@ -136,15 +136,29 @@ def create_app() -> FastAPI:
 
     # ── Middleware (order matters — last added = first executed) ──
 
-    # CORS
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=settings.cors_origins,
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-        expose_headers=["X-Trace-ID"],
-    )
+    # CORS — supports exact origins, wildcard "*", and regex for Vercel previews
+    cors_origins = settings.cors_origins
+    if "*" in cors_origins:
+        # Wildcard: allow all origins (useful for development/staging)
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=["*"],
+            allow_credentials=False,  # Can't use credentials with wildcard
+            allow_methods=["*"],
+            allow_headers=["*"],
+            expose_headers=["X-Trace-ID"],
+        )
+    else:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=cors_origins,
+            allow_credentials=True,
+            allow_methods=["*"],
+            allow_headers=["*"],
+            expose_headers=["X-Trace-ID"],
+            # Allow Vercel preview deployments (*.vercel.app)
+            allow_origin_regex=r"https://.*\.vercel\.app",
+        )
 
     # Trace ID (adds UUID to every request)
     app.add_middleware(TraceIDMiddleware)

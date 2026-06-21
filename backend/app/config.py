@@ -49,7 +49,7 @@ class Settings(BaseSettings):
     api_host: str = "0.0.0.0"
     api_port: int = 8000
     api_prefix: str = "/api/v1"
-    allowed_origins: str = "http://localhost:3000,https://arth.vercel.app,https://arth-chandradeep05s-projects.vercel.app,https://arth-git-main-chandradeep05s-projects.vercel.app"
+    allowed_origins: str = "http://localhost:3000,https://arth.vercel.app,https://arth-five.vercel.app,https://arth-chandradeep05s-projects.vercel.app,https://arth-git-main-chandradeep05s-projects.vercel.app"
 
     @property
     def cors_origins(self) -> List[str]:

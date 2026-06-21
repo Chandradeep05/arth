@@ -122,8 +122,8 @@ class BaseDataAdapter(ABC):
     """
 
     adapter_name: str = "base"
-    max_retries: int = 2              # Was 3 — fewer retries = less memory + faster failure
-    base_retry_delay: float = 0.5     # Was 1.0 — shorter backoff for free tier
+    max_retries: int = 3              # 3 retries with exponential backoff (2s, 4s, 8s)
+    base_retry_delay: float = 2.0     # 2s base — gives Yahoo time to cool down on 429
 
     def __init__(self):
         self._circuit = CircuitBreaker()

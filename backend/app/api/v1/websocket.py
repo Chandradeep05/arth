@@ -140,6 +140,21 @@ async def price_stream(ws: WebSocket) -> None:
     Clients subscribe to symbols and receive continuous price updates
     polled from Yahoo Finance.
     """
+    # ── Origin validation ──
+    # Starlette CORSMiddleware returns 403 for WS if origin isn't exact-match.
+    # We validate ourselves: allow localhost, *.vercel.app, and Render origins.
+    origin = (ws.headers.get("origin") or "").lower()
+    allowed = (
+        not origin  # Non-browser clients (no origin header)
+        or "localhost" in origin
+        or origin.endswith(".vercel.app")
+        or origin.endswith(".onrender.com")
+    )
+    if not allowed:
+        logger.warning("ws_origin_rejected", origin=origin)
+        await ws.close(code=1008, reason="Origin not allowed")
+        return
+
     await ws.accept()
 
     # Track connection in metrics (import lazily to avoid circular imports)
