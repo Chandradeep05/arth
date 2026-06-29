@@ -91,7 +91,8 @@ class CircuitBreaker:
         if self.state == CircuitState.HALF_OPEN:
             self.state = CircuitState.OPEN
             logger.warning("circuit_breaker_reopened", failures=self.failure_count)
-        elif self.failure_count >= self.failure_threshold:
+        elif self.state == CircuitState.CLOSED and self.failure_count >= self.failure_threshold:
+            # Only log transition ONCE — from CLOSED to OPEN
             self.state = CircuitState.OPEN
             logger.warning(
                 "circuit_breaker_opened",
@@ -175,6 +176,16 @@ class BaseDataAdapter(ABC):
                 last_error = e
                 self._circuit.record_failure()
                 self._last_failure = datetime.now(timezone.utc)
+
+                # Check if circuit opened mid-retry — stop immediately
+                if not self._circuit.can_execute():
+                    logger.warning(
+                        "adapter_circuit_opened_mid_retry",
+                        adapter=self.adapter_name,
+                        attempt=attempt,
+                        error=str(e),
+                    )
+                    break
 
                 if attempt < self.max_retries:
                     delay = self.base_retry_delay * (2 ** (attempt - 1))

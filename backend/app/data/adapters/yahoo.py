@@ -43,10 +43,10 @@ _validator = DataQualityValidator()
 _yf_session = None  # Kept for backward compat with engines that import it
 
 # ── Rate limiting ──────────────────────────────────────────────────
-# Yahoo Finance rate-limits aggressively on cloud IPs (Render).
-# Limit concurrent requests and add delay between them.
-_request_semaphore = asyncio.Semaphore(2)  # Max 2 concurrent Yahoo requests
-_MIN_REQUEST_INTERVAL = 0.5  # Seconds between requests
+# Yahoo Finance rate-limits aggressively on cloud IPs (Render shared IPs).
+# MUST be strict: 1 concurrent request with 1.5s spacing.
+_request_semaphore = asyncio.Semaphore(1)  # Serial: 1 request at a time
+_MIN_REQUEST_INTERVAL = 1.5  # 1.5s between requests (~40 req/min max)
 _last_request_time = [0.0]  # Mutable list for closure access
 
 

@@ -145,12 +145,26 @@ async def batch_fetch(
         count=len(request.symbols),
     )
 
-    # Fetch all symbols in parallel
-    tasks = [
-        _fetch_symbol_data(sym, cache, settings)
-        for sym in request.symbols
-    ]
-    results: List[Dict[str, Any]] = await asyncio.gather(*tasks)
+    # Process symbols SEQUENTIALLY to avoid burst-triggering Yahoo rate limits.
+    # With asyncio.gather, 6 symbols × 3 data types = 18 concurrent Yahoo calls
+    # that immediately trip the rate limiter and cascade into circuit breaker opening.
+    results: List[Dict[str, Any]] = []
+    for sym in request.symbols:
+        # Check circuit breaker before each symbol — stop early if Yahoo is down
+        if not _yahoo._circuit.can_execute():
+            logger.warning("watchlist_circuit_open_skipping", symbol=sym)
+            results.append({
+                "symbol": sym.upper(),
+                "quote": None,
+                "risk_score": None,
+                "risk_label": None,
+                "sentiment_score": None,
+                "sentiment_label": None,
+                "data_available": {"quote": False, "risk": False, "sentiment": False},
+            })
+            continue
+        result = await _fetch_symbol_data(sym, cache, settings)
+        results.append(result)
 
     return {
         "success": True,
