@@ -219,9 +219,10 @@ class PredictionModel:
             # shap_values is a 1D array for single prediction
             sv = shap_values[0] if len(shap_values.shape) > 1 else shap_values
 
-            # Convert to plain Python floats BEFORE numpy to avoid
-            # "could not convert string to float: '[2.939259E-3]'" crash
-            sv = [_to_float(x) for x in np.asarray(sv).flat]
+            # Convert to plain Python floats BEFORE numpy auto-coercion.
+            # dtype=object prevents numpy from trying to convert string elements
+            # like '[-2.3795346E-5]' to float (which crashes with ValueError).
+            sv = [_to_float(x) for x in np.asarray(sv, dtype=object).flat]
 
             factors = []
             for i, name in enumerate(feature_names):

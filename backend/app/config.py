@@ -75,9 +75,9 @@ class Settings(BaseSettings):
     # ── LLM Configuration ──
     llm_tier: LLMTier = LLMTier.CLOUD
 
-    # Groq (Primary — migrated from deprecated llama-3.3-70b-versatile)
+    # Groq (Primary — migrated from deprecated llama-3.3-70b-versatile → qwen-qwq-32b)
     groq_api_key: str = ""
-    groq_model: str = "qwen-qwq-32b"
+    groq_model: str = "qwen/qwen3.6-27b"
     groq_max_tokens: int = 4096
 
     # Ollama (Local dev fallback)
