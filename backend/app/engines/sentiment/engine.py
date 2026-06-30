@@ -87,7 +87,23 @@ class SentimentEngine:
         (Groq LLM classification is optional — used when API key is available),
         applies source credibility and time decay.
         """
-        company = await self._yahoo.get_company_info(symbol)
+        from app.data.cache import CacheManager
+        from app.dependencies import get_redis
+
+        redis = await get_redis()
+        cache = CacheManager(redis)
+
+        company = await cache.get_or_fetch(
+            key=cache.company_key(symbol),
+            fetch_func=self._yahoo.get_company_info,
+            ttl=3600,
+            symbol=symbol,
+        )
+        if company:
+            company.pop("_cache_hit", None)
+            company.pop("_cached_at", None)
+            company.pop("_cache_source", None)
+
         company_name = company.get("name", symbol) if company else symbol
 
         sources: List[Dict[str, Any]] = []
@@ -238,11 +254,8 @@ class SentimentEngine:
     async def _fetch_news(self, symbol: str) -> List[Dict[str, Any]]:
         """Fetch news from Yahoo Finance for a symbol."""
         try:
-            loop = asyncio.get_running_loop()
             ticker = yf.Ticker(symbol)
-            news = await loop.run_in_executor(
-                _executor, lambda t=ticker: t.news
-            )
+            news = await self._yahoo._throttled_run_sync(lambda t=ticker: t.news)
             if news and isinstance(news, list):
                 return news[:15]  # Limit to 15 articles
         except Exception as e:

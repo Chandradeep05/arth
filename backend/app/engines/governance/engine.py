@@ -113,26 +113,26 @@ async def get_governance_data(symbol: str) -> Dict[str, Any]:
 
     Returns a dict with ownership data + governance score.
     """
-    loop = asyncio.get_running_loop()
+    from app.data.adapters.yahoo import yahoo_adapter as _yahoo_adapter
 
     try:
         ticker = yf.Ticker(symbol)
 
-        # Fetch info, major_holders, and institutional_holders
-        info = await loop.run_in_executor(_executor, lambda t=ticker: t.info)
+        # Fetch through adapter throttle to respect rate limits
+        info = await _yahoo_adapter._throttled_run_sync(lambda t=ticker: t.info)
 
         # Major holders: DataFrame with % values
         try:
-            major_holders = await loop.run_in_executor(
-                _executor, lambda t=ticker: t.major_holders
+            major_holders = await _yahoo_adapter._throttled_run_sync(
+                lambda t=ticker: t.major_holders
             )
         except Exception:
             major_holders = None
 
         # Institutional holders: DataFrame with holder names + shares
         try:
-            inst_holders = await loop.run_in_executor(
-                _executor, lambda t=ticker: t.institutional_holders
+            inst_holders = await _yahoo_adapter._throttled_run_sync(
+                lambda t=ticker: t.institutional_holders
             )
         except Exception:
             inst_holders = None

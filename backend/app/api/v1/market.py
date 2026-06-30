@@ -48,15 +48,30 @@ _yahoo_adapter = yahoo_adapter
 def _raise_data_error(symbol: str):
     """Raise the appropriate error when Yahoo returns no data.
 
-    If the circuit breaker is open or unhealthy, this is a rate-limit issue
-    (503), not a missing symbol (404). Distinguishing these prevents the
-    frontend from showing 'symbol not found' when Yahoo is just busy.
+    Checks the adapter's last error message and failure timestamp to detect
+    rate limiting. The circuit breaker alone is insufficient because it needs
+    15 failures to open — early rate-limited requests would incorrectly
+    return 404 'symbol not found'.
     """
     health = _yahoo_adapter.get_health()
-    if not health.is_healthy or health.circuit_state != "closed":
+    err = health.last_error_message.lower()
+
+    # Rate-limit keywords in the error message
+    is_rate_limited = any(kw in err for kw in ["rate", "429", "too many", "crumb"])
+
+    # Circuit breaker is open or half-open
+    is_circuit_open = health.circuit_state != "closed"
+
+    # Recent failure (within last 120s) — likely systemic, not a missing symbol
+    is_recent_failure = (
+        health.last_failure is not None
+        and health.failure_count > 0
+    )
+
+    if is_rate_limited or is_circuit_open or (is_recent_failure and health.failure_count >= 2):
         raise DataSourceError(
             source="Yahoo Finance",
-            message=f"Rate limited — data for '{symbol}' temporarily unavailable. Try again in ~30s.",
+            message=f"Data for '{symbol}' temporarily unavailable — Yahoo Finance rate limited. Try again in ~60s.",
         )
     raise SymbolNotFoundError(symbol)
 

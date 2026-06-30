@@ -26,6 +26,7 @@ import pandas as pd
 import yfinance as yf
 
 from app.core.logging import get_logger
+from app.data.adapters.yahoo import yahoo_adapter as _yahoo_adapter
 
 
 logger = get_logger(__name__)
@@ -66,19 +67,17 @@ class FeatureEngineer:
             (X, y) — feature DataFrame and target Series, both aligned by date.
             Rows with NaN in target (last 5 days) are excluded.
         """
-        loop = asyncio.get_running_loop()
+        # Fetch historical data through the shared adapter throttle.
+        # Previously used raw yf.download() which bypassed the semaphore,
+        # burning rate limit budget and triggering cascading 429s.
+        def _fetch_hist():
+            return yf.download(symbol, period=period, interval="1d", progress=False, auto_adjust=True)
 
-        # Fetch historical data in executor (yfinance is sync)
-        # Using yf.download() instead of ticker.history() because the latter
-        # gets HTTP 401 on Render (Yahoo requires auth cookies that
-        # yf.download handles automatically via session management).
-        def _fetch():
-            hist = yf.download(symbol, period=period, interval="1d", progress=False, auto_adjust=True)
-            ticker = yf.Ticker(symbol)
-            info = ticker.info
-            return hist, info
+        def _fetch_info():
+            return yf.Ticker(symbol).info
 
-        hist, info = await loop.run_in_executor(_executor, _fetch)
+        hist = await _yahoo_adapter._throttled_run_sync(_fetch_hist)
+        info = await _yahoo_adapter._throttled_run_sync(_fetch_info)
 
         if hist is None or hist.empty or len(hist) < 30:
             raise ValueError(f"Insufficient data for {symbol}: need 30+ daily bars")
@@ -144,15 +143,14 @@ class FeatureEngineer:
 
         Returns a dict of feature_name -> value for model input.
         """
-        loop = asyncio.get_running_loop()
+        def _fetch_hist():
+            return yf.download(symbol, period="3mo", interval="1d", progress=False, auto_adjust=True)
 
-        def _fetch():
-            hist = yf.download(symbol, period="3mo", interval="1d", progress=False, auto_adjust=True)
-            ticker = yf.Ticker(symbol)
-            info = ticker.info
-            return hist, info
+        def _fetch_info():
+            return yf.Ticker(symbol).info
 
-        hist, info = await loop.run_in_executor(_executor, _fetch)
+        hist = await _yahoo_adapter._throttled_run_sync(_fetch_hist)
+        info = await _yahoo_adapter._throttled_run_sync(_fetch_info)
 
         if hist is None or hist.empty or len(hist) < 25:
             raise ValueError(f"Insufficient recent data for {symbol}")

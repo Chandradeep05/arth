@@ -112,6 +112,7 @@ class AdapterHealth:
     last_failure: Optional[datetime] = None
     avg_latency_ms: float = 0.0
     total_requests: int = 0
+    last_error_message: str = ""
 
 
 class BaseDataAdapter(ABC):
@@ -130,6 +131,7 @@ class BaseDataAdapter(ABC):
         self._circuit = CircuitBreaker()
         self._last_success: Optional[datetime] = None
         self._last_failure: Optional[datetime] = None
+        self._last_error_message: str = ""  # Exposed so callers can detect rate limiting
         self._total_requests: int = 0
         self._total_latency: float = 0.0
 
@@ -176,6 +178,7 @@ class BaseDataAdapter(ABC):
                 last_error = e
                 self._circuit.record_failure()
                 self._last_failure = datetime.now(timezone.utc)
+                self._last_error_message = str(e)
 
                 # Check if circuit opened mid-retry — stop immediately
                 if not self._circuit.can_execute():
@@ -223,6 +226,7 @@ class BaseDataAdapter(ABC):
             last_failure=self._last_failure,
             avg_latency_ms=round(avg_latency, 2),
             total_requests=self._total_requests,
+            last_error_message=self._last_error_message,
         )
 
     # ── Abstract methods for subclasses ──

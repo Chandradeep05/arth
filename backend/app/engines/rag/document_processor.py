@@ -42,15 +42,13 @@ class DocumentProcessor:
         Returns:
             ``{"symbol", "documents_indexed", "sources": [...]}}``
         """
-        loop = asyncio.get_running_loop()
+        from app.data.adapters.yahoo import yahoo_adapter as _yahoo_adapter
+
         ticker = yf.Ticker(symbol)
 
-        # Fetch data in parallel via thread pool (yfinance is sync)
-        info_future = loop.run_in_executor(_executor, lambda: ticker.info)
-        news_future = loop.run_in_executor(_executor, lambda: getattr(ticker, "news", []))
-
-        info = await info_future
-        news = await news_future
+        # Fetch data through adapter throttle (sequential, rate-limited)
+        info = await _yahoo_adapter._throttled_run_sync(lambda: ticker.info)
+        news = await _yahoo_adapter._throttled_run_sync(lambda: getattr(ticker, "news", []))
 
         if not info:
             logger.warning("index_company_no_info", symbol=symbol)

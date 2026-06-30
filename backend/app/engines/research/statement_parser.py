@@ -119,7 +119,7 @@ class StatementParser:
             Structured statements keyed by type, each containing annual
             and quarterly period lists.
         """
-        loop = asyncio.get_running_loop()
+        from app.data.adapters.yahoo import yahoo_adapter as _yahoo_adapter
 
         try:
             ticker = yf.Ticker(symbol)
@@ -150,8 +150,8 @@ class StatementParser:
                     "quarterly_cashflow": _try_df("quarterly_cash_flow", "quarterly_cashflow"),
                 }
 
-            raw = await loop.run_in_executor(
-                _executor, lambda t=ticker: _fetch_all_statements(t)
+            raw = await _yahoo_adapter._throttled_run_sync(
+                lambda t=ticker: _fetch_all_statements(t)
             )
 
             income_annual = _df_to_periods(raw["financials"])

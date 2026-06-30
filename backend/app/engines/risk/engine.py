@@ -79,12 +79,49 @@ class RiskEngine:
 
     async def compute_risk(self, symbol: str) -> Dict[str, Any]:
         """Compute composite risk score for a symbol."""
+        from app.data.cache import CacheManager
+        from app.dependencies import get_redis
+
         dimensions = []
         factors_all: List[str] = []
 
-        # Fetch data
-        company = await self._yahoo.get_company_info(symbol)
-        ohlcv = await self._yahoo.get_ohlcv(symbol, period="3mo", interval="1d")
+        # Route through cache to avoid redundant Yahoo calls.
+        # Without this, every risk request made 2 fresh Yahoo calls
+        # (company_info + ohlcv) even though the same data was likely
+        # already fetched by the market page load.
+        redis = await get_redis()
+        cache = CacheManager(redis)
+
+        company = await cache.get_or_fetch(
+            key=cache.company_key(symbol),
+            fetch_func=self._yahoo.get_company_info,
+            ttl=3600,  # 1 hour — fundamentals don't change intraday
+            symbol=symbol,
+        )
+
+        ohlcv_result = await cache.get_or_fetch(
+            key=cache.ohlcv_key(symbol, "3mo", "1d"),
+            fetch_func=self._yahoo.get_ohlcv,
+            ttl=300,  # 5 min — price data
+            symbol=symbol, period="3mo", interval="1d",
+        )
+
+        # Unwrap OHLCV from cache format
+        if isinstance(ohlcv_result, dict):
+            ohlcv_result.pop("_cache_hit", None)
+            ohlcv_result.pop("_cached_at", None)
+            ohlcv_result.pop("_cache_source", None)
+            ohlcv = ohlcv_result.get("bars", ohlcv_result)
+            if isinstance(ohlcv, dict):
+                ohlcv = None  # Only cache metadata left, no actual bars
+        else:
+            ohlcv = ohlcv_result
+
+        # Clean cache metadata from company
+        if company:
+            company.pop("_cache_hit", None)
+            company.pop("_cached_at", None)
+            company.pop("_cache_source", None)
 
         metrics = company.get("metrics", {}) if company else {}
         sector = company.get("sector") if company else None
