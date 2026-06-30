@@ -46,9 +46,9 @@ class CircuitBreaker:
     - OPEN: service is down, calls are rejected immediately (serves cached data)
     - HALF_OPEN: after timeout, allows one test call to check recovery
     """
-    failure_threshold: int = 15       # Failures before opening (was 5 — too aggressive)
-    recovery_timeout: float = 30.0    # Seconds before trying again (was 60 — too long)
-    half_open_max_calls: int = 3      # Test calls in half-open state (was 1)
+    failure_threshold: int = 3         # Open fast — stop wasting requests on a blocked IP
+    recovery_timeout: float = 120.0    # Wait 2min before retrying (Yahoo IP blocks last ~60-120s)
+    half_open_max_calls: int = 1       # One test call to check if IP is unblocked
 
     state: CircuitState = CircuitState.CLOSED
     failure_count: int = 0

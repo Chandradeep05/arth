@@ -16,6 +16,7 @@ Uses a bounded dict with TTL per entry and periodic cleanup.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from datetime import datetime, timezone
@@ -34,6 +35,11 @@ _memory_cache: Dict[str, Tuple[dict, float]] = {}
 _MAX_ENTRIES = 500
 _CLEANUP_INTERVAL = 60.0  # seconds between cleanup sweeps
 _last_cleanup = [0.0]
+
+# ── Thundering Herd Protection ────────────────────────────────────────
+# Prevents N concurrent cache misses for the same key from making N
+# Yahoo calls. Only the first miss fetches; others wait and read cache.
+_fetch_locks: Dict[str, asyncio.Lock] = {}
 
 
 def _memory_get(key: str) -> Optional[dict]:
@@ -171,24 +177,35 @@ class CacheManager:
         """
         Get from cache or fetch from source.
 
-        This is the primary interface — it tries cache first, falls back to
-        the fetch function, and caches the result.
+        Includes thundering herd protection: if N concurrent requests all miss
+        the cache for the same key, only ONE actually calls Yahoo. The rest
+        wait for the lock, then read from cache.
         """
         # Try cache first (Redis → in-memory)
         cached = await self.get(key)
         if cached is not None:
             return cached
 
-        # Cache miss — fetch from source
-        try:
-            data = await fetch_func(*args, **kwargs)
-            if data is not None:
-                await self.set(key, data, ttl)
-                data["_cache_hit"] = False
-            return data
-        except Exception as e:
-            logger.error("cache_fetch_failed", key=key, error=str(e))
-            return None
+        # Acquire per-key lock to prevent duplicate fetches
+        if key not in _fetch_locks:
+            _fetch_locks[key] = asyncio.Lock()
+
+        async with _fetch_locks[key]:
+            # Re-check cache — another coroutine may have populated it
+            cached = await self.get(key)
+            if cached is not None:
+                return cached
+
+            # Cache still empty — we're the one who fetches
+            try:
+                data = await fetch_func(*args, **kwargs)
+                if data is not None:
+                    await self.set(key, data, ttl)
+                    data["_cache_hit"] = False
+                return data
+            except Exception as e:
+                logger.error("cache_fetch_failed", key=key, error=str(e))
+                return None
 
     def get_stats(self) -> dict:
         """Get cache statistics for observability."""

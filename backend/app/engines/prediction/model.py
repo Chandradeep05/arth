@@ -197,32 +197,53 @@ class PredictionModel:
     def _compute_shap(
         self, model, live_df: pd.DataFrame, feature_names: List[str]
     ) -> List[Dict[str, Any]]:
-        """Compute SHAP values for the live prediction."""
+        """Compute SHAP values for the live prediction.
+
+        Known issue: some SHAP + XGBoost + numpy combinations return
+        bracket-wrapped strings like '[4.1156877E-3]' instead of floats.
+        This crashes numpy's auto-coercion. We defend against this at
+        every level by converting to plain Python objects immediately.
+        """
         try:
             import shap
 
-            # Helper: safely convert SHAP values to float.
-            # Some environments return bracket-wrapped strings like '[2.939259E-3]'
             def _to_float(v) -> float:
+                """Safely convert any SHAP value to float."""
+                if isinstance(v, (int, float)):
+                    f = float(v)
+                    return 0.0 if (math.isnan(f) or math.isinf(f)) else f
+                # Handle bracket-wrapped strings: '[4.1156877E-3]' → 4.1156877E-3
+                s = str(v).strip().strip('[]').strip()
                 try:
-                    return float(v)
+                    f = float(s)
+                    return 0.0 if (math.isnan(f) or math.isinf(f)) else f
                 except (TypeError, ValueError):
-                    s = str(v).strip().strip('[]')
-                    try:
-                        return float(s)
-                    except (TypeError, ValueError):
-                        return 0.0
+                    return 0.0
 
             explainer = shap.TreeExplainer(model)
-            shap_values = explainer.shap_values(live_df)
 
-            # shap_values is a 1D array for single prediction
-            sv = shap_values[0] if len(shap_values.shape) > 1 else shap_values
+            # Use .shap_values() but immediately convert to Python list
+            # to escape numpy's auto-coercion of bracket-wrapped strings.
+            raw = explainer.shap_values(live_df)
 
-            # Convert to plain Python floats BEFORE numpy auto-coercion.
-            # dtype=object prevents numpy from trying to convert string elements
-            # like '[-2.3795346E-5]' to float (which crashes with ValueError).
-            sv = [_to_float(x) for x in np.asarray(sv, dtype=object).flat]
+            # raw can be: ndarray (2D or 1D), list of arrays, or Explanation
+            # Convert to a flat Python list of raw values ASAP
+            try:
+                # Try: it's a numpy array with .tolist()
+                raw_list = raw.tolist()
+            except AttributeError:
+                # It's already a list or Explanation object
+                if hasattr(raw, 'values'):
+                    raw_list = raw.values.tolist()  # Explanation object
+                else:
+                    raw_list = list(raw)
+
+            # Flatten: if nested (2D), take first row
+            if raw_list and isinstance(raw_list[0], list):
+                raw_list = raw_list[0]
+
+            # Convert every element through _to_float
+            sv = [_to_float(x) for x in raw_list]
 
             factors = []
             for i, name in enumerate(feature_names):

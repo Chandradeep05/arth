@@ -68,8 +68,8 @@ class Settings(BaseSettings):
 
     # ── Redis ──
     redis_url: str = "redis://localhost:6379/0"
-    redis_cache_ttl_tick: int = 15          # seconds
-    redis_cache_ttl_indicators: int = 60     # seconds
+    redis_cache_ttl_tick: int = 300         # 5 min (was 15s — too short for blocked IPs)
+    redis_cache_ttl_indicators: int = 600   # 10 min (was 60s)
     redis_cache_ttl_fundamentals: int = 86400  # 24 hours
 
     # ── LLM Configuration ──
