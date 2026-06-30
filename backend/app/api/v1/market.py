@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, Query
 
 from app.config import Settings, get_settings
-from app.core.exceptions import SymbolNotFoundError
+from app.core.exceptions import DataSourceError, SymbolNotFoundError
 from app.core.logging import get_logger
 from app.data.adapters.yahoo import yahoo_adapter
 from app.data.cache import CacheManager
@@ -43,6 +43,22 @@ router = APIRouter(prefix="/market", tags=["market"])
 
 # Shared singleton adapter (single circuit breaker for all routes)
 _yahoo_adapter = yahoo_adapter
+
+
+def _raise_data_error(symbol: str):
+    """Raise the appropriate error when Yahoo returns no data.
+
+    If the circuit breaker is open or unhealthy, this is a rate-limit issue
+    (503), not a missing symbol (404). Distinguishing these prevents the
+    frontend from showing 'symbol not found' when Yahoo is just busy.
+    """
+    health = _yahoo_adapter.get_health()
+    if not health.is_healthy or health.circuit_state != "closed":
+        raise DataSourceError(
+            source="Yahoo Finance",
+            message=f"Rate limited — data for '{symbol}' temporarily unavailable. Try again in ~30s.",
+        )
+    raise SymbolNotFoundError(symbol)
 
 
 def _make_freshness(
@@ -84,7 +100,7 @@ async def get_quote(
     )
 
     if data is None:
-        raise SymbolNotFoundError(symbol)
+        _raise_data_error(symbol)
 
     cache_hit = data.pop("_cache_hit", False)
     data.pop("_cached_at", None)
@@ -120,7 +136,7 @@ async def get_ohlcv(
         # Fetch fresh from Yahoo
         result = await _yahoo_adapter.get_ohlcv(symbol, period=period, interval=interval)
         if result is None:
-            raise SymbolNotFoundError(symbol)
+            _raise_data_error(symbol)
         # Result is now {"bars": [...], "_validation": {...}}
         if isinstance(result, dict):
             bars = result.get("bars", result)
@@ -200,7 +216,7 @@ async def get_company_info(
     )
 
     if data is None:
-        raise SymbolNotFoundError(symbol)
+        _raise_data_error(symbol)
 
     cache_hit = data.pop("_cache_hit", False)
     data.pop("_cached_at", None)
@@ -237,7 +253,7 @@ async def get_indicators(
     # Fetch OHLCV and compute indicators
     result = await _yahoo_adapter.get_ohlcv(symbol, period="3mo", interval="1d")
     if not result:
-        raise SymbolNotFoundError(symbol)
+        _raise_data_error(symbol)
 
     # Unwrap new dict format from validator integration
     if isinstance(result, dict):

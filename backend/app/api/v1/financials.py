@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends
 
 from app.config import Settings, get_settings
-from app.core.exceptions import SymbolNotFoundError
+from app.core.exceptions import DataSourceError, SymbolNotFoundError
 from app.core.logging import get_logger
 from app.data.cache import CacheManager
 from app.dependencies import get_redis
@@ -75,6 +75,12 @@ async def get_statements(
         data = await _parser.get_statements(symbol)
     except Exception as e:
         logger.error("financials_fetch_failed", symbol=symbol, error=str(e))
+        err_msg = str(e).lower()
+        if "rate" in err_msg or "too many" in err_msg or "429" in err_msg:
+            raise DataSourceError(
+                source="Yahoo Finance",
+                message=f"Rate limited — financials for '{symbol}' temporarily unavailable.",
+            )
         raise SymbolNotFoundError(symbol)
 
     if data.get("error") and data["periods_available"]["annual"] == 0:

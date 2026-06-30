@@ -1,20 +1,25 @@
 """
-Redis cache manager with TTL-based expiration.
+Cache manager with in-memory fallback for when Redis is unavailable.
 
-Caching strategy per data type:
-- Tick/quote data: 15s TTL (matches Yahoo Finance delay)
-- Technical indicators: 60s TTL
-- Company fundamentals: 24h TTL
-- AI research reports: 1h TTL
+Caching strategy per data type (TTL in seconds):
+- Tick/quote data: 30s (slightly more than Yahoo's ~15s delay to reduce calls)
+- Technical indicators: 60s
+- OHLCV data: 300s (5 min — historical data doesn't change fast)
+- Sentiment/Risk: 600s (10 min — computed from news, not live prices)
+- Company fundamentals: 3600s (1 hour — changes at most daily)
+- Research reports: 3600s (1 hour — AI-generated, expensive to recompute)
+- Financials/Ratios: 86400s (24 hours — quarterly data)
 
-Every cache read tracks hits/misses for observability metrics.
+In-memory cache activates automatically when Redis is unavailable (Render free tier).
+Uses a bounded dict with TTL per entry and periodic cleanup.
 """
 
 from __future__ import annotations
 
 import json
+import time
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any, Dict, Optional, Tuple
 
 import redis.asyncio as aioredis
 
@@ -22,9 +27,61 @@ from app.core.logging import get_logger
 
 logger = get_logger(__name__)
 
+# ── In-Memory Cache (module-level singleton) ─────────────────────────
+# Activated when Redis is unavailable. Stores (value_dict, expiry_time) tuples.
+# Bounded to MAX_ENTRIES to prevent unbounded memory growth on Render (512MB).
+_memory_cache: Dict[str, Tuple[dict, float]] = {}
+_MAX_ENTRIES = 500
+_CLEANUP_INTERVAL = 60.0  # seconds between cleanup sweeps
+_last_cleanup = [0.0]
+
+
+def _memory_get(key: str) -> Optional[dict]:
+    """Get from in-memory cache. Returns None if missing or expired."""
+    entry = _memory_cache.get(key)
+    if entry is None:
+        return None
+    value, expiry = entry
+    if time.monotonic() > expiry:
+        # Expired — remove and return miss
+        _memory_cache.pop(key, None)
+        return None
+    return value
+
+
+def _memory_set(key: str, value: dict, ttl: int) -> None:
+    """Set in-memory cache entry with TTL. Cleans up expired entries periodically."""
+    now = time.monotonic()
+
+    # Periodic cleanup: remove expired entries every CLEANUP_INTERVAL
+    if now - _last_cleanup[0] > _CLEANUP_INTERVAL:
+        expired_keys = [
+            k for k, (_, exp) in _memory_cache.items() if now > exp
+        ]
+        for k in expired_keys:
+            _memory_cache.pop(k, None)
+        _last_cleanup[0] = now
+        if expired_keys:
+            logger.debug("memory_cache_cleanup", removed=len(expired_keys), remaining=len(_memory_cache))
+
+    # Evict oldest entries if at capacity
+    if len(_memory_cache) >= _MAX_ENTRIES:
+        # Remove the 20% oldest entries by expiry time
+        sorted_keys = sorted(_memory_cache.keys(), key=lambda k: _memory_cache[k][1])
+        for k in sorted_keys[: _MAX_ENTRIES // 5]:
+            _memory_cache.pop(k, None)
+        logger.debug("memory_cache_eviction", evicted=_MAX_ENTRIES // 5)
+
+    _memory_cache[key] = (value, now + ttl)
+
+
+def _memory_delete(key: str) -> None:
+    """Delete from in-memory cache."""
+    _memory_cache.pop(key, None)
+
 
 class CacheManager:
-    """Redis cache manager for market data."""
+    """Cache manager with Redis primary and in-memory fallback."""
 
     def __init__(self, redis_client: aioredis.Redis | None):
         self._redis = redis_client
@@ -33,6 +90,7 @@ class CacheManager:
 
     @property
     def is_available(self) -> bool:
+        """True if Redis is connected. In-memory fallback always works."""
         return self._redis is not None
 
     @property
@@ -41,64 +99,66 @@ class CacheManager:
         return (self._hits / total * 100) if total > 0 else 0.0
 
     async def get(self, key: str) -> Optional[dict]:
-        """Get a cached value. Returns None on miss or if Redis is unavailable."""
-        if not self.is_available:
-            self._misses += 1
-            return None
+        """Get a cached value. Tries Redis first, then in-memory fallback."""
+        # Try Redis
+        if self._redis is not None:
+            try:
+                value = await self._redis.get(key)
+                if value is not None:
+                    self._hits += 1
+                    data = json.loads(value)
+                    data["_cache_hit"] = True
+                    data["_cached_at"] = data.get("_cached_at", datetime.now(timezone.utc).isoformat())
+                    return data
+            except Exception as e:
+                logger.warning("cache_redis_get_failed", key=key, error=str(e))
 
-        try:
-            value = await self._redis.get(key)
-            if value is None:
-                self._misses += 1
-                return None
-
+        # Fallback: in-memory cache
+        mem_data = _memory_get(key)
+        if mem_data is not None:
             self._hits += 1
-            data = json.loads(value)
+            # Return a copy so callers can mutate without affecting cache
+            result = dict(mem_data)
+            result["_cache_hit"] = True
+            result["_cache_source"] = "memory"
+            return result
 
-            # Attach cache metadata
-            data["_cache_hit"] = True
-            data["_cached_at"] = data.get("_cached_at", datetime.now(timezone.utc).isoformat())
+        self._misses += 1
+        return None
 
-            return data
+    async def set(self, key: str, value: dict, ttl: int = 60) -> bool:
+        """Set a cached value. Writes to both Redis and in-memory."""
+        # Add cache timestamp
+        value["_cached_at"] = datetime.now(timezone.utc).isoformat()
 
-        except Exception as e:
-            logger.warning("cache_get_failed", key=key, error=str(e))
-            self._misses += 1
-            return None
+        # Always write to in-memory (even if Redis works — serves as backup)
+        _memory_set(key, value, ttl)
 
-    async def set(
-        self, key: str, value: dict, ttl: int = 60
-    ) -> bool:
-        """Set a cached value with TTL in seconds."""
-        if not self.is_available:
-            return False
+        # Try Redis
+        if self._redis is not None:
+            try:
+                await self._redis.setex(
+                    key,
+                    ttl,
+                    json.dumps(value, default=str),
+                )
+                return True
+            except Exception as e:
+                logger.warning("cache_redis_set_failed", key=key, error=str(e))
 
-        try:
-            # Add cache timestamp
-            value["_cached_at"] = datetime.now(timezone.utc).isoformat()
-
-            await self._redis.setex(
-                key,
-                ttl,
-                json.dumps(value, default=str),
-            )
-            return True
-
-        except Exception as e:
-            logger.warning("cache_set_failed", key=key, error=str(e))
-            return False
+        return True  # In-memory write succeeded
 
     async def delete(self, key: str) -> bool:
-        """Delete a cached value."""
-        if not self.is_available:
-            return False
+        """Delete a cached value from both stores."""
+        _memory_delete(key)
 
-        try:
-            await self._redis.delete(key)
-            return True
-        except Exception as e:
-            logger.warning("cache_delete_failed", key=key, error=str(e))
-            return False
+        if self._redis is not None:
+            try:
+                await self._redis.delete(key)
+            except Exception as e:
+                logger.warning("cache_redis_delete_failed", key=key, error=str(e))
+
+        return True
 
     async def get_or_fetch(
         self,
@@ -114,7 +174,7 @@ class CacheManager:
         This is the primary interface — it tries cache first, falls back to
         the fetch function, and caches the result.
         """
-        # Try cache first
+        # Try cache first (Redis → in-memory)
         cached = await self.get(key)
         if cached is not None:
             return cached
@@ -136,7 +196,9 @@ class CacheManager:
             "hits": self._hits,
             "misses": self._misses,
             "hit_rate": round(self.hit_rate, 2),
-            "is_available": self.is_available,
+            "redis_available": self.is_available,
+            "memory_entries": len(_memory_cache),
+            "memory_max": _MAX_ENTRIES,
         }
 
     # ── Convenience key builders ──
