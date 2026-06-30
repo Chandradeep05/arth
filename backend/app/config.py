@@ -72,6 +72,12 @@ class Settings(BaseSettings):
     redis_cache_ttl_indicators: int = 600   # 10 min (was 60s)
     redis_cache_ttl_fundamentals: int = 86400  # 24 hours
 
+    # ── Yahoo Finance Proxy ──
+    # Set YAHOO_PROXY_URL env var on Render to route through a clean IP.
+    # Format: http://user:pass@host:port  (e.g. Webshare, SmartProxy, etc.)
+    # Without this, Render's shared IP gets 429'd by Yahoo immediately.
+    yahoo_proxy_url: str = ""
+
     # ── LLM Configuration ──
     llm_tier: LLMTier = LLMTier.CLOUD
 

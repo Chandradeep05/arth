@@ -20,7 +20,7 @@ import yfinance as yf
 
 from app.config import get_settings
 from app.core.logging import get_logger
-from app.data.adapters.yahoo import yahoo_adapter
+from app.data.adapters.yahoo import yahoo_adapter, make_ticker
 
 logger = get_logger(__name__)
 _executor = ThreadPoolExecutor(max_workers=1)
@@ -254,7 +254,7 @@ class SentimentEngine:
     async def _fetch_news(self, symbol: str) -> List[Dict[str, Any]]:
         """Fetch news from Yahoo Finance for a symbol."""
         try:
-            ticker = yf.Ticker(symbol)
+            ticker = make_ticker(symbol)
             news = await self._yahoo._throttled_run_sync(lambda t=ticker: t.news)
             if news and isinstance(news, list):
                 return news[:15]  # Limit to 15 articles

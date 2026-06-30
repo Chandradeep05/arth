@@ -37,10 +37,47 @@ _executor = ThreadPoolExecutor(max_workers=2)
 # Module-level data quality validator
 _validator = DataQualityValidator()
 
-# NOTE: yfinance >= 1.x handles curl_cffi session internally.
-# No manual session management needed — the library automatically
-# impersonates Chrome for Yahoo Finance auth on cloud IPs.
-_yf_session = None  # Kept for backward compat with engines that import it
+# ── Proxy-aware session ───────────────────────────────────────────
+# Routes ALL yfinance calls through a clean proxy IP when configured.
+# Without this, Render's shared outbound IP gets 429'd by Yahoo.
+_yf_session = None
+
+
+def _get_yf_session():
+    """Get or create a requests.Session with proxy configured.
+
+    Reads YAHOO_PROXY_URL from environment (via Settings).
+    Called lazily on first use so Settings is available.
+    """
+    global _yf_session
+    if _yf_session is not None:
+        return _yf_session
+
+    import requests
+    from app.config import get_settings
+
+    _yf_session = requests.Session()
+    settings = get_settings()
+    proxy_url = settings.yahoo_proxy_url
+
+    if proxy_url:
+        _yf_session.proxies = {"http": proxy_url, "https": proxy_url}
+        logger.info("yahoo_proxy_configured", proxy=proxy_url.split("@")[-1])
+    else:
+        logger.info("yahoo_no_proxy", note="Using direct connection — may get rate-limited on cloud IPs")
+
+    return _yf_session
+
+
+def make_ticker(symbol: str) -> yf.Ticker:
+    """Create a yf.Ticker with the shared proxy session."""
+    return yf.Ticker(symbol, session=_get_yf_session())
+
+
+def yf_download(tickers, **kwargs) -> any:
+    """Wrapper for yf.download() that injects the proxy session."""
+    return yf.download(tickers, session=_get_yf_session(), **kwargs)
+
 
 # ── Rate limiting ──────────────────────────────────────────────────
 # Yahoo Finance rate-limits aggressively on cloud IPs (Render shared IPs).
@@ -94,7 +131,7 @@ class YahooFinanceAdapter(BaseDataAdapter):
         """
 
         async def _fetch():
-            ticker = yf.Ticker(symbol)
+            ticker = make_ticker(symbol)
             market, exchange, currency = self._detect_market(symbol)
 
             # Try fast_info FIRST — it's 10x faster and uses 10x less memory
@@ -187,7 +224,7 @@ class YahooFinanceAdapter(BaseDataAdapter):
         """Get historical OHLCV data."""
 
         async def _fetch():
-            ticker = yf.Ticker(symbol)
+            ticker = make_ticker(symbol)
             # Capture variables in default args to avoid closure bugs
             hist = await self._throttled_run_sync(
                 lambda t=ticker, p=period, i=interval: t.history(period=p, interval=i)
@@ -252,7 +289,7 @@ class YahooFinanceAdapter(BaseDataAdapter):
         """Get company fundamentals and metadata."""
 
         async def _fetch():
-            ticker = yf.Ticker(symbol)
+            ticker = make_ticker(symbol)
             info = await self._throttled_run_sync(lambda t=ticker: t.info)
 
             if not info:
@@ -302,7 +339,7 @@ class YahooFinanceAdapter(BaseDataAdapter):
 
             for sym in candidates:
                 try:
-                    ticker = yf.Ticker(sym)
+                    ticker = make_ticker(sym)
                     # Capture ticker in default arg to avoid closure bug
                     info = await self._throttled_run_sync(lambda t=ticker: t.info)
                     if info and info.get("regularMarketPrice") is not None:
@@ -341,7 +378,7 @@ class YahooFinanceAdapter(BaseDataAdapter):
             try:
                 # Batch download all indices in ONE call
                 df = await self._throttled_run_sync(
-                    lambda: yf.download(
+                    lambda: yf_download(
                         symbol_str,
                         period="5d",  # 5 days for better coverage across timezones
                         interval="1d",
@@ -426,7 +463,7 @@ class YahooFinanceAdapter(BaseDataAdapter):
                 for idx in missing:
                     try:
                         single_df = await self._throttled_run_sync(
-                            lambda s=idx["symbol"]: yf.download(
+                            lambda s=idx["symbol"]: yf_download(
                                 s, period="5d", interval="1d",
                                 progress=False, threads=False,
                             )
@@ -503,7 +540,7 @@ class YahooFinanceAdapter(BaseDataAdapter):
             # Use period="2d" so we always have yesterday's close for change calculation
             # (period="1d" returns empty during off-hours / weekends)
             df = await self._throttled_run_sync(
-                lambda: yf.download(
+                lambda: yf_download(
                     symbol_str,
                     period="2d",
                     interval="1d",
@@ -593,7 +630,7 @@ class YahooFinanceAdapter(BaseDataAdapter):
     async def health_check(self) -> bool:
         """Check if Yahoo Finance is reachable by fetching NIFTY 50."""
         try:
-            ticker = yf.Ticker("^NSEI")
+            ticker = make_ticker("^NSEI")
             info = await self._throttled_run_sync(lambda t=ticker: t.info)
             return info is not None and "regularMarketPrice" in info
         except Exception:

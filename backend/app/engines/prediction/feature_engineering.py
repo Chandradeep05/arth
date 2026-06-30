@@ -26,7 +26,7 @@ import pandas as pd
 import yfinance as yf
 
 from app.core.logging import get_logger
-from app.data.adapters.yahoo import yahoo_adapter as _yahoo_adapter
+from app.data.adapters.yahoo import yahoo_adapter as _yahoo_adapter, make_ticker, yf_download
 
 
 logger = get_logger(__name__)
@@ -71,10 +71,10 @@ class FeatureEngineer:
         # Previously used raw yf.download() which bypassed the semaphore,
         # burning rate limit budget and triggering cascading 429s.
         def _fetch_hist():
-            return yf.download(symbol, period=period, interval="1d", progress=False, auto_adjust=True)
+            return yf_download(symbol, period=period, interval="1d", progress=False, auto_adjust=True)
 
         def _fetch_info():
-            return yf.Ticker(symbol).info
+            return make_ticker(symbol).info
 
         hist = await _yahoo_adapter._throttled_run_sync(_fetch_hist)
         info = await _yahoo_adapter._throttled_run_sync(_fetch_info)
@@ -144,10 +144,10 @@ class FeatureEngineer:
         Returns a dict of feature_name -> value for model input.
         """
         def _fetch_hist():
-            return yf.download(symbol, period="3mo", interval="1d", progress=False, auto_adjust=True)
+            return yf_download(symbol, period="3mo", interval="1d", progress=False, auto_adjust=True)
 
         def _fetch_info():
-            return yf.Ticker(symbol).info
+            return make_ticker(symbol).info
 
         hist = await _yahoo_adapter._throttled_run_sync(_fetch_hist)
         info = await _yahoo_adapter._throttled_run_sync(_fetch_info)

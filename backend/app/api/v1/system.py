@@ -188,7 +188,7 @@ async def get_metrics():
 @router.get("/debug")
 async def get_debug():
     """Diagnostic endpoint — verify curl_cffi session and yfinance connectivity."""
-    from app.data.adapters.yahoo import _yf_session
+    from app.data.adapters.yahoo import _yf_session, make_ticker
 
     result = {
         "curl_cffi_session": _yf_session is not None,
@@ -198,8 +198,7 @@ async def get_debug():
 
     # Quick yfinance connectivity test
     try:
-        import yfinance as yf
-        ticker = yf.Ticker("AAPL")
+        ticker = make_ticker("AAPL")
         info = ticker.info
         result["yfinance_test"] = {
             "symbol": "AAPL",

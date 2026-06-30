@@ -42,9 +42,9 @@ class DocumentProcessor:
         Returns:
             ``{"symbol", "documents_indexed", "sources": [...]}}``
         """
-        from app.data.adapters.yahoo import yahoo_adapter as _yahoo_adapter
+        from app.data.adapters.yahoo import yahoo_adapter as _yahoo_adapter, make_ticker
 
-        ticker = yf.Ticker(symbol)
+        ticker = make_ticker(symbol)
 
         # Fetch data through adapter throttle (sequential, rate-limited)
         info = await _yahoo_adapter._throttled_run_sync(lambda: ticker.info)

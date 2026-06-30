@@ -119,10 +119,10 @@ class StatementParser:
             Structured statements keyed by type, each containing annual
             and quarterly period lists.
         """
-        from app.data.adapters.yahoo import yahoo_adapter as _yahoo_adapter
+        from app.data.adapters.yahoo import yahoo_adapter as _yahoo_adapter, make_ticker
 
         try:
-            ticker = yf.Ticker(symbol)
+            ticker = make_ticker(symbol)
 
             # Fetch ALL financial DataFrames in a single executor call.
             # yfinance caches data internally after the first property access,

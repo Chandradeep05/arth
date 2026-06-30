@@ -113,10 +113,10 @@ async def get_governance_data(symbol: str) -> Dict[str, Any]:
 
     Returns a dict with ownership data + governance score.
     """
-    from app.data.adapters.yahoo import yahoo_adapter as _yahoo_adapter
+    from app.data.adapters.yahoo import yahoo_adapter as _yahoo_adapter, make_ticker
 
     try:
-        ticker = yf.Ticker(symbol)
+        ticker = make_ticker(symbol)
 
         # Fetch through adapter throttle to respect rate limits
         info = await _yahoo_adapter._throttled_run_sync(lambda t=ticker: t.info)
