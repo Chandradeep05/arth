@@ -639,7 +639,7 @@ class YahooFinanceAdapter(BaseDataAdapter):
 
 # ── Hybrid Adapter ──────────────────────────────────────────────
 # Routes US stocks → Twelve Data (API key, never blocked)
-# Routes Indian stocks → yfinance (best-effort, cached heavily)
+# Routes Indian stocks → NSE API (official, cookie-auth) → yfinance fallback
 # Every file importing yahoo_adapter works unchanged.
 
 class HybridAdapter(BaseDataAdapter):
@@ -650,8 +650,9 @@ class HybridAdapter(BaseDataAdapter):
     def __init__(self):
         super().__init__()
         self._yahoo = YahooFinanceAdapter()
-        # Lazy import to avoid circular deps
+        # Lazy imports to avoid circular deps
         self._twelve = None
+        self._nse = None
 
     def _get_twelve(self):
         if self._twelve is None:
@@ -659,60 +660,109 @@ class HybridAdapter(BaseDataAdapter):
             self._twelve = twelvedata_adapter
         return self._twelve
 
+    def _get_nse(self):
+        if self._nse is None:
+            from app.data.adapters.nse import nse_adapter
+            self._nse = nse_adapter
+        return self._nse
+
     @staticmethod
     def _is_indian(symbol: str) -> bool:
         """Check if symbol is an Indian stock (NSE/BSE)."""
         s = symbol.upper()
         return s.endswith(".NS") or s.endswith(".BO")
 
-    @staticmethod
-    def _is_index(symbol: str) -> bool:
-        """Check if symbol is a market index."""
-        return symbol.startswith("^")
+    async def _indian_with_fallback(self, method: str, *args, **kwargs):
+        """Try NSE first, fall back to yfinance for Indian data."""
+        # Try NSE API first (official, no IP blocking)
+        try:
+            nse = self._get_nse()
+            nse_method = getattr(nse, method, None)
+            if nse_method:
+                result = await nse_method(*args, **kwargs)
+                if result:
+                    logger.debug("hybrid_nse_success", method=method)
+                    return result
+        except Exception as e:
+            logger.warning("hybrid_nse_failed", method=method, error=str(e))
 
-    def _route(self, symbol: str):
-        """Return the right adapter for a symbol."""
-        if self._is_indian(symbol):
-            return self._yahoo
-        return self._get_twelve()
+        # Fall back to yfinance (may fail on cloud IPs)
+        try:
+            yf_method = getattr(self._yahoo, method, None)
+            if yf_method:
+                result = await yf_method(*args, **kwargs)
+                if result:
+                    logger.debug("hybrid_yfinance_fallback_success", method=method)
+                    return result
+        except Exception as e:
+            logger.warning("hybrid_yfinance_fallback_failed", method=method, error=str(e))
+
+        return None
 
     async def get_quote(self, symbol: str):
-        return await self._route(symbol).get_quote(symbol)
+        if self._is_indian(symbol):
+            return await self._indian_with_fallback("get_quote", symbol)
+        return await self._get_twelve().get_quote(symbol)
 
     async def get_ohlcv(self, symbol: str, period: str = "1mo", interval: str = "1d"):
-        return await self._route(symbol).get_ohlcv(symbol, period=period, interval=interval)
+        if self._is_indian(symbol):
+            return await self._indian_with_fallback("get_ohlcv", symbol, period=period, interval=interval)
+        return await self._get_twelve().get_ohlcv(symbol, period=period, interval=interval)
 
     async def get_company_info(self, symbol: str):
-        return await self._route(symbol).get_company_info(symbol)
+        if self._is_indian(symbol):
+            return await self._indian_with_fallback("get_company_info", symbol)
+        return await self._get_twelve().get_company_info(symbol)
 
     async def search(self, query: str):
-        """Search both sources and merge results."""
-        td_results = await self._get_twelve().search(query)
-        # Also try yfinance for Indian stocks
+        """Search both Twelve Data and NSE, merge results."""
+        results = []
+        seen = set()
+
+        # Twelve Data (US stocks)
         try:
-            yf_results = await self._yahoo.search(query)
-        except Exception:
-            yf_results = []
-        # Deduplicate by symbol
-        seen = {r["symbol"] for r in td_results}
-        for r in yf_results:
-            if r["symbol"] not in seen:
-                td_results.append(r)
+            td_results = await self._get_twelve().search(query)
+            for r in td_results:
+                results.append(r)
                 seen.add(r["symbol"])
-        return td_results
+        except Exception:
+            pass
+
+        # NSE (Indian stocks)
+        try:
+            nse_results = await self._get_nse().search(query)
+            for r in nse_results:
+                if r["symbol"] not in seen:
+                    results.append(r)
+                    seen.add(r["symbol"])
+        except Exception:
+            pass
+
+        return results
 
     async def get_market_indices(self):
-        """Fetch US indices from Twelve Data, Indian from yfinance."""
-        us_indices = await self._get_twelve().get_market_indices()
+        """Fetch US indices from Twelve Data, Indian from NSE."""
+        # US indices (always reliable)
         try:
-            all_indices = await self._yahoo.get_market_indices()
-            # Filter to only Indian indices from yfinance
-            indian_indices = [
-                idx for idx in all_indices
-                if idx.get("symbol", "").startswith("^N") or idx.get("symbol", "").startswith("^B")
-            ]
+            us_indices = await self._get_twelve().get_market_indices()
+        except Exception:
+            us_indices = []
+
+        # Indian indices via NSE (official source)
+        try:
+            indian_indices = await self._get_nse().get_market_indices()
         except Exception:
             indian_indices = []
+            # Fallback to yfinance for Indian indices
+            try:
+                all_yf = await self._yahoo.get_market_indices()
+                indian_indices = [
+                    idx for idx in all_yf
+                    if idx.get("symbol", "").startswith("^N") or idx.get("symbol", "").startswith("^B")
+                ]
+            except Exception:
+                pass
+
         return us_indices + indian_indices
 
     async def get_batch_quotes(self, symbols):
@@ -721,6 +771,8 @@ class HybridAdapter(BaseDataAdapter):
         indian_symbols = [s for s in symbols if self._is_indian(s)]
 
         results = []
+
+        # US batch via Twelve Data
         if us_symbols:
             try:
                 us_results = await self._get_twelve().get_batch_quotes(us_symbols)
@@ -728,11 +780,11 @@ class HybridAdapter(BaseDataAdapter):
             except Exception as e:
                 logger.warning("hybrid_us_batch_failed", error=str(e))
 
+        # Indian stocks via NSE (one by one, with fallback)
         if indian_symbols:
-            try:
-                # yfinance batch quotes
-                for sym in indian_symbols:
-                    quote = await self._yahoo.get_quote(sym)
+            for sym in indian_symbols:
+                try:
+                    quote = await self._indian_with_fallback("get_quote", sym)
                     if quote:
                         results.append({
                             "symbol": quote.get("symbol", sym),
@@ -742,8 +794,8 @@ class HybridAdapter(BaseDataAdapter):
                             "change_percent": quote.get("change_percent", 0),
                             "volume": quote.get("volume", 0),
                         })
-            except Exception as e:
-                logger.warning("hybrid_indian_batch_failed", error=str(e))
+                except Exception:
+                    continue
 
         return results
 
@@ -759,6 +811,6 @@ class HybridAdapter(BaseDataAdapter):
 # ── Module-level singleton ──────────────────────────────────────
 # All routers and engines should import this instead of creating
 # their own adapter instances. HybridAdapter routes to the right
-# source (Twelve Data for US, yfinance for India) transparently.
+# source (Twelve Data for US, NSE for India) transparently.
 yahoo_adapter = HybridAdapter()
 
