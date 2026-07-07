@@ -18,14 +18,14 @@ import DataFreshness from '@/components/shared/DataFreshness';
 import LoadingSkeleton from '@/components/shared/LoadingSkeleton';
 import type { MarketIndex } from '@/types/market';
 
-/* ── Stocks to scan for gainers/losers ── */
-const NIFTY_STOCKS = [
-  'RELIANCE.NS', 'TCS.NS', 'HDFCBANK.NS', 'INFY.NS', 'ICICIBANK.NS',
-  'SBIN.NS', 'BAJFINANCE.NS', 'WIPRO.NS', 'EICHERMOT.NS', 'ADANIENT.NS',
-  'ITC.NS', 'KOTAKBANK.NS', 'LT.NS', 'HCLTECH.NS', 'AXISBANK.NS',
-  'SUNPHARMA.NS', 'MARUTI.NS', 'TATASTEEL.NS', 'BHARTIARTL.NS', 'NTPC.NS',
-  'POWERGRID.NS', 'HINDALCO.NS', 'DRREDDY.NS', 'CIPLA.NS', 'TECHM.NS',
-  'ONGC.NS', 'JSWSTEEL.NS', 'DLF.NS', 'ZEEL.NS', 'BAJAJFINSV.NS',
+/* ── Stocks to scan for gainers/losers (US market — reliable via Twelve Data) ── */
+const MARKET_STOCKS = [
+  'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META',
+  'NVDA', 'TSLA', 'JPM', 'V', 'JNJ',
+  'WMT', 'PG', 'UNH', 'HD', 'MA',
+  'DIS', 'NFLX', 'PYPL', 'ADBE', 'CRM',
+  'PFE', 'MRK', 'ABBV', 'XOM', 'CVX',
+  'KO', 'PEP', 'COST', 'NKE', 'INTC',
 ];
 
 interface StockMover {
@@ -39,30 +39,29 @@ interface StockMover {
 
 /* ── Helper: format number with commas ── */
 function formatNumber(n: number): string {
-  return new Intl.NumberFormat('en-IN', { maximumFractionDigits: 2 }).format(n);
+  return new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 }).format(n);
 }
 
 function formatVolume(v: number): string {
-  if (v >= 1_00_00_000) return `${(v / 1_00_00_000).toFixed(1)}Cr`;
-  if (v >= 1_00_000) return `${(v / 1_00_000).toFixed(1)}L`;
+  if (v >= 1_000_000_000) return `${(v / 1_000_000_000).toFixed(1)}B`;
+  if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(1)}M`;
   if (v >= 1_000) return `${(v / 1_000).toFixed(1)}K`;
   return v.toString();
 }
 
-/* ── Sector heatmap: 12 sectors mapped to stocks ── */
+/* ── Sector heatmap: US sectors mapped to stocks ── */
 const SECTOR_MAP: Record<string, string[]> = {
-  IT: ['TCS.NS', 'INFY.NS', 'WIPRO.NS', 'HCLTECH.NS', 'TECHM.NS'],
-  Banking: ['HDFCBANK.NS', 'ICICIBANK.NS', 'SBIN.NS', 'KOTAKBANK.NS', 'AXISBANK.NS'],
-  Auto: ['EICHERMOT.NS', 'MARUTI.NS'],
-  Pharma: ['SUNPHARMA.NS', 'DRREDDY.NS', 'CIPLA.NS'],
-  Energy: ['RELIANCE.NS', 'NTPC.NS', 'POWERGRID.NS', 'ONGC.NS'],
-  FMCG: ['ITC.NS'],
-  Metals: ['TATASTEEL.NS', 'HINDALCO.NS', 'JSWSTEEL.NS'],
-  Realty: ['DLF.NS'],
-  Infra: ['LT.NS', 'ADANIENT.NS'],
-  Finance: ['BAJFINANCE.NS', 'BAJAJFINSV.NS'],
-  Media: ['ZEEL.NS'],
-  Telecom: ['BHARTIARTL.NS'],
+  Tech: ['AAPL', 'MSFT', 'GOOGL', 'META', 'NVDA'],
+  'E-Commerce': ['AMZN', 'COST', 'WMT'],
+  Finance: ['JPM', 'V', 'MA', 'PYPL'],
+  Healthcare: ['JNJ', 'UNH', 'PFE', 'MRK', 'ABBV'],
+  Energy: ['XOM', 'CVX'],
+  Consumer: ['PG', 'KO', 'PEP', 'NKE'],
+  Media: ['DIS', 'NFLX'],
+  Software: ['ADBE', 'CRM'],
+  Auto: ['TSLA'],
+  Retail: ['HD'],
+  Semicon: ['INTC'],
 };
 
 /* ── Index Card Component ── */
@@ -264,7 +263,7 @@ export default function DashboardPage() {
       // 2. Batch-fetch all stock quotes in ONE call (instead of 30 individual calls)
       const batchRes = await apiClient.post<{ success: boolean; data: any[] }>(
         '/api/v1/market/batch-quotes',
-        { symbols: NIFTY_STOCKS }
+        { symbols: MARKET_STOCKS }
       );
 
       const quotes = (batchRes.data || []) as StockMover[];
@@ -309,7 +308,7 @@ export default function DashboardPage() {
             Intelligence Dashboard
           </h1>
           <p className="text-sm text-[var(--text-muted)] mt-0.5 font-mono">
-            Real-time market overview · India + US
+            Real-time market overview · US Markets
           </p>
         </div>
 
@@ -386,10 +385,10 @@ export default function DashboardPage() {
       >
         <span className="flex items-center gap-1.5">
           <Activity className="w-3 h-3" />
-          Data: ~15s delayed via Yahoo Finance
+          Data via Twelve Data API
         </span>
         <span>•</span>
-        <span>NSE/BSE + NYSE/NASDAQ</span>
+        <span>NYSE / NASDAQ</span>
         <span>•</span>
         <span>Auto-refresh: 60s</span>
       </motion.div>
