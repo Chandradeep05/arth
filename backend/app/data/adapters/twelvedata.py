@@ -25,10 +25,18 @@ from app.data.adapters.base import BaseDataAdapter
 logger = get_logger(__name__)
 
 # ── Rate limiting ─────────────────────────────────────────────────
-# Free tier: 8 credits/min. We cap at 7 to leave margin.
+# Free tier: 8 credits/min. Each symbol in a request = 1 credit.
+# With caching, we rarely hit the API more than once per 5min.
 _request_semaphore = asyncio.Semaphore(1)
-_MIN_REQUEST_INTERVAL = 9.0  # ~6.6 req/min (safe under 8)
+_MIN_REQUEST_INTERVAL = 1.0  # 1s between API calls (cache handles throttling)
 _last_request_time = [0.0]
+
+# ── In-memory cache ──────────────────────────────────────────────
+# Avoids burning credits on repeat requests.
+_cache: Dict[str, tuple] = {}  # key → (data, expiry_time)
+_CACHE_TTL_QUOTE = 300       # 5 min for quotes
+_CACHE_TTL_SEARCH = 3600     # 1 hour for searches
+_CACHE_TTL_OHLCV = 600       # 10 min for OHLCV
 
 # ── Shared httpx client ──────────────────────────────────────────
 _http_client: Optional[httpx.AsyncClient] = None
@@ -36,19 +44,8 @@ _api_key: Optional[str] = None
 
 BASE_URL = "https://api.twelvedata.com"
 
-# Index symbol mapping: yfinance format → Twelve Data format
-_INDEX_MAP = {
-    "^GSPC": "SPX",       # S&P 500
-    "^IXIC": "IXIC",      # NASDAQ Composite
-    "^DJI": "DJI",        # Dow Jones
-}
-
-# Index display names
-_INDEX_NAMES = {
-    "SPX": "S&P 500",
-    "IXIC": "NASDAQ",
-    "DJI": "Dow Jones",
-}
+# Max symbols per batch (free tier = 8 credits/min)
+_MAX_BATCH_SIZE = 8
 
 
 def _get_client() -> httpx.AsyncClient:
@@ -78,10 +75,30 @@ class TwelveDataAdapter(BaseDataAdapter):
 
     adapter_name = "twelvedata"
 
+    @staticmethod
+    def _cache_get(key: str) -> Optional[Any]:
+        """Get from cache if not expired."""
+        entry = _cache.get(key)
+        if entry and time.monotonic() < entry[1]:
+            return entry[0]
+        return None
+
+    @staticmethod
+    def _cache_set(key: str, data: Any, ttl: float):
+        """Store in cache with TTL."""
+        _cache[key] = (data, time.monotonic() + ttl)
+
     async def _throttled_request(
-        self, endpoint: str, params: Dict[str, Any]
+        self, endpoint: str, params: Dict[str, Any],
+        cache_key: Optional[str] = None, cache_ttl: float = _CACHE_TTL_QUOTE,
     ) -> Optional[Dict[str, Any]]:
-        """Make a rate-limited API request."""
+        """Make a rate-limited, cached API request."""
+        # Check cache first
+        if cache_key:
+            cached = self._cache_get(cache_key)
+            if cached is not None:
+                return cached
+
         api_key = _get_api_key()
         if not api_key:
             return None
@@ -89,6 +106,12 @@ class TwelveDataAdapter(BaseDataAdapter):
         params["apikey"] = api_key
 
         async with _request_semaphore:
+            # Re-check cache (another request may have populated it while waiting)
+            if cache_key:
+                cached = self._cache_get(cache_key)
+                if cached is not None:
+                    return cached
+
             now = time.monotonic()
             elapsed = now - _last_request_time[0]
             if elapsed < _MIN_REQUEST_INTERVAL:
@@ -114,6 +137,10 @@ class TwelveDataAdapter(BaseDataAdapter):
                     )
                     return None
 
+                # Cache successful response
+                if cache_key:
+                    self._cache_set(cache_key, data, cache_ttl)
+
                 return data
 
             except httpx.HTTPError as e:
@@ -124,7 +151,10 @@ class TwelveDataAdapter(BaseDataAdapter):
         """Get US stock quote from Twelve Data /quote endpoint."""
 
         async def _fetch():
-            data = await self._throttled_request("quote", {"symbol": symbol})
+            data = await self._throttled_request(
+                "quote", {"symbol": symbol},
+                cache_key=f"quote:{symbol}", cache_ttl=_CACHE_TTL_QUOTE,
+            )
             if data is None or "close" not in data:
                 return None
 
@@ -174,11 +204,12 @@ class TwelveDataAdapter(BaseDataAdapter):
         td_interval = interval_map.get(interval, "1day")
 
         async def _fetch():
-            data = await self._throttled_request("time_series", {
-                "symbol": symbol,
-                "interval": td_interval,
-                "outputsize": outputsize,
-            })
+            data = await self._throttled_request(
+                "time_series",
+                {"symbol": symbol, "interval": td_interval, "outputsize": outputsize},
+                cache_key=f"ohlcv:{symbol}:{period}:{interval}",
+                cache_ttl=_CACHE_TTL_OHLCV,
+            )
             if data is None or "values" not in data:
                 return None
 
@@ -207,7 +238,10 @@ class TwelveDataAdapter(BaseDataAdapter):
         """Build company info from /quote data (profile endpoint is paid-only)."""
 
         async def _fetch():
-            data = await self._throttled_request("quote", {"symbol": symbol})
+            data = await self._throttled_request(
+                "quote", {"symbol": symbol},
+                cache_key=f"quote:{symbol}", cache_ttl=_CACHE_TTL_QUOTE,
+            )
             if data is None or "close" not in data:
                 return None
 
@@ -242,10 +276,11 @@ class TwelveDataAdapter(BaseDataAdapter):
         """Search symbols via /symbol_search."""
 
         async def _fetch():
-            data = await self._throttled_request("symbol_search", {
-                "symbol": query,
-                "outputsize": 10,
-            })
+            data = await self._throttled_request(
+                "symbol_search", {"symbol": query, "outputsize": 10},
+                cache_key=f"search:{query.lower()}",
+                cache_ttl=_CACHE_TTL_SEARCH,
+            )
             if data is None or "data" not in data:
                 return []
 
@@ -264,86 +299,86 @@ class TwelveDataAdapter(BaseDataAdapter):
         return result or []
 
     async def get_market_indices(self) -> List[Dict[str, Any]]:
-        """Get US indices (S&P 500, NASDAQ) from Twelve Data."""
-
-        async def _fetch():
-            results = []
-            for yf_symbol, td_symbol in _INDEX_MAP.items():
-                try:
-                    data = await self._throttled_request("quote", {"symbol": td_symbol})
-                    if data and "close" in data:
-                        price = float(data.get("close", 0))
-                        change = float(data.get("change", 0))
-                        change_pct = float(data.get("percent_change", 0))
-
-                        results.append({
-                            "symbol": yf_symbol,
-                            "name": _INDEX_NAMES.get(td_symbol, td_symbol),
-                            "price": round(price, 2),
-                            "change": round(change, 2),
-                            "change_percent": round(change_pct, 2),
-                            "market": "us",
-                        })
-                except Exception as e:
-                    logger.warning("twelvedata_index_failed",
-                                   symbol=td_symbol, error=str(e))
-                    continue
-
-            return results
-
-        result = await self.execute_with_resilience(_fetch)
-        return result or []
+        """US indices are paid-only on free tier. Return empty."""
+        # SPX, IXIC, DJI all require Grow/Venture plan.
+        # Don't waste credits on calls that always fail.
+        return []
 
     async def get_batch_quotes(self, symbols: List[str]) -> List[Dict[str, Any]]:
-        """Batch-fetch quotes. Twelve Data supports comma-separated symbols."""
+        """Batch-fetch quotes in chunks of 8 (free tier = 8 credits/min).
 
-        async def _fetch():
-            # Twelve Data allows comma-separated symbols in one /quote call
-            symbol_str = ",".join(symbols)
-            data = await self._throttled_request("quote", {"symbol": symbol_str})
-            if data is None:
-                return []
+        Each symbol costs 1 credit. Comma-separated symbols in one call
+        still cost 1 credit per symbol. So we chunk and cache aggressively.
+        """
+        all_results = []
 
-            # Single symbol returns a dict, multiple returns a dict of dicts
-            results = []
-            if isinstance(data, dict) and "symbol" in data:
-                # Single symbol response
-                items = [data]
-            elif isinstance(data, dict):
-                # Multiple symbols — values are the quote dicts
-                items = [v for v in data.values() if isinstance(v, dict) and "symbol" in v]
-            else:
-                return []
+        # Split into chunks of _MAX_BATCH_SIZE
+        for i in range(0, len(symbols), _MAX_BATCH_SIZE):
+            chunk = symbols[i:i + _MAX_BATCH_SIZE]
+            chunk_key = f"batch:{'|'.join(sorted(chunk))}"
 
-            for item in items:
-                if item.get("status") == "error":
-                    continue
-                try:
-                    price = float(item.get("close", 0))
-                    change = float(item.get("change", 0))
-                    change_pct = float(item.get("percent_change", 0))
-                    volume = int(item.get("volume", 0))
+            # Check cache for this exact chunk
+            cached = self._cache_get(chunk_key)
+            if cached is not None:
+                all_results.extend(cached)
+                continue
 
-                    results.append({
-                        "symbol": item.get("symbol", ""),
-                        "name": item.get("name", ""),
-                        "price": round(price, 2),
-                        "change": round(change, 2),
-                        "change_percent": round(change_pct, 2),
-                        "volume": volume,
-                    })
-                except (ValueError, TypeError):
-                    continue
+            async def _fetch_chunk(syms=chunk):
+                symbol_str = ",".join(syms)
+                data = await self._throttled_request(
+                    "quote", {"symbol": symbol_str},
+                )
+                if data is None:
+                    return []
 
-            return results
+                results = []
+                if isinstance(data, dict) and "symbol" in data:
+                    items = [data]
+                elif isinstance(data, dict):
+                    items = [v for v in data.values()
+                             if isinstance(v, dict) and "symbol" in v]
+                else:
+                    return []
 
-        result = await self.execute_with_resilience(_fetch)
-        return result or []
+                for item in items:
+                    if item.get("status") == "error":
+                        continue
+                    try:
+                        results.append({
+                            "symbol": item.get("symbol", ""),
+                            "name": item.get("name", ""),
+                            "price": round(float(item.get("close", 0)), 2),
+                            "change": round(float(item.get("change", 0)), 2),
+                            "change_percent": round(float(item.get("percent_change", 0)), 2),
+                            "volume": int(item.get("volume", 0)),
+                        })
+                    except (ValueError, TypeError):
+                        continue
+
+                return results
+
+            try:
+                chunk_results = await self.execute_with_resilience(_fetch_chunk)
+                chunk_results = chunk_results or []
+                # Cache the chunk results
+                self._cache_set(chunk_key, chunk_results, _CACHE_TTL_QUOTE)
+                all_results.extend(chunk_results)
+            except Exception as e:
+                logger.warning("twelvedata_batch_chunk_failed", error=str(e))
+
+            # Wait 60s between chunks to reset credit counter
+            if i + _MAX_BATCH_SIZE < len(symbols):
+                await asyncio.sleep(60)
+
+        return all_results
 
     async def health_check(self) -> bool:
         """Quick health check against Twelve Data."""
         try:
-            data = await self._throttled_request("quote", {"symbol": "AAPL"})
+            data = await self._throttled_request(
+                "quote", {"symbol": "AAPL"},
+                cache_key="health:AAPL", cache_ttl=_CACHE_TTL_QUOTE,
+            )
             return data is not None and "close" in data
         except Exception:
             return False

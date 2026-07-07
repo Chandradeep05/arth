@@ -19,13 +19,10 @@ import LoadingSkeleton from '@/components/shared/LoadingSkeleton';
 import type { MarketIndex } from '@/types/market';
 
 /* ── Stocks to scan for gainers/losers (US market — reliable via Twelve Data) ── */
+/* 8 stocks = exactly 8 credits/min on free tier (one batch call) */
 const MARKET_STOCKS = [
   'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META',
-  'NVDA', 'TSLA', 'JPM', 'V', 'JNJ',
-  'WMT', 'PG', 'UNH', 'HD', 'MA',
-  'DIS', 'NFLX', 'PYPL', 'ADBE', 'CRM',
-  'PFE', 'MRK', 'ABBV', 'XOM', 'CVX',
-  'KO', 'PEP', 'COST', 'NKE', 'INTC',
+  'NVDA', 'TSLA', 'JPM',
 ];
 
 interface StockMover {
@@ -49,19 +46,12 @@ function formatVolume(v: number): string {
   return v.toString();
 }
 
-/* ── Sector heatmap: US sectors mapped to stocks ── */
+/* ── Sector heatmap: US sectors mapped to tracked stocks ── */
 const SECTOR_MAP: Record<string, string[]> = {
   Tech: ['AAPL', 'MSFT', 'GOOGL', 'META', 'NVDA'],
-  'E-Commerce': ['AMZN', 'COST', 'WMT'],
-  Finance: ['JPM', 'V', 'MA', 'PYPL'],
-  Healthcare: ['JNJ', 'UNH', 'PFE', 'MRK', 'ABBV'],
-  Energy: ['XOM', 'CVX'],
-  Consumer: ['PG', 'KO', 'PEP', 'NKE'],
-  Media: ['DIS', 'NFLX'],
-  Software: ['ADBE', 'CRM'],
+  'E-Commerce': ['AMZN'],
   Auto: ['TSLA'],
-  Retail: ['HD'],
-  Semicon: ['INTC'],
+  Finance: ['JPM'],
 };
 
 /* ── Index Card Component ── */
@@ -342,28 +332,55 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* Market Indices Grid */}
+      {/* Top Stocks — indices are paid-only on free tier */}
       {loading ? (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
           {[...Array(4)].map((_, i) => (
             <LoadingSkeleton key={i} variant="card" />
           ))}
         </div>
-      ) : indices.length > 0 ? (
+      ) : gainers.length > 0 || losers.length > 0 ? (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-          {indices.map((index, i) => (
-            <IndexCard key={index.symbol} index={index} delay={i} />
+          {[...gainers.slice(0, 2), ...losers.slice(0, 2)].map((stock, i) => (
+            <motion.div
+              key={stock.symbol}
+              initial={{ opacity: 0, y: 12 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: i * 0.1, duration: 0.4 }}
+              className="card p-5 group cursor-pointer"
+            >
+              <div className="flex items-center justify-between mb-3">
+                <span className="text-xs font-mono text-[var(--text-muted)] uppercase tracking-wider">
+                  {stock.symbol}
+                </span>
+                {stock.change_percent >= 0 ? (
+                  <TrendingUp className="w-4 h-4 text-[var(--green)]" />
+                ) : (
+                  <TrendingDown className="w-4 h-4 text-[var(--red)]" />
+                )}
+              </div>
+              <div className="text-2xl font-heading font-bold text-[var(--text)] mb-1">
+                ${formatNumber(stock.price)}
+              </div>
+              <div className="flex items-center gap-2">
+                <span className={`text-sm font-mono ${stock.change >= 0 ? 'text-[var(--green)]' : 'text-[var(--red)]'}`}>
+                  {stock.change >= 0 ? '+' : ''}{stock.change.toFixed(2)}
+                </span>
+                <span className={`text-xs font-mono ${stock.change_percent >= 0 ? 'text-[var(--green)]' : 'text-[var(--red)]'}`}>
+                  ({stock.change_percent >= 0 ? '+' : ''}{stock.change_percent.toFixed(2)}%)
+                </span>
+              </div>
+              <div className="text-[10px] font-mono text-[var(--text-dim)] mt-1">
+                {stock.name}
+              </div>
+            </motion.div>
           ))}
         </div>
       ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-          {[...Array(4)].map((_, i) => (
-            <div key={i} className="card p-5">
-              <div className="text-xs font-mono text-[var(--text-dim)] text-center py-4">
-                Loading index data...
-              </div>
-            </div>
-          ))}
+        <div className="card p-5">
+          <div className="text-xs font-mono text-[var(--text-dim)] text-center py-4">
+            Loading market data...
+          </div>
         </div>
       )}
 
@@ -390,7 +407,7 @@ export default function DashboardPage() {
         <span>•</span>
         <span>NYSE / NASDAQ</span>
         <span>•</span>
-        <span>Auto-refresh: 60s</span>
+        <span>Auto-refresh: 5min</span>
       </motion.div>
     </div>
   );

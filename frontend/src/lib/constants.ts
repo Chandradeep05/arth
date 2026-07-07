@@ -48,8 +48,8 @@ export const DATA_DELAY_LABEL = '~15s delayed';
 
 /** Auto-refresh intervals in milliseconds */
 export const REFRESH_INTERVALS = {
-  tick: 60_000,         // Price tick data (was 15s — too aggressive for free tier)
-  indicators: 60_000,  // Technical indicators
+  tick: 300_000,         // Price tick data (5min — matches Twelve Data cache TTL)
+  indicators: 300_000,  // Technical indicators
   sentiment: 300_000,  // Sentiment scores
   research: 3_600_000, // Research reports
   fundamentals: 86_400_000, // Fundamental data (daily)
