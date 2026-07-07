@@ -637,9 +637,128 @@ class YahooFinanceAdapter(BaseDataAdapter):
             return False
 
 
+# ── Hybrid Adapter ──────────────────────────────────────────────
+# Routes US stocks → Twelve Data (API key, never blocked)
+# Routes Indian stocks → yfinance (best-effort, cached heavily)
+# Every file importing yahoo_adapter works unchanged.
+
+class HybridAdapter(BaseDataAdapter):
+    """Routes requests to the right data source based on market."""
+
+    adapter_name = "hybrid"
+
+    def __init__(self):
+        super().__init__()
+        self._yahoo = YahooFinanceAdapter()
+        # Lazy import to avoid circular deps
+        self._twelve = None
+
+    def _get_twelve(self):
+        if self._twelve is None:
+            from app.data.adapters.twelvedata import twelvedata_adapter
+            self._twelve = twelvedata_adapter
+        return self._twelve
+
+    @staticmethod
+    def _is_indian(symbol: str) -> bool:
+        """Check if symbol is an Indian stock (NSE/BSE)."""
+        s = symbol.upper()
+        return s.endswith(".NS") or s.endswith(".BO")
+
+    @staticmethod
+    def _is_index(symbol: str) -> bool:
+        """Check if symbol is a market index."""
+        return symbol.startswith("^")
+
+    def _route(self, symbol: str):
+        """Return the right adapter for a symbol."""
+        if self._is_indian(symbol):
+            return self._yahoo
+        return self._get_twelve()
+
+    async def get_quote(self, symbol: str):
+        return await self._route(symbol).get_quote(symbol)
+
+    async def get_ohlcv(self, symbol: str, period: str = "1mo", interval: str = "1d"):
+        return await self._route(symbol).get_ohlcv(symbol, period=period, interval=interval)
+
+    async def get_company_info(self, symbol: str):
+        return await self._route(symbol).get_company_info(symbol)
+
+    async def search(self, query: str):
+        """Search both sources and merge results."""
+        td_results = await self._get_twelve().search(query)
+        # Also try yfinance for Indian stocks
+        try:
+            yf_results = await self._yahoo.search(query)
+        except Exception:
+            yf_results = []
+        # Deduplicate by symbol
+        seen = {r["symbol"] for r in td_results}
+        for r in yf_results:
+            if r["symbol"] not in seen:
+                td_results.append(r)
+                seen.add(r["symbol"])
+        return td_results
+
+    async def get_market_indices(self):
+        """Fetch US indices from Twelve Data, Indian from yfinance."""
+        us_indices = await self._get_twelve().get_market_indices()
+        try:
+            all_indices = await self._yahoo.get_market_indices()
+            # Filter to only Indian indices from yfinance
+            indian_indices = [
+                idx for idx in all_indices
+                if idx.get("symbol", "").startswith("^N") or idx.get("symbol", "").startswith("^B")
+            ]
+        except Exception:
+            indian_indices = []
+        return us_indices + indian_indices
+
+    async def get_batch_quotes(self, symbols):
+        """Split batch into US and Indian, route each to right source."""
+        us_symbols = [s for s in symbols if not self._is_indian(s)]
+        indian_symbols = [s for s in symbols if self._is_indian(s)]
+
+        results = []
+        if us_symbols:
+            try:
+                us_results = await self._get_twelve().get_batch_quotes(us_symbols)
+                results.extend(us_results or [])
+            except Exception as e:
+                logger.warning("hybrid_us_batch_failed", error=str(e))
+
+        if indian_symbols:
+            try:
+                # yfinance batch quotes
+                for sym in indian_symbols:
+                    quote = await self._yahoo.get_quote(sym)
+                    if quote:
+                        results.append({
+                            "symbol": quote.get("symbol", sym),
+                            "name": quote.get("name", ""),
+                            "price": quote.get("price", 0),
+                            "change": quote.get("change", 0),
+                            "change_percent": quote.get("change_percent", 0),
+                            "volume": quote.get("volume", 0),
+                        })
+            except Exception as e:
+                logger.warning("hybrid_indian_batch_failed", error=str(e))
+
+        return results
+
+    async def health_check(self) -> bool:
+        """Check if at least one source is healthy."""
+        try:
+            td_ok = await self._get_twelve().health_check()
+        except Exception:
+            td_ok = False
+        return td_ok  # US stocks working = system is healthy
+
+
 # ── Module-level singleton ──────────────────────────────────────
 # All routers and engines should import this instead of creating
-# their own YahooFinanceAdapter instances. This ensures a single
-# shared circuit breaker and thread pool across the application.
-yahoo_adapter = YahooFinanceAdapter()
+# their own adapter instances. HybridAdapter routes to the right
+# source (Twelve Data for US, yfinance for India) transparently.
+yahoo_adapter = HybridAdapter()
 

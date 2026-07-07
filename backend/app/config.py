@@ -78,6 +78,11 @@ class Settings(BaseSettings):
     # Without this, Render's shared IP gets 429'd by Yahoo immediately.
     yahoo_proxy_url: str = ""
 
+    # ── Twelve Data API (US stocks) ──
+    # Free tier: 8 credits/min, 800/day. Used for US stocks only.
+    # Indian stocks (NSE/BSE) still use yfinance (free tier doesn't cover India).
+    twelvedata_api_key: str = ""
+
     # ── LLM Configuration ──
     llm_tier: LLMTier = LLMTier.CLOUD
 
