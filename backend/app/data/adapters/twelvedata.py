@@ -92,12 +92,22 @@ class TwelveDataAdapter(BaseDataAdapter):
         self, endpoint: str, params: Dict[str, Any],
         cache_key: Optional[str] = None, cache_ttl: float = _CACHE_TTL_QUOTE,
     ) -> Optional[Dict[str, Any]]:
-        """Make a rate-limited, cached API request."""
+        """Make a rate-limited, cached API request.
+
+        On 429 (rate limit): returns None and sets a 60s cooldown.
+        Does NOT raise — prevents circuit breaker from treating
+        rate limits as outages.
+        """
         # Check cache first
         if cache_key:
             cached = self._cache_get(cache_key)
             if cached is not None:
                 return cached
+
+        # Check if we're in rate-limit cooldown
+        if self._cache_get("_rate_limit_cooldown"):
+            logger.debug("twelvedata_in_cooldown", endpoint=endpoint)
+            return None
 
         api_key = _get_api_key()
         if not api_key:
@@ -112,6 +122,10 @@ class TwelveDataAdapter(BaseDataAdapter):
                 if cached is not None:
                     return cached
 
+            # Re-check cooldown (might have been set while waiting for semaphore)
+            if self._cache_get("_rate_limit_cooldown"):
+                return None
+
             now = time.monotonic()
             elapsed = now - _last_request_time[0]
             if elapsed < _MIN_REQUEST_INTERVAL:
@@ -123,17 +137,35 @@ class TwelveDataAdapter(BaseDataAdapter):
                 _last_request_time[0] = time.monotonic()
 
                 if resp.status_code == 429:
-                    logger.warning("twelvedata_rate_limited", endpoint=endpoint)
-                    raise Exception("Too Many Requests. Rate limited. Try after a while.")
+                    # Rate limited — set 60s cooldown and return None.
+                    # Do NOT raise — this is not a service outage,
+                    # it's a normal free-tier constraint.
+                    logger.warning(
+                        "twelvedata_rate_limited",
+                        endpoint=endpoint,
+                        cooldown_s=60,
+                    )
+                    self._cache_set("_rate_limit_cooldown", True, 60.0)
+                    return None
 
                 data = resp.json()
 
+                # Check for API-level errors (wrong symbol, paid feature, etc.)
                 if data.get("status") == "error":
+                    code = data.get("code")
+                    msg = data.get("message", "")
+
+                    # Rate limit can also come as a JSON error
+                    if code == 429 or "rate" in msg.lower():
+                        logger.warning("twelvedata_rate_limited_json", endpoint=endpoint)
+                        self._cache_set("_rate_limit_cooldown", True, 60.0)
+                        return None
+
                     logger.warning(
                         "twelvedata_api_error",
                         endpoint=endpoint,
-                        code=data.get("code"),
-                        message=data.get("message", ""),
+                        code=code,
+                        message=msg,
                     )
                     return None
 
