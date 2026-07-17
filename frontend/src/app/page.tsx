@@ -180,7 +180,7 @@ function MoversTable({
           {movers.length === 0 ? (
             <tr>
               <td colSpan={4} className="text-center text-[var(--text-dim)] py-8 font-mono text-xs">
-                Loading market data...
+                {type === 'gainers' ? 'No gainers today — market is red' : 'No losers today — market is green'}
               </td>
             </tr>
           ) : (
@@ -197,7 +197,7 @@ function MoversTable({
                   </Link>
                 </td>
                 <td className="text-right font-mono text-sm">
-                  ₹{formatNumber(stock.price ?? 0)}
+                  ${formatNumber(stock.price ?? 0)}
                 </td>
                 <td className="text-right">
                   <div className={`font-mono text-sm font-medium ${(stock.change ?? 0) >= 0 ? 'text-[var(--green)]' : 'text-[var(--red)]'}`}>
@@ -233,6 +233,7 @@ export default function DashboardPage() {
   const [losers, setLosers] = useState<StockMover[]>([]);
   const [sectors, setSectors] = useState<{ name: string; change: number }[]>([]);
   const [loading, setLoading] = useState(true);
+  const [quotesLoaded, setQuotesLoaded] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<Date>(new Date());
   const [apiConnected, setApiConnected] = useState(false);
 
@@ -275,6 +276,7 @@ export default function DashboardPage() {
         }
         setSectors(sectorData);
       }
+      setQuotesLoaded(true);
     } catch {
       setApiConnected(false);
     } finally {
@@ -379,7 +381,7 @@ export default function DashboardPage() {
       ) : (
         <div className="card p-5">
           <div className="text-xs font-mono text-[var(--text-dim)] text-center py-4">
-            Loading market data...
+            {quotesLoaded ? 'Market Closed — No trading data available right now' : 'Loading market data...'}
           </div>
         </div>
       )}
