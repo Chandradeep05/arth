@@ -645,9 +645,8 @@ class YahooFinanceAdapter(BaseDataAdapter):
 class HybridAdapter(BaseDataAdapter):
     """Routes requests to the right data source based on market.
 
-    US stocks: Twelve Data API (API-key auth, no IP blocking)
-    Indian stocks: not available on free tier cloud deployment.
-    Kept clean — no futile retries against blocked sources.
+    US stocks:     Twelve Data API (API-key auth, no IP blocking)
+    Indian stocks: NSE India API (free, cookie-based auth)
 
     Provides ``throttled_run_sync()`` — a public API for downstream
     modules (prediction, sentiment, governance, RAG) that need to run
@@ -659,6 +658,7 @@ class HybridAdapter(BaseDataAdapter):
     def __init__(self):
         super().__init__()
         self._twelve = None
+        self._nse = None
         # Raw Yahoo adapter kept for modules that need direct yfinance access
         # (prediction, sentiment, governance, RAG document processing).
         # These modules call throttled_run_sync() to run sync yfinance
@@ -670,6 +670,12 @@ class HybridAdapter(BaseDataAdapter):
             from app.data.adapters.twelvedata import twelvedata_adapter
             self._twelve = twelvedata_adapter
         return self._twelve
+
+    def _get_nse(self):
+        if self._nse is None:
+            from app.data.adapters.nse import nse_adapter
+            self._nse = nse_adapter
+        return self._nse
 
     async def throttled_run_sync(self, func, *args, **kwargs):
         """Public API: run a synchronous function through the Yahoo rate limiter.
@@ -692,56 +698,122 @@ class HybridAdapter(BaseDataAdapter):
 
     async def get_quote(self, symbol: str):
         if self._is_indian(symbol):
-            logger.info("indian_stock_unavailable", symbol=symbol,
-                        reason="No free API supports Indian stocks from cloud IPs")
+            try:
+                result = await self._get_nse().get_quote(symbol)
+                if result:
+                    return result
+            except Exception as e:
+                logger.warning("nse_quote_failed", symbol=symbol, error=str(e))
             return None
         return await self._get_twelve().get_quote(symbol)
 
     async def get_ohlcv(self, symbol: str, period: str = "1mo", interval: str = "1d"):
         if self._is_indian(symbol):
+            try:
+                result = await self._get_nse().get_ohlcv(symbol, period=period, interval=interval)
+                if result:
+                    return result
+            except Exception as e:
+                logger.warning("nse_ohlcv_failed", symbol=symbol, error=str(e))
             return None
         return await self._get_twelve().get_ohlcv(symbol, period=period, interval=interval)
 
     async def get_company_info(self, symbol: str):
         if self._is_indian(symbol):
+            try:
+                result = await self._get_nse().get_company_info(symbol)
+                if result:
+                    return result
+            except Exception as e:
+                logger.warning("nse_company_info_failed", symbol=symbol, error=str(e))
             return None
         return await self._get_twelve().get_company_info(symbol)
 
     async def search(self, query: str):
-        """Search via Twelve Data (finds both US and Indian symbols)."""
+        """Search across both providers. NSE for Indian names, TwelveData for US."""
+        results = []
+        # Try NSE search (for Indian stocks)
         try:
-            return await self._get_twelve().search(query)
+            nse_results = await self._get_nse().search(query)
+            if nse_results:
+                results.extend(nse_results)
         except Exception:
-            return []
+            pass
+        # Always include TwelveData results
+        try:
+            td_results = await self._get_twelve().search(query)
+            if td_results:
+                results.extend(td_results)
+        except Exception:
+            pass
+        return results
 
     async def get_market_indices(self):
-        """US indices from Twelve Data. Indian indices not available."""
+        """Combine US indices (TwelveData) + Indian indices (NSE)."""
+        results = []
+        # TwelveData indices (US)
         try:
-            return await self._get_twelve().get_market_indices()
+            td_indices = await self._get_twelve().get_market_indices()
+            if td_indices:
+                results.extend(td_indices)
         except Exception:
-            return []
+            pass
+        # NSE indices (Indian)
+        try:
+            nse_indices = await self._get_nse().get_market_indices()
+            if nse_indices:
+                results.extend(nse_indices)
+        except Exception:
+            pass
+        return results
 
     async def get_batch_quotes(self, symbols):
-        """Batch quotes — US only, Indian symbols silently skipped."""
+        """Batch quotes — route Indian symbols to NSE, US to TwelveData."""
+        results = []
+
+        # Split by market
         us_symbols = [s for s in symbols if not self._is_indian(s)]
-        if not us_symbols:
-            return []
-        try:
-            return await self._get_twelve().get_batch_quotes(us_symbols) or []
-        except Exception as e:
-            logger.warning("hybrid_batch_failed", error=str(e))
-            return []
+        indian_symbols = [s for s in symbols if self._is_indian(s)]
+
+        # US batch (TwelveData supports batch natively)
+        if us_symbols:
+            try:
+                td_results = await self._get_twelve().get_batch_quotes(us_symbols)
+                if td_results:
+                    results.extend(td_results)
+            except Exception as e:
+                logger.warning("hybrid_batch_us_failed", error=str(e))
+
+        # Indian quotes (one-by-one through NSE, rate limited)
+        for sym in indian_symbols:
+            try:
+                quote = await self._get_nse().get_quote(sym)
+                if quote:
+                    results.append(quote)
+            except Exception:
+                pass
+
+        return results
 
     async def health_check(self) -> bool:
-        """US stocks working = system is healthy."""
+        """At least one provider working = healthy."""
         try:
-            return await self._get_twelve().health_check()
+            td_ok = await self._get_twelve().health_check()
+            if td_ok:
+                return True
         except Exception:
-            return False
+            pass
+        try:
+            nse_ok = await self._get_nse().health_check()
+            if nse_ok:
+                return True
+        except Exception:
+            pass
+        return False
 
 
 # ── Module-level singleton ──────────────────────────────────────
-# All routers and engines import this. Twelve Data for US stocks.
-# Indian stocks return None — frontend handles the unavailable state.
+# All routers and engines import this.
+# US stocks → TwelveData, Indian stocks → NSE India API.
 yahoo_adapter = HybridAdapter()
 
