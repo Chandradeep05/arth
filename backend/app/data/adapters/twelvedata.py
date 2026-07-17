@@ -190,10 +190,25 @@ class TwelveDataAdapter(BaseDataAdapter):
             if data is None or "close" not in data:
                 return None
 
-            price = float(data.get("close", 0))
-            prev_close = float(data.get("previous_close", 0))
-            change = float(data.get("change", 0))
-            change_pct = float(data.get("percent_change", 0))
+            def _safe_float(val, fallback=0.0):
+                """Parse to float, returning fallback for empty/missing/invalid."""
+                if val is None or val == "":
+                    return fallback
+                try:
+                    return float(val)
+                except (ValueError, TypeError):
+                    return fallback
+
+            price = _safe_float(data.get("close"), 0)
+            prev_close = _safe_float(data.get("previous_close"), price)
+            change = _safe_float(data.get("change"), 0)
+            change_pct = _safe_float(data.get("percent_change"), 0)
+
+            # open/high/low may be "0" or "" when market is closed.
+            # Fall back to price so the UI never shows $0.00 or NaN.
+            raw_open = _safe_float(data.get("open"), 0)
+            raw_high = _safe_float(data.get("high"), 0)
+            raw_low = _safe_float(data.get("low"), 0)
 
             return {
                 "symbol": data.get("symbol", symbol).upper(),
@@ -201,10 +216,10 @@ class TwelveDataAdapter(BaseDataAdapter):
                 "price": round(price, 2),
                 "change": round(change, 2),
                 "change_percent": round(change_pct, 2),
-                "volume": int(data.get("volume", 0)),
-                "high": round(float(data.get("high", 0)), 2),
-                "low": round(float(data.get("low", 0)), 2),
-                "open": round(float(data.get("open", 0)), 2),
+                "volume": int(_safe_float(data.get("volume"), 0)),
+                "high": round(raw_high if raw_high > 0 else price, 2),
+                "low": round(raw_low if raw_low > 0 else price, 2),
+                "open": round(raw_open if raw_open > 0 else prev_close, 2),
                 "previous_close": round(prev_close, 2),
                 "market_cap": None,  # Not in /quote, needs /statistics (paid)
                 "pe_ratio": None,    # Not in /quote

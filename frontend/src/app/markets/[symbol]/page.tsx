@@ -25,16 +25,17 @@ import LoadingSkeleton from '@/components/shared/LoadingSkeleton';
 import PredictionPanel from '@/components/stock/PredictionPanel';
 import type { StockQuote, OHLCVBar, TechnicalIndicators } from '@/types/market';
 
-function formatNumber(n: number): string {
+function formatNumber(n: number | null | undefined): string {
+  if (n == null || isNaN(n)) return '—';
   return new Intl.NumberFormat('en-IN', { maximumFractionDigits: 2 }).format(n);
 }
 
-function formatMarketCap(n: number | null): string {
+function formatMarketCap(n: number | null, currencySymbol = '$'): string {
   if (!n) return 'N/A';
-  if (n >= 1e12) return `₹${(n / 1e12).toFixed(2)}T`;
-  if (n >= 1e9) return `₹${(n / 1e9).toFixed(2)}B`;
-  if (n >= 1e7) return `₹${(n / 1e7).toFixed(2)}Cr`;
-  return `₹${formatNumber(n)}`;
+  if (n >= 1e12) return `${currencySymbol}${(n / 1e12).toFixed(2)}T`;
+  if (n >= 1e9) return `${currencySymbol}${(n / 1e9).toFixed(2)}B`;
+  if (n >= 1e7) return `${currencySymbol}${(n / 1e7).toFixed(2)}Cr`;
+  return `${currencySymbol}${formatNumber(n)}`;
 }
 
 export default function StockDetailPage() {
@@ -211,7 +212,7 @@ export default function StockDetailPage() {
               </div>
               <div>
                 <span className="text-[var(--text-dim)] block">Mkt Cap</span>
-                <span className="text-[var(--text)]">{formatMarketCap(quote.market_cap)}</span>
+                <span className="text-[var(--text)]">{formatMarketCap(quote.market_cap, currency)}</span>
               </div>
               <div>
                 <span className="text-[var(--text-dim)] block">P/E</span>
