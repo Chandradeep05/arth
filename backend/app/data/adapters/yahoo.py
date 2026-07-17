@@ -648,6 +648,10 @@ class HybridAdapter(BaseDataAdapter):
     US stocks: Twelve Data API (API-key auth, no IP blocking)
     Indian stocks: not available on free tier cloud deployment.
     Kept clean — no futile retries against blocked sources.
+
+    Provides ``throttled_run_sync()`` — a public API for downstream
+    modules (prediction, sentiment, governance, RAG) that need to run
+    synchronous yfinance calls through the shared rate limiter.
     """
 
     adapter_name = "hybrid"
@@ -655,12 +659,30 @@ class HybridAdapter(BaseDataAdapter):
     def __init__(self):
         super().__init__()
         self._twelve = None
+        # Raw Yahoo adapter kept for modules that need direct yfinance access
+        # (prediction, sentiment, governance, RAG document processing).
+        # These modules call throttled_run_sync() to run sync yfinance
+        # functions through the shared rate-limiter + thread pool.
+        self._yahoo_raw = YahooFinanceAdapter()
 
     def _get_twelve(self):
         if self._twelve is None:
             from app.data.adapters.twelvedata import twelvedata_adapter
             self._twelve = twelvedata_adapter
         return self._twelve
+
+    async def throttled_run_sync(self, func, *args, **kwargs):
+        """Public API: run a synchronous function through the Yahoo rate limiter.
+
+        Used by downstream modules (prediction, sentiment, governance, RAG)
+        that need to call yfinance directly (e.g. ticker.news, ticker.info,
+        ticker.financials) with rate limiting and thread-pool offloading.
+
+        Example::
+
+            info = await yahoo_adapter.throttled_run_sync(lambda: ticker.info)
+        """
+        return await self._yahoo_raw._throttled_run_sync(func, *args, **kwargs)
 
     @staticmethod
     def _is_indian(symbol: str) -> bool:

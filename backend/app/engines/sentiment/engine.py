@@ -255,7 +255,7 @@ class SentimentEngine:
         """Fetch news from Yahoo Finance for a symbol."""
         try:
             ticker = make_ticker(symbol)
-            news = await self._yahoo._throttled_run_sync(lambda t=ticker: t.news)
+            news = await self._yahoo.throttled_run_sync(lambda t=ticker: t.news)
             if news and isinstance(news, list):
                 return news[:15]  # Limit to 15 articles
         except Exception as e:

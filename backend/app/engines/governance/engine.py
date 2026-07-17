@@ -119,11 +119,11 @@ async def get_governance_data(symbol: str) -> Dict[str, Any]:
         ticker = make_ticker(symbol)
 
         # Fetch through adapter throttle to respect rate limits
-        info = await _yahoo_adapter._throttled_run_sync(lambda t=ticker: t.info)
+        info = await _yahoo_adapter.throttled_run_sync(lambda t=ticker: t.info)
 
         # Major holders: DataFrame with % values
         try:
-            major_holders = await _yahoo_adapter._throttled_run_sync(
+            major_holders = await _yahoo_adapter.throttled_run_sync(
                 lambda t=ticker: t.major_holders
             )
         except Exception:
@@ -131,7 +131,7 @@ async def get_governance_data(symbol: str) -> Dict[str, Any]:
 
         # Institutional holders: DataFrame with holder names + shares
         try:
-            inst_holders = await _yahoo_adapter._throttled_run_sync(
+            inst_holders = await _yahoo_adapter.throttled_run_sync(
                 lambda t=ticker: t.institutional_holders
             )
         except Exception:

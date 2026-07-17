@@ -47,8 +47,8 @@ class DocumentProcessor:
         ticker = make_ticker(symbol)
 
         # Fetch data through adapter throttle (sequential, rate-limited)
-        info = await _yahoo_adapter._throttled_run_sync(lambda: ticker.info)
-        news = await _yahoo_adapter._throttled_run_sync(lambda: getattr(ticker, "news", []))
+        info = await _yahoo_adapter.throttled_run_sync(lambda: ticker.info)
+        news = await _yahoo_adapter.throttled_run_sync(lambda: getattr(ticker, "news", []))
 
         if not info:
             logger.warning("index_company_no_info", symbol=symbol)

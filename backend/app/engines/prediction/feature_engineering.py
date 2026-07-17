@@ -76,8 +76,8 @@ class FeatureEngineer:
         def _fetch_info():
             return make_ticker(symbol).info
 
-        hist = await _yahoo_adapter._throttled_run_sync(_fetch_hist)
-        info = await _yahoo_adapter._throttled_run_sync(_fetch_info)
+        hist = await _yahoo_adapter.throttled_run_sync(_fetch_hist)
+        info = await _yahoo_adapter.throttled_run_sync(_fetch_info)
 
         if hist is None or hist.empty or len(hist) < 30:
             raise ValueError(f"Insufficient data for {symbol}: need 30+ daily bars")
@@ -149,8 +149,8 @@ class FeatureEngineer:
         def _fetch_info():
             return make_ticker(symbol).info
 
-        hist = await _yahoo_adapter._throttled_run_sync(_fetch_hist)
-        info = await _yahoo_adapter._throttled_run_sync(_fetch_info)
+        hist = await _yahoo_adapter.throttled_run_sync(_fetch_hist)
+        info = await _yahoo_adapter.throttled_run_sync(_fetch_info)
 
         if hist is None or hist.empty or len(hist) < 25:
             raise ValueError(f"Insufficient recent data for {symbol}")

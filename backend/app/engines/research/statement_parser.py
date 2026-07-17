@@ -150,7 +150,7 @@ class StatementParser:
                     "quarterly_cashflow": _try_df("quarterly_cash_flow", "quarterly_cashflow"),
                 }
 
-            raw = await _yahoo_adapter._throttled_run_sync(
+            raw = await _yahoo_adapter.throttled_run_sync(
                 lambda t=ticker: _fetch_all_statements(t)
             )
 
