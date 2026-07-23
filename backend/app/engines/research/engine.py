@@ -86,7 +86,8 @@ class ResearchEngine:
             # history_result.data is a normalized DataFrame from MarketDataProvider
             # compute_indicators expects a list of bar dicts, so convert if DataFrame
             if hasattr(ohlcv_result, 'to_dict'):
-                ohlcv = ohlcv_result.reset_index().to_dict('records')
+                ohlcv_df = ohlcv_result.rename(columns=str.lower).reset_index()
+                ohlcv = ohlcv_df.rename(columns={'datetime': 'date'}).to_dict('records')
             elif isinstance(ohlcv_result, dict):
                 ohlcv = ohlcv_result.get("bars", ohlcv_result)
             else:

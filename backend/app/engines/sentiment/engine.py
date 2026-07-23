@@ -89,8 +89,8 @@ class SentimentEngine:
         redis = await get_redis()
         cache = CacheManager(redis)
 
-        async def _fetch_company(sym):
-            result = await self._data.get_company_info(sym)
+        async def _fetch_company(symbol):
+            result = await self._data.get_company_info(symbol)
             return result.data if result.available else None
 
         company = await cache.get_or_fetch(

@@ -193,10 +193,13 @@ class RiskEngine:
         """Volatility risk from 30-day price standard deviation."""
         factors = []
 
-        if not ohlcv or len(ohlcv) < 20:
+        if ohlcv is None or (hasattr(ohlcv, "empty") and ohlcv.empty) or len(ohlcv) < 20:
             return 50.0, ["Insufficient data for volatility calculation"]
 
-        closes = [bar["close"] for bar in ohlcv[-30:]]
+        if isinstance(ohlcv, pd.DataFrame):
+            closes = ohlcv["close"].tail(30).values
+        else:
+            closes = [bar["close"] for bar in ohlcv[-30:]]
         returns = np.diff(np.log(closes))
 
         daily_vol = float(np.std(returns))
@@ -230,10 +233,13 @@ class RiskEngine:
         """Liquidity risk from average trading volume."""
         factors = []
 
-        if not ohlcv or len(ohlcv) < 10:
+        if ohlcv is None or (hasattr(ohlcv, "empty") and ohlcv.empty) or len(ohlcv) < 10:
             return 50.0, ["Insufficient data for liquidity analysis"]
 
-        volumes = [bar["volume"] for bar in ohlcv[-20:]]
+        if isinstance(ohlcv, pd.DataFrame):
+            volumes = ohlcv["volume"].tail(20).values
+        else:
+            volumes = [bar["volume"] for bar in ohlcv[-20:]]
         avg_vol = float(np.mean(volumes))
 
         # Higher volume = lower liquidity risk

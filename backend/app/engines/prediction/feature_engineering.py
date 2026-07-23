@@ -119,9 +119,13 @@ class FeatureEngineer:
         # Select feature columns and drop NaN rows
         # Replace inf with NaN, THEN drop NaN rows.
         # CRITICAL: dropna() does NOT remove inf — XGBoost crashes on inf values.
+        # CRITICAL: Exclude pb_ratio/pe_ratio/market_cap_log from dropna subset, as they are NaN
+        # when provider fundamentals are unavailable. XGBoost handles NaN natively.
         feature_cols = self.FEATURE_NAMES
+        _always_nan = {"pb_ratio", "pe_ratio", "market_cap_log"}
+        dropna_cols = [c for c in feature_cols if c not in _always_nan] + ["target_5d"]
         df_features = df[feature_cols + ["target_5d"]]
-        df_features = df_features.replace([np.inf, -np.inf], np.nan).dropna()
+        df_features = df_features.replace([np.inf, -np.inf], np.nan).dropna(subset=dropna_cols)
 
         if len(df_features) < 20:
             raise ValueError(f"Too few complete rows for {symbol}: {len(df_features)}")
