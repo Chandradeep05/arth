@@ -1,13 +1,17 @@
 """
 Groq LLM client — Primary provider for Phase 1.
 
-Groq provides LLaMA 3.3 70B with extremely fast inference (free tier: 14,400 req/day).
+Groq provides extremely fast inference (free tier: 14,400 req/day).
+Note on Qwen reasoning models (e.g., qwen/qwen3.6-27b): These models emit
+<think>...</think> blocks natively. We must strip them on the client side
+instead of relying on reasoning_format='hidden' to ensure no tags leak.
 This is the production LLM for Phase 1, solving both the RAM constraint
 (no local GPU required) and the deployment problem (works identically in dev and prod).
 """
 
 from __future__ import annotations
 
+import re
 import time
 from typing import AsyncGenerator, List, Optional
 
@@ -18,13 +22,40 @@ from app.llm.base import BaseLLMClient, LLMConfig, LLMMessage, LLMResponse
 
 logger = get_logger(__name__)
 
+# Regex to catch complete <think> blocks
+# We strip <think> blocks client-side because certain reasoning models
+# (like Qwen) may still leak tags or hit max_tokens mid-thought, making
+# reasoning_format='hidden' unreliable as a sole defense.
+_THINK_BLOCK_RE = re.compile(r'<think>.*?</think>', re.DOTALL | re.IGNORECASE)
+
+def _strip_thinking(content: str) -> str:
+    """
+    Removes complete <think>...</think> blocks.
+    Handles unterminated <think> blocks (e.g. hit max_tokens mid-thought) by
+    dropping everything from <think> onward.
+    Returns empty string if content is falsy.
+    """
+    if not content:
+        return ""
+    
+    # Remove complete blocks
+    content = _THINK_BLOCK_RE.sub('', content)
+    
+    # Handle unterminated <think> block
+    lower_content = content.lower()
+    start_idx = lower_content.find('<think>')
+    if start_idx != -1:
+        content = content[:start_idx]
+        
+    return content.strip()
+
 
 class GroqClient(BaseLLMClient):
     """Groq API client for fast LLM inference."""
 
     provider_name = "groq"
 
-    def __init__(self, api_key: str, default_model: str = "llama-3.3-70b-versatile"):
+    def __init__(self, api_key: str, default_model: str = "qwen-2.5-32b"):
         self._client = AsyncGroq(api_key=api_key)
         self._default_model = default_model
 
@@ -55,7 +86,7 @@ class GroqClient(BaseLLMClient):
             )
             latency = (time.monotonic() - start_time) * 1000
 
-            content = response.choices[0].message.content or ""
+            content = _strip_thinking(response.choices[0].message.content or '')
             tokens = response.usage.total_tokens if response.usage else 0
 
             logger.info(
@@ -108,9 +139,57 @@ class GroqClient(BaseLLMClient):
                 stream=True,
             )
 
+            buffer = ""
+            in_thinking_block = False
+            past_thinking = False
+
             async for chunk in stream:
                 if chunk.choices and chunk.choices[0].delta.content:
-                    yield chunk.choices[0].delta.content
+                    token = chunk.choices[0].delta.content
+                    
+                    if past_thinking:
+                        # Once past thinking, yield chunks directly (no latency penalty)
+                        yield token
+                        continue
+                        
+                    buffer += token
+                    
+                    if in_thinking_block:
+                        end_tag = "</think>"
+                        end_idx = buffer.lower().find(end_tag)
+                        if end_idx != -1:
+                            in_thinking_block = False
+                            past_thinking = True
+                            # Yield content after </think>
+                            remaining = buffer[end_idx + len(end_tag):]
+                            if remaining.lstrip():
+                                yield remaining.lstrip()
+                            buffer = ""
+                        elif len(buffer) > 20: 
+                            # Keep a small buffer for sliding window in case of chunked tags
+                            buffer = buffer[-7:]
+                        continue
+                        
+                    # Not currently in thinking block, looking for <think>
+                    start_tag = "<think>"
+                    start_idx = buffer.lower().find(start_tag)
+                    
+                    if start_idx != -1:
+                        if start_idx > 0:
+                            yield buffer[:start_idx]
+                        in_thinking_block = True
+                        buffer = buffer[start_idx + len(start_tag):]
+                        continue
+                        
+                    # Tag not found yet. 
+                    # If no <think> appears after 8+ characters of buffer, flush the buffer
+                    if len(buffer) >= 8:
+                        yield buffer[:-7]
+                        buffer = buffer[-7:]
+
+            # At end of stream, flush any remaining non-thinking buffer
+            if buffer and not in_thinking_block and not past_thinking:
+                yield buffer
 
         except Exception as e:
             logger.error("groq_stream_failed", model=model, error=str(e))
