@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import time
 from datetime import datetime, timezone, timedelta
+from enum import Enum
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -25,6 +26,13 @@ import httpx
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
+
+# ── Circuit Breaker State ─────────────────────────────────────────
+class _CircuitState(Enum):
+    CLOSED = 'closed'       # Normal operation, requests go through
+    OPEN = 'open'           # Failed, all requests return None immediately
+    HALF_OPEN = 'half_open' # Cooldown expired, next request is a probe
+
 
 # ── Cookie management ─────────────────────────────────────────────
 _HOMEPAGE = "https://www.nseindia.com"
@@ -53,6 +61,12 @@ class NSESession:
         self._cookie_time: float = 0.0
         self._cookie_ttl: float = 1500.0  # 25 min (cookies expire ~30min)
         self._initialized = False
+        
+        self._circuit_state = _CircuitState.CLOSED
+        self._circuit_opened_at: float = 0.0
+        self._consecutive_failures: int = 0
+        self._circuit_cooldown: float = 300.0  # 5 minutes
+        self._failure_threshold: int = 3  # Open after 3 consecutive 403s
 
     async def _ensure_client(self):
         """Create client if needed."""
@@ -66,6 +80,9 @@ class NSESession:
 
     async def _refresh_cookies(self):
         """Visit NSE homepage to get fresh session cookies."""
+        if self._circuit_state == _CircuitState.OPEN:
+            return
+            
         await self._ensure_client()
         try:
             resp = await self._client.get(_HOMEPAGE)
@@ -81,8 +98,16 @@ class NSESession:
     async def get(self, endpoint: str, params: Optional[dict] = None) -> Optional[dict]:
         """Make an authenticated API request to NSE."""
         async with _request_lock:
-            # Rate limit
             now = time.monotonic()
+            
+            # Check circuit state FIRST
+            if self._circuit_state == _CircuitState.OPEN:
+                if (now - self._circuit_opened_at) > self._circuit_cooldown:
+                    self._circuit_state = _CircuitState.HALF_OPEN
+                else:
+                    return None
+            
+            # Rate limit
             elapsed = now - _last_request_time[0]
             if elapsed < _MIN_INTERVAL:
                 await asyncio.sleep(_MIN_INTERVAL - elapsed)
@@ -99,14 +124,32 @@ class NSESession:
                 _last_request_time[0] = time.monotonic()
 
                 if resp.status_code == 401 or resp.status_code == 403:
-                    # Cookies expired, refresh and retry once
-                    logger.info("nse_cookies_expired_retrying")
-                    await self._refresh_cookies()
-                    resp = await self._client.get(
-                        f"{_API_BASE}/{endpoint}",
-                        params=params,
-                    )
-                    _last_request_time[0] = time.monotonic()
+                    if self._circuit_state != _CircuitState.OPEN:
+                        # Cookies expired, refresh and retry once
+                        logger.info("nse_cookies_expired_retrying")
+                        await self._refresh_cookies()
+                        resp = await self._client.get(
+                            f"{_API_BASE}/{endpoint}",
+                            params=params,
+                        )
+                        _last_request_time[0] = time.monotonic()
+
+                # Process response and update circuit state
+                if resp.status_code == 200:
+                    if self._circuit_state == _CircuitState.HALF_OPEN:
+                        self._circuit_state = _CircuitState.CLOSED
+                        logger.info("nse_circuit_closed")
+                    self._consecutive_failures = 0
+                elif resp.status_code == 403:
+                    self._consecutive_failures += 1
+                    if self._circuit_state == _CircuitState.HALF_OPEN:
+                        self._circuit_state = _CircuitState.OPEN
+                        self._circuit_opened_at = time.monotonic()
+                        logger.warning("nse_circuit_reopened")
+                    elif self._circuit_state == _CircuitState.CLOSED and self._consecutive_failures >= self._failure_threshold:
+                        self._circuit_state = _CircuitState.OPEN
+                        self._circuit_opened_at = time.monotonic()
+                        logger.warning("nse_circuit_opened")
 
                 if resp.status_code != 200:
                     logger.warning(
