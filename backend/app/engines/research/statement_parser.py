@@ -124,8 +124,21 @@ class StatementParser:
         from app.data.market_data_provider import market_data
 
         try:
-            # Financial statement DataFrames are NOT available from TwelveData/NSE.
-            # Return honest empty state instead of hitting blocked Yahoo APIs.
+            res = await market_data.get_financial_statements(symbol)
+            if res.available and res.data:
+                return {
+                    "symbol": symbol.upper(),
+                    "income_statement": res.data.get("income_statement", {"annual": [], "quarterly": []}),
+                    "balance_sheet": res.data.get("balance_sheet", {"annual": [], "quarterly": []}),
+                    "cash_flow": res.data.get("cash_flow", {"annual": [], "quarterly": []}),
+                    "periods_available": {
+                        "annual": len(res.data.get("income_statement", {}).get("annual", [])),
+                        "quarterly": len(res.data.get("income_statement", {}).get("quarterly", []))
+                    },
+                    "fetched_at": datetime.now(timezone.utc).isoformat(),
+                    "source": res.source,
+                }
+
             logger.info(
                 "statement_fetch_unavailable",
                 symbol=symbol,
@@ -138,12 +151,12 @@ class StatementParser:
                 "balance_sheet": {"annual": [], "quarterly": []},
                 "cash_flow": {"annual": [], "quarterly": []},
                 "periods_available": {"annual": 0, "quarterly": 0},
-                "data_source": market_data.get_source_label(symbol),
+                "fetched_at": datetime.now(timezone.utc).isoformat(),
+                "source": "unavailable",
                 "unavailable_reason": (
                     "Financial statements require a premium data provider. "
                     "Quote, price history, and company info are available."
                 ),
-                "fetched_at": datetime.now(timezone.utc).isoformat(),
             }
 
         except Exception as e:
