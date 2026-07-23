@@ -16,16 +16,13 @@ Provides a governance score (0-100) based on available metrics.
 from __future__ import annotations
 
 import asyncio
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-import yfinance as yf
-
 from app.core.logging import get_logger
+from app.data.market_data_provider import market_data, DataStatus
 
 logger = get_logger(__name__)
-_executor = ThreadPoolExecutor(max_workers=1)
 
 
 def _governance_score(data: Dict[str, Any]) -> Dict[str, Any]:
@@ -109,33 +106,27 @@ def _governance_score(data: Dict[str, Any]) -> Dict[str, Any]:
 
 
 async def get_governance_data(symbol: str) -> Dict[str, Any]:
-    """Fetch governance data from Yahoo Finance.
+    """Fetch governance data.
 
     Returns a dict with ownership data + governance score.
     """
-    from app.data.adapters.yahoo import yahoo_adapter as _yahoo_adapter, make_ticker
-
     try:
-        ticker = make_ticker(symbol)
-
-        # Fetch through adapter throttle to respect rate limits
-        info = await _yahoo_adapter.throttled_run_sync(lambda t=ticker: t.info)
-
-        # Major holders: DataFrame with % values
-        try:
-            major_holders = await _yahoo_adapter.throttled_run_sync(
-                lambda t=ticker: t.major_holders
-            )
-        except Exception:
-            major_holders = None
-
-        # Institutional holders: DataFrame with holder names + shares
-        try:
-            inst_holders = await _yahoo_adapter.throttled_run_sync(
-                lambda t=ticker: t.institutional_holders
-            )
-        except Exception:
-            inst_holders = None
+        # Company info for basic ownership data
+        info_result = await market_data.get_company_info(symbol)
+        info = info_result.data if info_result.available else None
+        
+        # Holders data
+        holders_result = await market_data.get_holders(symbol)
+        
+        if not info and not holders_result.available:
+            return {
+                "symbol": symbol.upper(),
+                "error": True,
+                "message": "Governance data is currently unavailable for this market/data source.",
+            }
+            
+        major_holders = None
+        inst_holders = None
 
     except Exception as e:
         logger.error("governance_fetch_failed", symbol=symbol, error=str(e))
@@ -192,7 +183,7 @@ async def get_governance_data(symbol: str) -> Dict[str, Any]:
     # Build result
     data = {
         "symbol": symbol.upper(),
-        "company_name": info.get("shortName", symbol) if info else symbol,
+        "company_name": info.get("shortName", info.get("name", symbol)) if info else symbol,
         "institutional_percent": institutional_pct,
         "insider_percent": insider_pct,
         "pledge_percent": pledge_pct,

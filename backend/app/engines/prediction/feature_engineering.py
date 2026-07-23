@@ -1,7 +1,7 @@
 """
 Feature Engineering for XGBoost Prediction Model.
 
-Builds a feature matrix from yfinance data for 5-day forward return prediction.
+Builds a feature matrix from market data for 5-day forward return prediction.
 All features are derived from existing data sources — no additional APIs needed.
 
 Feature groups:
@@ -17,20 +17,17 @@ from __future__ import annotations
 
 import asyncio
 import math
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
-import yfinance as yf
 
 from app.core.logging import get_logger
-from app.data.adapters.yahoo import yahoo_adapter as _yahoo_adapter, make_ticker, yf_download
+from app.data.market_data_provider import market_data, DataStatus
 
 
 logger = get_logger(__name__)
-_executor = ThreadPoolExecutor(max_workers=2)
 
 
 def _safe(val, default=0.0) -> float:
@@ -45,7 +42,7 @@ def _safe(val, default=0.0) -> float:
 
 
 class FeatureEngineer:
-    """Builds feature vectors from yfinance historical + fundamental data."""
+    """Builds feature vectors from historical + fundamental data."""
 
     FEATURE_NAMES = [
         "return_1d", "return_5d", "return_20d",
@@ -67,27 +64,20 @@ class FeatureEngineer:
             (X, y) — feature DataFrame and target Series, both aligned by date.
             Rows with NaN in target (last 5 days) are excluded.
         """
-        # Fetch historical data through the shared adapter throttle.
-        # Previously used raw yf.download() which bypassed the semaphore,
-        # burning rate limit budget and triggering cascading 429s.
-        def _fetch_hist():
-            return yf_download(symbol, period=period, interval="1d", progress=False, auto_adjust=True)
+        history_result = await market_data.get_history(symbol, period=period, interval='1d')
+        if not history_result.available:
+            reason = history_result.reason or 'Data unavailable'
+            raise ValueError(f'Historical data unavailable for {symbol}: {reason}')
+        hist = history_result.data  # This is already a normalized DataFrame
 
-        def _fetch_info():
-            return make_ticker(symbol).info
-
-        hist = await _yahoo_adapter.throttled_run_sync(_fetch_hist)
-        info = await _yahoo_adapter.throttled_run_sync(_fetch_info)
+        fund_result = await market_data.get_fundamentals(symbol)
+        info = fund_result.data if fund_result.available else {}
 
         if hist is None or hist.empty or len(hist) < 30:
             raise ValueError(f"Insufficient data for {symbol}: need 30+ daily bars")
 
+        # No need to flatten — MarketDataProvider returns standardized columns
         df = hist.copy()
-
-        # yf.download() returns multi-level columns for single symbols:
-        # e.g., ('Close', 'AAPL'). Flatten to just 'Close', 'Open', etc.
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
 
         # ── Price features ──
         df["return_1d"] = df["Close"].pct_change(1)
@@ -107,9 +97,12 @@ class FeatureEngineer:
         df["volume_trend_5d"] = df["Volume"].pct_change(5)
 
         # ── Fundamental features (static, broadcast) ──
-        pe = _safe(info.get("trailingPE"), np.nan)
-        pb = _safe(info.get("priceToBook"), np.nan)
-        mc = _safe(info.get("marketCap"), 0)
+        pe = _safe(info.get('pe_ratio'), np.nan)
+        # pb_ratio: Neither TwelveData nor NSE free tier provides Price-to-Book ratio.
+        # book_value (per-share dollar amount) is NOT the same as priceToBook (valuation ratio).
+        # Using book_value here would silently corrupt feature scale. Use NaN honestly.
+        pb = np.nan  # P/B ratio unavailable from current providers
+        mc = _safe(info.get('market_cap'), 0)
         mc_log = math.log10(mc) if mc > 0 else np.nan
 
         df["pe_ratio"] = pe
@@ -143,23 +136,20 @@ class FeatureEngineer:
 
         Returns a dict of feature_name -> value for model input.
         """
-        def _fetch_hist():
-            return yf_download(symbol, period="3mo", interval="1d", progress=False, auto_adjust=True)
+        history_result = await market_data.get_history(symbol, period='3mo', interval='1d')
+        if not history_result.available:
+            reason = history_result.reason or 'Data unavailable'
+            raise ValueError(f'Historical data unavailable for {symbol}: {reason}')
+        hist = history_result.data
 
-        def _fetch_info():
-            return make_ticker(symbol).info
-
-        hist = await _yahoo_adapter.throttled_run_sync(_fetch_hist)
-        info = await _yahoo_adapter.throttled_run_sync(_fetch_info)
+        fund_result = await market_data.get_fundamentals(symbol)
+        info = fund_result.data if fund_result.available else {}
 
         if hist is None or hist.empty or len(hist) < 25:
             raise ValueError(f"Insufficient recent data for {symbol}")
 
+        # No need to flatten — MarketDataProvider returns standardized columns
         df = hist.copy()
-
-        # Flatten multi-level columns from yf.download()
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
 
         # Compute all features on last 3mo, take the last row
         df["return_1d"] = df["Close"].pct_change(1)
@@ -175,9 +165,10 @@ class FeatureEngineer:
         df["volume_ratio_20d"] = df["Volume"] / vol_sma20.replace(0, np.nan)
         df["volume_trend_5d"] = df["Volume"].pct_change(5)
 
-        pe = _safe(info.get("trailingPE"), np.nan)
-        pb = _safe(info.get("priceToBook"), np.nan)
-        mc = _safe(info.get("marketCap"), 0)
+        pe = _safe(info.get('pe_ratio'), np.nan)
+        # pb_ratio: Not available from current providers (see build_features comment)
+        pb = np.nan
+        mc = _safe(info.get('market_cap'), 0)
 
         df["pe_ratio"] = pe
         df["pb_ratio"] = pb

@@ -14,18 +14,14 @@ Text is chunked with overlap before insertion into the vector store.
 from __future__ import annotations
 
 import asyncio
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Any, Dict, List
 
-import yfinance as yf
-
 from app.core.logging import get_logger
+from app.data.market_data_provider import market_data
 from app.engines.rag.vector_store import vector_store
 
 logger = get_logger(__name__)
-
-_executor = ThreadPoolExecutor(max_workers=2)
 
 
 class DocumentProcessor:
@@ -42,13 +38,11 @@ class DocumentProcessor:
         Returns:
             ``{"symbol", "documents_indexed", "sources": [...]}}``
         """
-        from app.data.adapters.yahoo import yahoo_adapter as _yahoo_adapter, make_ticker
+        info_result = await market_data.get_company_info(symbol)
+        news_result = await market_data.get_news(symbol)
 
-        ticker = make_ticker(symbol)
-
-        # Fetch data through adapter throttle (sequential, rate-limited)
-        info = await _yahoo_adapter.throttled_run_sync(lambda: ticker.info)
-        news = await _yahoo_adapter.throttled_run_sync(lambda: getattr(ticker, "news", []))
+        info = info_result.data if info_result.available else None
+        news = news_result.data if news_result.available else []
 
         if not info:
             logger.warning("index_company_no_info", symbol=symbol)
@@ -91,7 +85,7 @@ class DocumentProcessor:
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
         # Business summary (usually 2-3 paragraphs)
-        summary = info.get("longBusinessSummary", "")
+        summary = info.get("longBusinessSummary", info.get("description", ""))
         if summary:
             chunks = self._chunk_text(summary, chunk_size=500, overlap=50)
             for i, chunk in enumerate(chunks):
@@ -99,15 +93,15 @@ class DocumentProcessor:
                     "id": f"{symbol}_company_desc_{i}",
                     "text": chunk,
                     "metadata": {
-                        "source": "Yahoo Finance",
+                        "source": market_data.get_source_label(symbol),
                         "type": "company_description",
                         "date": today,
-                        "title": f"{info.get('shortName', symbol)} — Company Overview",
+                        "title": f"{info.get('shortName', info.get('name', symbol))} — Company Overview",
                     },
                 })
 
         # Company overview card
-        name = info.get("shortName", info.get("longName", symbol))
+        name = info.get("shortName", info.get("name", info.get("longName", symbol)))
         sector = info.get("sector", "N/A")
         industry = info.get("industry", "N/A")
         employees = info.get("fullTimeEmployees", "N/A")
@@ -122,7 +116,7 @@ class DocumentProcessor:
             "id": f"{symbol}_company_overview",
             "text": overview_text,
             "metadata": {
-                "source": "Yahoo Finance",
+                "source": market_data.get_source_label(symbol),
                 "type": "company_overview",
                 "date": today,
                 "title": f"{name} — Overview",
@@ -137,7 +131,7 @@ class DocumentProcessor:
         """Create structured text from financial metrics."""
         docs: List[Dict[str, Any]] = []
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        name = info.get("shortName", symbol)
+        name = info.get("shortName", info.get("name", symbol))
 
         # Key financial metrics as narrative text
         metrics_parts: List[str] = []
@@ -188,7 +182,7 @@ class DocumentProcessor:
                 "id": f"{symbol}_financial_metrics",
                 "text": metrics_text,
                 "metadata": {
-                    "source": "Yahoo Finance",
+                    "source": market_data.get_source_label(symbol),
                     "type": "financial_metrics",
                     "date": today,
                     "title": f"{name} — Financial Metrics",
@@ -215,7 +209,7 @@ class DocumentProcessor:
                 "id": f"{symbol}_valuation",
                 "text": val_text,
                 "metadata": {
-                    "source": "Yahoo Finance",
+                    "source": market_data.get_source_label(symbol),
                     "type": "valuation",
                     "date": today,
                     "title": f"{name} — Valuation",
@@ -275,7 +269,7 @@ class DocumentProcessor:
         """Create sector/industry context documents."""
         docs: List[Dict[str, Any]] = []
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        name = info.get("shortName", symbol)
+        name = info.get("shortName", info.get("name", symbol))
         sector = info.get("sector")
         industry = info.get("industry")
 
@@ -291,7 +285,7 @@ class DocumentProcessor:
                 "id": f"{symbol}_sector_context",
                 "text": text,
                 "metadata": {
-                    "source": "Yahoo Finance",
+                    "source": market_data.get_source_label(symbol),
                     "type": "sector_context",
                     "date": today,
                     "title": f"{name} — Sector Context ({sector})",

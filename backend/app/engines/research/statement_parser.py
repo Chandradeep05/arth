@@ -8,8 +8,9 @@ Fetches and structures:
 - Derived ratios with historical trends
 - Financial health scorecard
 
-Uses yfinance's .financials, .quarterly_financials, .balance_sheet,
-.quarterly_balance_sheet, .cashflow, .quarterly_cashflow properties.
+Note: Financial statements (income_stmt, balance_sheet, cashflow) are not
+available from TwelveData or NSE free tiers. This module returns empty
+statements when data is unavailable rather than hitting blocked Yahoo APIs.
 
 All DataFrame columns are period end-dates; rows are line items.
 We transpose into a list-of-dicts keyed by period for JSON serialisation.
@@ -19,16 +20,12 @@ from __future__ import annotations
 
 import asyncio
 import math
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
-
-import yfinance as yf
 
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
-_executor = ThreadPoolExecutor(max_workers=2)
 
 
 # ---------------------------------------------------------------------------
@@ -108,7 +105,12 @@ def _safe_divide(
 # ---------------------------------------------------------------------------
 
 class StatementParser:
-    """Fetches, parses, and scores financial statements from Yahoo Finance."""
+    """Fetches, parses, and scores financial statements.
+
+    Note: Financial statement DataFrames (income_stmt, balance_sheet, cashflow)
+    are not available from TwelveData or NSE free tiers. When the data source
+    cannot provide statements, this returns empty results with a clear message.
+    """
 
     async def get_statements(self, symbol: str) -> Dict[str, Any]:
         """Fetch all three financial statements (annual + quarterly).
@@ -119,72 +121,28 @@ class StatementParser:
             Structured statements keyed by type, each containing annual
             and quarterly period lists.
         """
-        from app.data.adapters.yahoo import yahoo_adapter as _yahoo_adapter, make_ticker
+        from app.data.market_data_provider import market_data
 
         try:
-            ticker = make_ticker(symbol)
-
-            # Fetch ALL financial DataFrames in a single executor call.
-            # yfinance caches data internally after the first property access,
-            # so doing all 6 accesses in the same thread means only ~1 HTTP call.
-            # (6 separate executor calls would each trigger separate fetches,
-            # totaling 15-30s and timing out on Render free tier.)
-            def _fetch_all_statements(t):
-                """Fetch all statement DataFrames in one thread."""
-                def _try_df(*attrs):
-                    for attr in attrs:
-                        try:
-                            df = getattr(t, attr, None)
-                            if df is not None and not df.empty:
-                                return df
-                        except Exception:
-                            continue
-                    return None
-
-                return {
-                    "financials": _try_df("income_stmt", "financials"),
-                    "quarterly_financials": _try_df("quarterly_income_stmt", "quarterly_financials"),
-                    "balance_sheet": _try_df("balance_sheet", "balancesheet"),
-                    "quarterly_balance_sheet": _try_df("quarterly_balance_sheet", "quarterly_balancesheet"),
-                    "cashflow": _try_df("cash_flow", "cashflow"),
-                    "quarterly_cashflow": _try_df("quarterly_cash_flow", "quarterly_cashflow"),
-                }
-
-            raw = await _yahoo_adapter.throttled_run_sync(
-                lambda t=ticker: _fetch_all_statements(t)
+            # Financial statement DataFrames are NOT available from TwelveData/NSE.
+            # Return honest empty state instead of hitting blocked Yahoo APIs.
+            logger.info(
+                "statement_fetch_unavailable",
+                symbol=symbol,
+                reason="Financial statements not available from current data providers",
             )
-
-            income_annual = _df_to_periods(raw["financials"])
-            income_quarterly = _df_to_periods(raw["quarterly_financials"])
-            bs_annual = _df_to_periods(raw["balance_sheet"])
-            bs_quarterly = _df_to_periods(raw["quarterly_balance_sheet"])
-            cf_annual = _df_to_periods(raw["cashflow"])
-            cf_quarterly = _df_to_periods(raw["quarterly_cashflow"])
 
             return {
                 "symbol": symbol.upper(),
-                "income_statement": {
-                    "annual": income_annual,
-                    "quarterly": income_quarterly,
-                },
-                "balance_sheet": {
-                    "annual": bs_annual,
-                    "quarterly": bs_quarterly,
-                },
-                "cash_flow": {
-                    "annual": cf_annual,
-                    "quarterly": cf_quarterly,
-                },
-                "periods_available": {
-                    "annual": max(
-                        len(income_annual), len(bs_annual), len(cf_annual)
-                    ),
-                    "quarterly": max(
-                        len(income_quarterly),
-                        len(bs_quarterly),
-                        len(cf_quarterly),
-                    ),
-                },
+                "income_statement": {"annual": [], "quarterly": []},
+                "balance_sheet": {"annual": [], "quarterly": []},
+                "cash_flow": {"annual": [], "quarterly": []},
+                "periods_available": {"annual": 0, "quarterly": 0},
+                "data_source": market_data.get_source_label(symbol),
+                "unavailable_reason": (
+                    "Financial statements require a premium data provider. "
+                    "Quote, price history, and company info are available."
+                ),
                 "fetched_at": datetime.now(timezone.utc).isoformat(),
             }
 

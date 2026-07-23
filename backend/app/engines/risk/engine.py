@@ -32,7 +32,7 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 
 from app.core.logging import get_logger
-from app.data.adapters.yahoo import yahoo_adapter
+from app.data.market_data_provider import market_data
 
 logger = get_logger(__name__)
 
@@ -64,7 +64,7 @@ def _get_de_thresholds(sector: Optional[str]) -> tuple:
     # Check exact match first, then partial matches
     if key in _DE_THRESHOLDS:
         return _DE_THRESHOLDS[key]
-    # Partial keyword matching for yfinance sector strings
+    # Partial keyword matching for sector strings
     for keyword, thresholds in _DE_THRESHOLDS.items():
         if keyword != "_default" and keyword in key:
             return thresholds
@@ -75,7 +75,7 @@ class RiskEngine:
     """Computes multi-dimensional risk scores for stocks."""
 
     def __init__(self):
-        self._yahoo = yahoo_adapter
+        self._data = market_data
 
     async def compute_risk(self, symbol: str) -> Dict[str, Any]:
         """Compute composite risk score for a symbol."""
@@ -85,23 +85,33 @@ class RiskEngine:
         dimensions = []
         factors_all: List[str] = []
 
-        # Route through cache to avoid redundant Yahoo calls.
-        # Without this, every risk request made 2 fresh Yahoo calls
+        # Route through cache to avoid redundant API calls.
+        # Without this, every risk request makes 2 fresh API calls
         # (company_info + ohlcv) even though the same data was likely
         # already fetched by the market page load.
         redis = await get_redis()
         cache = CacheManager(redis)
 
+        # Wrap MarketDataProvider calls for cache compatibility
+        # (cache expects raw data, not DataResult)
+        async def _fetch_company(symbol, **kw):
+            result = await self._data.get_company_info(symbol)
+            return result.data if result.available else None
+
+        async def _fetch_ohlcv(symbol, period="3mo", interval="1d", **kw):
+            result = await self._data.get_history(symbol, period=period, interval=interval)
+            return result.data if result.available else None
+
         company = await cache.get_or_fetch(
             key=cache.company_key(symbol),
-            fetch_func=self._yahoo.get_company_info,
+            fetch_func=_fetch_company,
             ttl=3600,  # 1 hour — fundamentals don't change intraday
             symbol=symbol,
         )
 
         ohlcv_result = await cache.get_or_fetch(
             key=cache.ohlcv_key(symbol, "3mo", "1d"),
-            fetch_func=self._yahoo.get_ohlcv,
+            fetch_func=_fetch_ohlcv,
             ttl=300,  # 5 min — price data
             symbol=symbol, period="3mo", interval="1d",
         )
@@ -266,7 +276,7 @@ class RiskEngine:
         # Debt-to-Equity — sector-aware scoring
         de = metrics.get("debt_to_equity")
         if de is not None:
-            # yfinance ALWAYS returns debtToEquity as percentage.
+            # Some providers return debtToEquity as percentage.
             # e.g., Reliance → 36.65 (means 0.3665x), HDFCBANK → 700+ (means 7x)
             # We unconditionally divide by 100.
             de_ratio = de / 100.0

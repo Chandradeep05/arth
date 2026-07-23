@@ -12,18 +12,14 @@ from __future__ import annotations
 
 import asyncio
 import time
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-import yfinance as yf
-
 from app.config import get_settings
 from app.core.logging import get_logger
-from app.data.adapters.yahoo import yahoo_adapter, make_ticker
+from app.data.market_data_provider import market_data, DataStatus
 
 logger = get_logger(__name__)
-_executor = ThreadPoolExecutor(max_workers=1)
 
 # Simple keyword lists (Phase 1 fallback)
 BULLISH_KEYWORDS = {
@@ -78,7 +74,7 @@ class SentimentEngine:
     """Sentiment analysis engine with news + LLM classification."""
 
     def __init__(self):
-        self._yahoo = yahoo_adapter
+        self._data = market_data
 
     async def analyze(self, symbol: str) -> Dict[str, Any]:
         """Compute sentiment score for a symbol.
@@ -93,9 +89,13 @@ class SentimentEngine:
         redis = await get_redis()
         cache = CacheManager(redis)
 
+        async def _fetch_company(sym):
+            result = await self._data.get_company_info(sym)
+            return result.data if result.available else None
+
         company = await cache.get_or_fetch(
             key=cache.company_key(symbol),
-            fetch_func=self._yahoo.get_company_info,
+            fetch_func=_fetch_company,
             ttl=3600,
             symbol=symbol,
         )
@@ -113,7 +113,7 @@ class SentimentEngine:
         total_weighted_score = 0.0
         total_weight = 0.0
 
-        # ── 1. Fetch Yahoo Finance news ──
+        # ── 1. Fetch news ──
         news_items = await self._fetch_news(symbol)
         for item in news_items:
             title = item.get("title", "")
@@ -215,7 +215,10 @@ class SentimentEngine:
         overall = total_weighted_score / total_weight if total_weight > 0 else 0
 
         # Confidence scales with number of sources
+        news_available = len(news_items) > 0
         confidence = min(85.0, total * 8.0 + (20 if len(news_items) > 3 else 0))
+        if not news_available and not company:
+            confidence = 0.0
 
         # Label based on score and confidence
         if confidence < 40:
@@ -233,6 +236,13 @@ class SentimentEngine:
             else:
                 label = "Neutral"
 
+        methodology = (
+            "Phase 2: News + fundamentals keyword analysis "
+            "with source credibility weighting and time decay."
+        )
+        if not news_available and not sources:
+            methodology += " (News analysis currently unavailable)"
+
         return {
             "symbol": symbol.upper(),
             "overall_score": round(overall, 3),
@@ -243,23 +253,21 @@ class SentimentEngine:
             "total_sources": len(sources),
             "news_count": len(news_items),
             "confidence": round(confidence, 1),
-            "methodology": (
-                "Phase 2: Yahoo Finance news + fundamentals keyword analysis "
-                "with source credibility weighting and time decay."
-            ),
+            "news_available": news_available,
+            "methodology": methodology,
             "sources": sources[:15],
             "computed_at": datetime.now(timezone.utc).isoformat(),
         }
 
     async def _fetch_news(self, symbol: str) -> List[Dict[str, Any]]:
-        """Fetch news from Yahoo Finance for a symbol."""
-        try:
-            ticker = make_ticker(symbol)
-            news = await self._yahoo.throttled_run_sync(lambda t=ticker: t.news)
-            if news and isinstance(news, list):
-                return news[:15]  # Limit to 15 articles
-        except Exception as e:
-            logger.warning("news_fetch_failed", symbol=symbol, error=str(e))
+        """Fetch news for a symbol via the unified data provider."""
+        result = await self._data.get_news(symbol)
+        if result.available and result.data:
+            return result.data[:15]
+        if result.status == DataStatus.UNSUPPORTED_CAPABILITY:
+            logger.info("news_not_available", symbol=symbol, reason=result.reason)
+        else:
+            logger.warning("news_fetch_failed", symbol=symbol, reason=result.reason)
         return []
 
     def _keyword_score(self, text: str) -> float:

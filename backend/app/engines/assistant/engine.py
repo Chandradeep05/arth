@@ -23,7 +23,7 @@ from typing import Any, AsyncGenerator, Dict, List, Optional
 
 from app.config import Settings, get_settings
 from app.core.logging import get_logger
-from app.data.adapters.yahoo import yahoo_adapter
+from app.data.market_data_provider import market_data
 from app.data.cache import CacheManager
 from app.llm.base import LLMConfig, LLMMessage, LLMResponse
 from app.llm.groq_client import GroqClient
@@ -109,7 +109,7 @@ class AssistantEngine:
 
     def __init__(self, settings: Settings | None = None):
         self._settings = settings or get_settings()
-        self._yahoo = yahoo_adapter
+        self._data = market_data
         self._llm: GroqClient | None = None
 
         api_key = self._settings.groq_api_key or ""
@@ -206,7 +206,8 @@ class AssistantEngine:
 
         # Quote
         try:
-            quote = await self._yahoo.get_quote(symbol)
+            quote_result = await self._data.get_quote(symbol)
+            quote = quote_result.data if quote_result.available else None
             if quote:
                 quote.pop("_validation", None)
                 parts.append(
@@ -222,7 +223,8 @@ class AssistantEngine:
 
         # Company info (lightweight)
         try:
-            info = await self._yahoo.get_company_info(symbol)
+            info_result = await self._data.get_company_info(symbol)
+            info = info_result.data if info_result.available else None
             if info:
                 parts.append(
                     f"Company: {info.get('name', symbol)} | "
@@ -262,12 +264,12 @@ class AssistantEngine:
 
     @staticmethod
     def _fmt_de_ratio(val) -> str:
-        """Normalize D/E ratio from yfinance (returns %-based, e.g. 22.85 = 0.23)."""
+        """Normalize D/E ratio (some providers return %-based, e.g. 22.85 = 0.23)."""
         if val is None:
             return "N/A"
         try:
             v = float(val)
-            # yfinance debtToEquity is percentage-based
+            # Some providers return debtToEquity as percentage-based
             if v > 5:  # Likely percentage format
                 v = v / 100.0
             return f"{v:.2f}"

@@ -2,11 +2,11 @@
 AI Research Engine (Module 02 — Phase 1 Basic).
 
 Generates company research reports using:
-1. Yahoo Finance fundamentals (real data)
+1. Market data fundamentals (via MarketDataProvider)
 2. Technical indicators (computed)
 3. Groq LLM (for analysis generation)
 
-All numerical data is fetched from Yahoo Finance FIRST, then injected
+All numerical data is fetched from market data providers FIRST, then injected
 into the LLM prompt. The LLM never generates numbers from memory.
 """
 
@@ -17,7 +17,7 @@ from typing import Any, AsyncGenerator, Dict, Optional
 
 from app.config import Settings, get_settings
 from app.core.logging import get_logger
-from app.data.adapters.yahoo import yahoo_adapter
+from app.data.market_data_provider import market_data
 from app.data.cache import CacheManager
 from app.engines.market.indicators import compute_indicators
 from app.engines.research.prompts import (
@@ -39,7 +39,7 @@ class ResearchEngine:
 
     def __init__(self, settings: Settings | None = None):
         self._settings = settings or get_settings()
-        self._yahoo = yahoo_adapter
+        self._data = market_data
         self._llm: GroqClient | None = None
 
         # Initialize LLM client
@@ -66,8 +66,9 @@ class ResearchEngine:
                 "message": "LLM not configured. Set GROQ_API_KEY in environment.",
             }
 
-        # Step 1: Fetch real data from Yahoo Finance
-        company_info = await self._yahoo.get_company_info(symbol)
+        # Step 1: Fetch real market data
+        info_result = await self._data.get_company_info(symbol)
+        company_info = info_result.data if info_result.available else None
         if not company_info:
             return {
                 "error": True,
@@ -78,10 +79,18 @@ class ResearchEngine:
 
         # Step 2: Compute technical indicators
         indicators = None
-        ohlcv_result = await self._yahoo.get_ohlcv(symbol, period="3mo", interval="1d")
+        history_result = await self._data.get_history(symbol, period="3mo", interval="1d")
+        ohlcv_result = history_result.data if history_result.available else None
         # get_ohlcv returns {"bars": [...], "_validation": {...}} or a plain list
-        if ohlcv_result:
-            ohlcv = ohlcv_result.get("bars", ohlcv_result) if isinstance(ohlcv_result, dict) else ohlcv_result
+        if ohlcv_result is not None:
+            # history_result.data is a normalized DataFrame from MarketDataProvider
+            # compute_indicators expects a list of bar dicts, so convert if DataFrame
+            if hasattr(ohlcv_result, 'to_dict'):
+                ohlcv = ohlcv_result.reset_index().to_dict('records')
+            elif isinstance(ohlcv_result, dict):
+                ohlcv = ohlcv_result.get("bars", ohlcv_result)
+            else:
+                ohlcv = ohlcv_result
             if ohlcv and isinstance(ohlcv, list):
                 indicators = compute_indicators(ohlcv)
 
@@ -111,7 +120,7 @@ class ResearchEngine:
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "report_content": response.content,
             "confidence_score": 65.0,  # Base confidence — Phase 2 will compute this dynamically
-            "data_sources": ["Yahoo Finance"],
+            "data_sources": [self._data.get_source_label(symbol)],
             "llm_provider": response.provider,
             "llm_model": response.model,
             "tokens_used": response.tokens_used,
@@ -153,7 +162,8 @@ class ResearchEngine:
             return
 
         # Fetch real data
-        company_info = await self._yahoo.get_company_info(symbol)
+        info_result = await self._data.get_company_info(symbol)
+        company_info = info_result.data if info_result.available else None
         if not company_info:
             yield f"Error: Could not fetch data for {symbol}"
             return
@@ -162,9 +172,15 @@ class ResearchEngine:
 
         # Compute indicators
         indicators = None
-        ohlcv_result = await self._yahoo.get_ohlcv(symbol, period="3mo", interval="1d")
-        if ohlcv_result:
-            ohlcv = ohlcv_result.get("bars", ohlcv_result) if isinstance(ohlcv_result, dict) else ohlcv_result
+        history_result = await self._data.get_history(symbol, period="3mo", interval="1d")
+        ohlcv_result = history_result.data if history_result.available else None
+        if ohlcv_result is not None:
+            if hasattr(ohlcv_result, 'to_dict'):
+                ohlcv = ohlcv_result.reset_index().to_dict('records')
+            elif isinstance(ohlcv_result, dict):
+                ohlcv = ohlcv_result.get("bars", ohlcv_result)
+            else:
+                ohlcv = ohlcv_result
             if ohlcv and isinstance(ohlcv, list):
                 indicators = compute_indicators(ohlcv)
 
@@ -219,7 +235,8 @@ class ResearchEngine:
             }
 
         # Step 1: Fetch real data (same as standard)
-        company_info = await self._yahoo.get_company_info(symbol)
+        info_result = await self._data.get_company_info(symbol)
+        company_info = info_result.data if info_result.available else None
         if not company_info:
             return {"error": True, "message": f"Could not fetch data for {symbol}"}
 
@@ -227,11 +244,17 @@ class ResearchEngine:
 
         # Step 2: Compute indicators
         indicators = None
-        ohlcv = await self._yahoo.get_ohlcv(symbol, period="3mo", interval="1d")
-        if ohlcv:
-            # Handle both list and dict return formats
-            bars = ohlcv.get("bars", ohlcv) if isinstance(ohlcv, dict) else ohlcv
-            indicators = compute_indicators(bars)
+        history_result = await self._data.get_history(symbol, period="3mo", interval="1d")
+        if history_result.available and history_result.data is not None:
+            ohlcv_data = history_result.data
+            if hasattr(ohlcv_data, 'to_dict'):
+                bars = ohlcv_data.reset_index().to_dict('records')
+            elif isinstance(ohlcv_data, dict):
+                bars = ohlcv_data.get("bars", ohlcv_data)
+            else:
+                bars = ohlcv_data
+            if bars and isinstance(bars, list):
+                indicators = compute_indicators(bars)
 
         # Step 3: Retrieve RAG context
         rag_result = retriever.retrieve_context(
@@ -261,7 +284,7 @@ class ResearchEngine:
             "report_content": response.content,
             "report_type": "deep",
             "confidence_score": 75.0,  # Higher confidence with RAG
-            "data_sources": ["Yahoo Finance"] + [
+            "data_sources": [self._data.get_source_label(symbol)] + [
                 s["source"] for s in rag_result["sources"]
             ],
             "sources": rag_result["sources"],
@@ -307,7 +330,8 @@ class ResearchEngine:
             return
 
         # Fetch data
-        company_info = await self._yahoo.get_company_info(symbol)
+        info_result = await self._data.get_company_info(symbol)
+        company_info = info_result.data if info_result.available else None
         if not company_info:
             yield f"Error: Could not fetch data for {symbol}"
             return
@@ -315,10 +339,17 @@ class ResearchEngine:
         metrics = company_info.get("metrics", {})
 
         indicators = None
-        ohlcv = await self._yahoo.get_ohlcv(symbol, period="3mo", interval="1d")
-        if ohlcv:
-            bars = ohlcv.get("bars", ohlcv) if isinstance(ohlcv, dict) else ohlcv
-            indicators = compute_indicators(bars)
+        history_result = await self._data.get_history(symbol, period="3mo", interval="1d")
+        if history_result.available and history_result.data is not None:
+            ohlcv_data = history_result.data
+            if hasattr(ohlcv_data, 'to_dict'):
+                bars = ohlcv_data.reset_index().to_dict('records')
+            elif isinstance(ohlcv_data, dict):
+                bars = ohlcv_data.get("bars", ohlcv_data)
+            else:
+                bars = ohlcv_data
+            if bars and isinstance(bars, list):
+                indicators = compute_indicators(bars)
 
         # RAG context
         rag_result = retriever.retrieve_context(
