@@ -128,7 +128,7 @@ export default function ResearchReport({ symbol }: ResearchReportProps) {
             <FileText className="w-8 h-8 mx-auto mb-3 opacity-30" />
             <p className="text-sm font-mono">Click &quot;Generate Report&quot; to create an AI analysis</p>
             <p className="text-[10px] mt-1 text-[var(--text-dim)]">
-              Uses real-time Yahoo Finance data + Groq LLaMA 3.3 70B
+              Uses real-time market data + Groq LLM
             </p>
           </div>
         )}

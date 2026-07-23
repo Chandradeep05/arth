@@ -57,7 +57,7 @@ export default function StatusBar() {
 
       {/* Center: Data source info */}
       <div className="text-[var(--text-dim)]">
-        Data delayed ~15s &nbsp;|&nbsp; Sources: Yahoo Finance
+        Data delayed ~15s &nbsp;|&nbsp; Sources: Twelve Data / NSE
       </div>
 
       {/* Right: Last updated */}

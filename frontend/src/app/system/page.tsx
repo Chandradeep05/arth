@@ -180,12 +180,12 @@ export default function SystemPage() {
           </div>
         </motion.div>
 
-        {/* Yahoo Finance */}
+        {/* Market Data Provider */}
         <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }} className="card p-5">
           <div className="flex items-center justify-between mb-3">
             <div className="flex items-center gap-2">
               <Wifi className="w-4 h-4 text-[var(--green)]" />
-              <span className="font-heading text-sm font-bold text-[var(--text)]">Yahoo Finance</span>
+              <span className="font-heading text-sm font-bold text-[var(--text)]">Market Data</span>
             </div>
             <StatusDot status={adapterHealth?.status === 'healthy' ? 'healthy' : 'degraded'} />
           </div>
@@ -223,7 +223,7 @@ export default function SystemPage() {
             ['Backend', 'FastAPI + Uvicorn'],
             ['Frontend', 'Next.js 16 (Turbopack)'],
             ['LLM Provider', 'Groq (Llama 3.3 70B)'],
-            ['Data Source', 'Yahoo Finance (~15s delay)'],
+            ['Data Source', 'Twelve Data / NSE India (~15s delay)'],
             ['Phase', '2 — Intelligence Expansion'],
           ].map(([label, value]) => (
             <div key={label} className="flex justify-between">

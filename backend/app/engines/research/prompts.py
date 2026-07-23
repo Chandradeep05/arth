@@ -74,7 +74,7 @@ Sector: {company_info.get('sector', 'N/A')}
 Industry: {company_info.get('industry', 'N/A')}
 Exchange: {company_info.get('exchange', 'N/A')}
 
-FINANCIAL METRICS (from Yahoo Finance, current):
+FINANCIAL METRICS (current):
 - Market Cap: {_fmt_large_num(metrics.get('market_cap'))}
 - P/E Ratio: {_fmt(metrics.get('pe_ratio'))}
 - EPS: {_fmt(metrics.get('eps'))}
@@ -88,7 +88,7 @@ FINANCIAL METRICS (from Yahoo Finance, current):
 - ROA: {_fmt_pct(metrics.get('roa'))}
 - Current Ratio: {_fmt(metrics.get('current_ratio'))}
 
-DATA SOURCE: Yahoo Finance (all data is delayed ~15 seconds)
+DATA SOURCE: Market data providers (data may be delayed ~15 seconds)
 """
 
     if indicators:

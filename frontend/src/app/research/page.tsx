@@ -193,7 +193,7 @@ export default function ResearchPage() {
               </button>
             </form>
             <p className="text-[11px] text-[var(--text-dim)] mt-3 font-mono">
-              Uses Groq LLM (Llama 3.3 70B) · Data sourced from Yahoo Finance · ~15s delayed
+              Uses Groq LLM · Data sourced from market providers · ~15s delayed
             </p>
           </motion.div>
 

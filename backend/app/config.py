@@ -86,9 +86,9 @@ class Settings(BaseSettings):
     # ── LLM Configuration ──
     llm_tier: LLMTier = LLMTier.CLOUD
 
-    # Groq (Primary — migrated from deprecated llama-3.3-70b-versatile → qwen-qwq-32b)
+    # Groq (Primary — using Qwen reasoning model. <think> tags stripped in groq_client.py)
     groq_api_key: str = ""
-    groq_model: str = "qwen/qwen3.6-27b"
+    groq_model: str = "qwen/qwen3.6-27b"  # Reasoning model — emits <think> tags, stripped client-side
     groq_max_tokens: int = 4096
 
     # Ollama (Local dev fallback)
@@ -105,11 +105,11 @@ class Settings(BaseSettings):
 
     # ── Data Sources ──
     yahoo_finance_enabled: bool = True
-    alpha_vantage_api_key: str = ""
-    alpha_vantage_daily_budget: int = 20
-    alpha_vantage_enabled: bool = False
-    newsapi_key: str = ""
-    newsapi_enabled: bool = True
+    alpha_vantage_api_key: str = ""         # Phase 2+ placeholder
+    alpha_vantage_daily_budget: int = 20    # Phase 2+ placeholder
+    alpha_vantage_enabled: bool = False     # Phase 2+ — not active
+    newsapi_key: str = ""                   # Reserved for future news provider integration
+    newsapi_enabled: bool = False           # No adapter yet — set True when a ToS-compliant provider is added
 
     # ── Security ──
     jwt_secret_key: str = "change-this-to-a-random-secret-in-production"
