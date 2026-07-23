@@ -394,6 +394,35 @@ for mod_name in engine_modules:
 
 
 # ===================================================================
+# TEST GROUP 11: Multi-Provider Adapters & Symbol Extraction
+# ===================================================================
+print("\n=== TEST GROUP 11: Multi-Provider Adapters & Symbol Extraction ===")
+
+try:
+    from app.data.adapters.finnhub import FinnhubAdapter
+    test("FinnhubAdapter imports", True)
+except Exception as e:
+    test("FinnhubAdapter imports", False, str(e))
+
+try:
+    from app.data.adapters.fmp import FMPAdapter
+    test("FMPAdapter imports", True)
+except Exception as e:
+    test("FMPAdapter imports", False, str(e))
+
+try:
+    from app.engines.assistant.engine import AssistantEngine
+    ae = AssistantEngine()
+    syms1 = ae._extract_symbols("Compare HDFCBANK.NS vs ICICIBANK.NS")
+    test("Assistant symbol extraction excludes 'VS'", "VS" not in syms1 and "HDFCBANK.NS" in syms1, f"Got: {syms1}")
+
+    syms2 = ae._extract_symbols("How is AAPL going in the market?")
+    test("Assistant symbol extraction excludes 'GOING'", "GOING" not in syms2 and "AAPL" in syms2, f"Got: {syms2}")
+except Exception as e:
+    test("Assistant symbol extraction", False, str(e))
+
+
+# ===================================================================
 # SUMMARY
 # ===================================================================
 print(f"\n{'=' * 60}")

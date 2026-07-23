@@ -171,27 +171,39 @@ class AssistantEngine:
         """Extract stock symbols from user message."""
         import re
         symbols = []
-        # Match patterns like RELIANCE.NS, TCS.BO, AAPL
-        pattern = r'\b([A-Z]{2,15}(?:\.NS|\.BO)?)\b'
+        # Match explicit Indian symbols (e.g. TCS.NS) or 1-5 char uppercase US tickers
+        pattern = r'\b([A-Z]{1,5}|[A-Z]{2,15}\.(?:NS|BO))\b'
         candidates = re.findall(pattern, message.upper())
 
-        # Filter out common English words
         stop_words = {
-            "THE", "AND", "FOR", "ARE", "BUT", "NOT", "YOU", "ALL",
-            "HER", "WAS", "ONE", "OUR", "OUT", "HAS", "HIS", "HOW",
-            "ITS", "LET", "MAY", "NEW", "NOW", "OLD", "SEE", "WAY",
-            "WHO", "DID", "GET", "HIM", "HIT", "PUT", "SAY", "SHE",
-            "TOO", "USE", "WHY", "CAN", "HAD", "HER", "ANY", "ASK",
-            "BAD", "BIG", "BIT", "DAY", "END", "FAR", "FEW", "GOT",
-            "WHY", "WHAT", "WITH", "WILL", "WOULD", "TELL", "ABOUT",
-            "THINK", "COULD", "ALSO", "THAN", "VERY", "BEEN", "SOME",
-            "FROM", "HAVE", "THIS", "THAT", "THEY", "EACH", "MAKE",
-            "LIKE", "LONG", "LOOK", "MANY", "MOST", "MUCH", "MUST",
-            "NAME", "ONLY", "OVER", "SUCH", "TAKE", "THEM", "THEN",
-            "WELL", "WHEN", "HERE", "JUST", "KNOW", "LAST", "HELP",
-            "DOES", "GIVE", "GOOD", "HIGH", "LOW", "RISK", "STOCK",
-            "MARKET", "PRICE", "COMPARE", "ANALYZE", "ANALYSIS",
-            "SHOW", "TODAY", "BUY", "SELL", "HOLD",
+            # 2-letter common words
+            "AM", "AN", "AS", "AT", "BE", "BY", "DO", "GO", "HE",
+            "IF", "IN", "IS", "IT", "ME", "MY", "NO", "OF", "ON",
+            "OR", "SO", "TO", "UP", "US", "VS", "WE",
+            # 3-letter common words
+            "ADD", "AGO", "ALL", "AND", "ANY", "ARE", "ASK", "BAD",
+            "BIG", "BIT", "BUT", "CAN", "DAY", "DID", "END", "FAR",
+            "FEW", "FOR", "GET", "GOT", "HAD", "HAS", "HER", "HIM",
+            "HIS", "HOW", "ITS", "LET", "MAY", "MEN", "NEW", "NOT",
+            "NOW", "OLD", "ONE", "OUR", "OUT", "OWN", "PUT", "RUN",
+            "SAY", "SHE", "THE", "TOO", "TRY", "TWO", "USE", "WAY",
+            "WHO", "WHY", "WON", "YES", "YET", "YOU",
+            # 4-5 letter common words & verbs
+            "ALSO", "BEEN", "BEST", "BOTH", "COME", "DOES", "DONE",
+            "DOWN", "EACH", "EVEN", "FIND", "FROM", "GIVE", "GONE",
+            "GOOD", "HAVE", "HERE", "HIGH", "HOLD", "JUST", "KEEP",
+            "KNOW", "LAST", "LIKE", "LONG", "LOOK", "MADE", "MAKE",
+            "MANY", "MORE", "MOST", "MUCH", "MUST", "NAME", "NEXT",
+            "ONLY", "OVER", "SEEM", "SHOW", "SOME", "SUCH", "TAKE",
+            "TELL", "THAN", "THAT", "THEM", "THEN", "THEY", "THIS",
+            "VERY", "WANT", "WELL", "WENT", "WERE", "WHAT", "WHEN",
+            "WILL", "WITH", "WORK", "YEAR", "GOING", "WHICH", "BETTER",
+            "EXPECT", "FUTURE", "SHOULD", "PERFORM", "TARGET",
+            # Financial words
+            "RISK", "STOCK", "PRICE", "MARKET", "SHARE", "TRADE",
+            "SELL", "RATE", "FUND", "BOND", "EARN", "LOSS", "GAIN",
+            "BEAR", "BULL", "CALL", "PUTS", "SAFE", "DEBT", "CASH",
+            "COMPARE", "ANALYZE", "ANALYSIS", "INVEST", "RETURN", "TODAY",
         }
 
         for sym in candidates:
