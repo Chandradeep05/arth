@@ -111,6 +111,14 @@ class Settings(BaseSettings):
     newsapi_key: str = ""                   # Reserved for future news provider integration
     newsapi_enabled: bool = False           # No adapter yet — set True when a ToS-compliant provider is added
 
+    # Finnhub API (US news, company profiles, metrics)
+    finnhub_api_key: str = ""
+    finnhub_enabled: bool = True
+
+    # Financial Modeling Prep API (Financial statements, ratios)
+    fmp_api_key: str = ""
+    fmp_enabled: bool = True
+
     # ── Security ──
     jwt_secret_key: str = "change-this-to-a-random-secret-in-production"
     jwt_algorithm: str = "HS256"
