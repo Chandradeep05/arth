@@ -33,7 +33,7 @@ logger = get_logger(__name__)
 
 ASSISTANT_SYSTEM_PROMPT = """You are ARTH, an AI financial research assistant. You help users analyze Indian and US stocks with data-driven insights.
 
-CONTEXT: You have access to real-time financial data from Yahoo Finance. When the user asks about a specific stock, the system will inject real-time data into the conversation for you to analyze.
+CONTEXT: You have access to financial data from MarketDataProvider (Twelve Data, Finnhub, FMP, NSE India). When the user asks about a specific stock, the system will inject market data into the conversation for you to analyze.
 
 YOUR PERSONALITY:
 - Professional but conversational
@@ -213,7 +213,8 @@ class AssistantEngine:
         return symbols[:3]  # Max 3 symbols per query
 
     async def _fetch_market_data(self, symbol: str) -> str:
-        """Fetch real market data for injection into the LLM context."""
+        """Fetch real market data for injection into the LLM context. Returns empty string if unavailable."""
+        has_data = False
         parts = [f"\n[MARKET DATA for {symbol}]"]
 
         # Quote
@@ -221,6 +222,7 @@ class AssistantEngine:
             quote_result = await self._data.get_quote(symbol)
             quote = quote_result.data if quote_result.available else None
             if quote:
+                has_data = True
                 quote.pop("_validation", None)
                 parts.append(
                     f"Price: {quote.get('price', 'N/A')} | "
@@ -230,14 +232,15 @@ class AssistantEngine:
                     f"Market Cap: {self._fmt_market_cap(quote.get('market_cap'))} | "
                     f"P/E: {quote.get('pe_ratio', 'N/A')}"
                 )
-        except Exception as e:
-            parts.append(f"Quote: unavailable ({e})")
+        except Exception:
+            pass
 
         # Company info (lightweight)
         try:
             info_result = await self._data.get_company_info(symbol)
             info = info_result.data if info_result.available else None
             if info:
+                has_data = True
                 parts.append(
                     f"Company: {info.get('name', symbol)} | "
                     f"Sector: {info.get('sector', 'N/A')} | "
@@ -253,6 +256,9 @@ class AssistantEngine:
                     )
         except Exception:
             pass
+
+        if not has_data:
+            return ""
 
         parts.append("[END MARKET DATA]\n")
         return "\n".join(parts)
@@ -311,9 +317,11 @@ class AssistantEngine:
         # Build context with real market data
         data_context = ""
         for sym in symbols:
-            session.add_entity(sym)
-            data_context += await self._fetch_market_data(sym)
-            tools_used.append(f"quote:{sym}")
+            data_str = await self._fetch_market_data(sym)
+            if data_str:
+                session.add_entity(sym)
+                data_context += data_str
+                tools_used.append(f"quote:{sym}")
 
         # Build augmented user message
         augmented_message = message
@@ -367,9 +375,11 @@ class AssistantEngine:
         symbols = self._extract_symbols(message)
         data_context = ""
         for sym in symbols:
-            session.add_entity(sym)
-            data_context += await self._fetch_market_data(sym)
-            session.tool_calls.append(f"quote:{sym}")
+            data_str = await self._fetch_market_data(sym)
+            if data_str:
+                session.add_entity(sym)
+                data_context += data_str
+                session.tool_calls.append(f"quote:{sym}")
 
         augmented_message = message
         if data_context:

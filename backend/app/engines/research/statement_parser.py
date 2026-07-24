@@ -8,9 +8,8 @@ Fetches and structures:
 - Derived ratios with historical trends
 - Financial health scorecard
 
-Note: Financial statements (income_stmt, balance_sheet, cashflow) are not
-available from TwelveData or NSE free tiers. This module returns empty
-statements when data is unavailable rather than hitting blocked Yahoo APIs.
+Financial statements are provided via MarketDataProvider (FMP adapter).
+Returns structured statements when available, or an empty result structure if unavailable.
 
 All DataFrame columns are period end-dates; rows are line items.
 We transpose into a list-of-dicts keyed by period for JSON serialisation.
@@ -142,7 +141,7 @@ class StatementParser:
             logger.info(
                 "statement_fetch_unavailable",
                 symbol=symbol,
-                reason="Financial statements not available from current data providers",
+                reason="Financial statements unavailable for this symbol",
             )
 
             return {
@@ -154,8 +153,8 @@ class StatementParser:
                 "fetched_at": datetime.now(timezone.utc).isoformat(),
                 "source": "unavailable",
                 "unavailable_reason": (
-                    "Financial statements require a premium data provider. "
-                    "Quote, price history, and company info are available."
+                    "Financial statements are currently unavailable from configured data providers for this symbol. "
+                    "Quote, price history, and company info remain available."
                 ),
             }
 

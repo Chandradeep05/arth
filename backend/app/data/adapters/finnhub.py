@@ -21,8 +21,8 @@ from app.data.adapters.base import BaseDataAdapter
 
 logger = get_logger(__name__)
 
-_request_semaphore = asyncio.Semaphore(2)
-_MIN_REQUEST_INTERVAL = 0.2  # 60 req/min limit -> ~1s/5 req
+_request_semaphore = asyncio.Semaphore(1)
+_MIN_REQUEST_INTERVAL = 1.0  # 60 req/min limit -> max 1 req/sec
 _last_request_time = [0.0]
 
 _cache: Dict[str, tuple] = {}

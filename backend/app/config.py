@@ -104,7 +104,7 @@ class Settings(BaseSettings):
     openai_embedding_model: str = "text-embedding-3-small"
 
     # ── Data Sources ──
-    yahoo_finance_enabled: bool = True
+    yahoo_finance_enabled: bool = False     # Deprecated — migrated to MarketDataProvider (TwelveData, Finnhub, FMP, NSE)
     alpha_vantage_api_key: str = ""         # Phase 2+ placeholder
     alpha_vantage_daily_budget: int = 20    # Phase 2+ placeholder
     alpha_vantage_enabled: bool = False     # Phase 2+ — not active
