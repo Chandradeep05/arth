@@ -111,24 +111,38 @@ class FinnhubAdapter(BaseDataAdapter):
                 return None
 
     async def get_company_info(self, symbol: str) -> Optional[Dict[str, Any]]:
-        """Fetch company profile from /stock/profile2."""
+        """Fetch company profile from /stock/profile2 with enriched metrics."""
         clean_symbol = symbol.split(".")[0].upper()
         raw = await self._throttled_get("stock/profile2", {"symbol": clean_symbol})
         if not raw or not raw.get("name"):
             return None
 
-        return {
+        # Finnhub uses "finnhubIndustry" but not a separate "sector" field.
+        # Map industry to sector for downstream consumers that expect both.
+        industry = raw.get("finnhubIndustry", "")
+
+        result = {
             "symbol": symbol.upper(),
             "name": raw.get("name", ""),
             "exchange": raw.get("exchange", ""),
             "currency": raw.get("currency", "USD"),
             "country": raw.get("country", ""),
-            "industry": raw.get("finnhubIndustry", ""),
+            "sector": industry,      # Best available mapping from Finnhub
+            "industry": industry,
             "market_cap": raw.get("marketCapitalization"),
             "share_outstanding": raw.get("shareOutstanding"),
+            "description": "",       # Finnhub profile2 does not include description
             "weburl": raw.get("weburl", ""),
             "logo": raw.get("logo", ""),
+            "metrics": {},           # Populated below if fundamentals available
         }
+
+        # Attempt to enrich with financial metrics from /stock/metric
+        fundamentals = await self.get_fundamentals(symbol)
+        if fundamentals:
+            result["metrics"] = fundamentals
+
+        return result
 
     async def get_news(self, symbol: str, count: int = 15) -> Optional[List[Dict[str, Any]]]:
         """Fetch company news from /company-news."""
@@ -149,13 +163,15 @@ class FinnhubAdapter(BaseDataAdapter):
 
         articles = []
         for item in raw[:count]:
+            # Normalize to canonical schema expected by SentimentEngine:
+            # title, publisher, link, providerPublishTime
             articles.append({
-                "headline": item.get("headline", ""),
+                "title": item.get("headline", ""),
+                "publisher": item.get("source", "Finnhub"),
+                "link": item.get("url", ""),
+                "providerPublishTime": item.get("datetime"),
                 "summary": item.get("summary", ""),
-                "url": item.get("url", ""),
-                "datetime": item.get("datetime"),
-                "source": item.get("source", "Finnhub"),
-                "image": item.get("image", "")
+                "image": item.get("image", ""),
             })
 
         return articles if articles else None

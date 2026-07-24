@@ -101,6 +101,67 @@ class FMPAdapter(BaseDataAdapter):
                 logger.error("fmp_request_failed", endpoint=endpoint, error=str(e))
                 return None
 
+    @staticmethod
+    def _normalize_periods(raw_records: list) -> list:
+        """Convert raw FMP JSON records to canonical {period, items} format.
+
+        FMP returns: [{"date": "2024-12-31", "revenue": 123, ...}, ...]
+        StatementParser expects: [{"period": "2024-12-31", "items": {"Total Revenue": 123, ...}}, ...]
+        """
+        # FMP camelCase → canonical line-item names
+        KEY_MAP = {
+            # Income statement
+            "revenue": "Total Revenue",
+            "costOfRevenue": "Cost Of Revenue",
+            "grossProfit": "Gross Profit",
+            "operatingIncome": "Operating Income",
+            "netIncome": "Net Income",
+            "operatingExpenses": "Operating Expenses",
+            "ebitda": "EBITDA",
+            "eps": "Basic EPS",
+            "epsdiluted": "Diluted EPS",
+            "interestExpense": "Interest Expense",
+            "incomeBeforeTax": "Income Before Tax",
+            "incomeTaxExpense": "Tax Provision",
+            "researchAndDevelopmentExpenses": "Research And Development",
+            # Balance sheet
+            "totalAssets": "Total Assets",
+            "totalLiabilities": "Total Liabilities",
+            "totalStockholdersEquity": "Total Stockholders Equity",
+            "totalCurrentAssets": "Current Assets",
+            "totalCurrentLiabilities": "Current Liabilities",
+            "cashAndCashEquivalents": "Cash And Cash Equivalents",
+            "totalDebt": "Total Debt",
+            "netDebt": "Net Debt",
+            "longTermDebt": "Long Term Debt",
+            "shortTermDebt": "Short Term Debt",
+            "inventory": "Inventory",
+            "totalNonCurrentAssets": "Total Non Current Assets",
+            "totalNonCurrentLiabilities": "Total Non Current Liabilities",
+            # Cash flow
+            "operatingCashFlow": "Operating Cash Flow",
+            "capitalExpenditure": "Capital Expenditure",
+            "freeCashFlow": "Free Cash Flow",
+            "dividendsPaid": "Dividends Paid",
+            "netCashUsedForInvestingActivites": "Cash From Investing",
+            "netCashUsedProvidedByFinancingActivities": "Cash From Financing",
+            "netChangeInCash": "Net Change In Cash",
+        }
+
+        periods = []
+        for record in (raw_records or []):
+            period_date = record.get("date", record.get("fiscalDateEnding", "unknown"))
+            items = {}
+            for fmp_key, canonical_name in KEY_MAP.items():
+                val = record.get(fmp_key)
+                if val is not None:
+                    try:
+                        items[canonical_name] = float(val)
+                    except (ValueError, TypeError):
+                        items[canonical_name] = None
+            periods.append({"period": period_date, "items": items})
+        return periods
+
     async def get_financial_statements(self, symbol: str) -> Optional[Dict[str, Any]]:
         """Fetch income statement, balance sheet, and cash flow for symbol."""
         clean_symbol = symbol.split(".")[0].upper()
@@ -114,9 +175,9 @@ class FMPAdapter(BaseDataAdapter):
 
         return {
             "symbol": symbol.upper(),
-            "income_statement": {"annual": inc or []},
-            "balance_sheet": {"annual": bal or []},
-            "cash_flow": {"annual": cf or []},
+            "income_statement": {"annual": self._normalize_periods(inc)},
+            "balance_sheet": {"annual": self._normalize_periods(bal)},
+            "cash_flow": {"annual": self._normalize_periods(cf)},
         }
 
     async def get_ratios(self, symbol: str) -> Optional[Dict[str, Any]]:

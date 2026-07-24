@@ -30,6 +30,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 import numpy as np
+import pandas as pd
 
 from app.core.logging import get_logger
 from app.data.market_data_provider import market_data
@@ -100,7 +101,14 @@ class RiskEngine:
 
         async def _fetch_ohlcv(symbol, period="3mo", interval="1d", **kw):
             result = await self._data.get_history(symbol, period=period, interval=interval)
-            return result.data if result.available else None
+            if not result.available or result.data is None:
+                return None
+            df = result.data
+            # Serialize DataFrame to cache-safe dict-of-records
+            if isinstance(df, pd.DataFrame) and not df.empty:
+                records = df.reset_index().to_dict(orient="records")
+                return {"bars": records}
+            return None
 
         company = await cache.get_or_fetch(
             key=cache.company_key(symbol),
@@ -116,15 +124,17 @@ class RiskEngine:
             symbol=symbol, period="3mo", interval="1d",
         )
 
-        # Unwrap OHLCV from cache format
+        # Unwrap OHLCV from cache format → reconstruct DataFrame
+        ohlcv = None
         if isinstance(ohlcv_result, dict):
             ohlcv_result.pop("_cache_hit", None)
             ohlcv_result.pop("_cached_at", None)
             ohlcv_result.pop("_cache_source", None)
-            ohlcv = ohlcv_result.get("bars", ohlcv_result)
-            if isinstance(ohlcv, dict):
-                ohlcv = None  # Only cache metadata left, no actual bars
-        else:
+            bars = ohlcv_result.get("bars")
+            if bars and isinstance(bars, list):
+                from app.data.market_data_provider import normalize_ohlcv
+                ohlcv = normalize_ohlcv(bars, "cache")
+        elif isinstance(ohlcv_result, pd.DataFrame):
             ohlcv = ohlcv_result
 
         # Clean cache metadata from company
@@ -197,9 +207,9 @@ class RiskEngine:
             return 50.0, ["Insufficient data for volatility calculation"]
 
         if isinstance(ohlcv, pd.DataFrame):
-            closes = ohlcv["close"].tail(30).values
+            closes = ohlcv["Close"].tail(30).values
         else:
-            closes = [bar["close"] for bar in ohlcv[-30:]]
+            closes = [bar.get("Close", bar.get("close")) for bar in ohlcv[-30:]]
         returns = np.diff(np.log(closes))
 
         daily_vol = float(np.std(returns))
@@ -237,9 +247,9 @@ class RiskEngine:
             return 50.0, ["Insufficient data for liquidity analysis"]
 
         if isinstance(ohlcv, pd.DataFrame):
-            volumes = ohlcv["volume"].tail(20).values
+            volumes = ohlcv["Volume"].tail(20).values
         else:
-            volumes = [bar["volume"] for bar in ohlcv[-20:]]
+            volumes = [bar.get("Volume", bar.get("volume")) for bar in ohlcv[-20:]]
         avg_vol = float(np.mean(volumes))
 
         # Higher volume = lower liquidity risk

@@ -46,32 +46,48 @@ _yahoo_adapter = yahoo_adapter
 
 
 def _raise_data_error(symbol: str):
-    """Raise the appropriate error when Yahoo returns no data.
+    """Raise the appropriate error when data source returns no data.
 
-    Checks the adapter's last error message and failure timestamp to detect
-    rate limiting. The circuit breaker alone is insufficient because it needs
-    15 failures to open — early rate-limited requests would incorrectly
-    return 404 'symbol not found'.
+    Checks both the HybridAdapter's health AND the underlying TwelveData
+    adapter's health to detect rate limiting. HybridAdapter.get_health()
+    alone is unreliable because it doesn't record failures from delegated
+    calls — it always reports healthy even when TwelveData is rate-limited.
     """
+    # Check HybridAdapter health (may always be "healthy" — see Bug #1)
     health = _yahoo_adapter.get_health()
     err = health.last_error_message.lower()
 
-    # Rate-limit keywords in the error message
-    is_rate_limited = any(kw in err for kw in ["rate", "429", "too many", "crumb"])
+    # Also check the underlying TwelveData adapter directly
+    try:
+        from app.data.adapters.twelvedata import twelvedata_adapter
+        td_health = twelvedata_adapter.get_health()
+        td_err = td_health.last_error_message.lower()
+    except Exception:
+        td_err = ""
+        td_health = None
 
-    # Circuit breaker is open or half-open
+    combined_err = f"{err} {td_err}"
+
+    # Rate-limit keywords in either adapter's error message
+    is_rate_limited = any(kw in combined_err for kw in ["rate", "429", "too many", "crumb", "cooldown"])
+
+    # Circuit breaker is open or half-open on either adapter
     is_circuit_open = health.circuit_state != "closed"
+    if td_health and td_health.circuit_state != "closed":
+        is_circuit_open = True
 
-    # Recent failure (within last 120s) — likely systemic, not a missing symbol
+    # Recent failure on either adapter
     is_recent_failure = (
-        health.last_failure is not None
-        and health.failure_count > 0
+        (health.last_failure is not None and health.failure_count > 0)
+        or (td_health and td_health.last_failure is not None and td_health.failure_count > 0)
     )
 
-    if is_rate_limited or is_circuit_open or (is_recent_failure and health.failure_count >= 2):
+    failure_count = health.failure_count + (td_health.failure_count if td_health else 0)
+
+    if is_rate_limited or is_circuit_open or (is_recent_failure and failure_count >= 2):
         raise DataSourceError(
-            source="Yahoo Finance",
-            message=f"Data for '{symbol}' temporarily unavailable — Yahoo Finance rate limited. Try again in ~60s.",
+            source="MarketDataProvider",
+            message=f"Data for '{symbol}' temporarily unavailable — data provider rate limited. Try again in ~60s.",
         )
     raise SymbolNotFoundError(symbol)
 

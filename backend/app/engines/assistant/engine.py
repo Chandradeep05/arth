@@ -171,8 +171,9 @@ class AssistantEngine:
         """Extract stock symbols from user message."""
         import re
         symbols = []
-        # Match explicit Indian symbols (e.g. TCS.NS) or 1-5 char uppercase US tickers
-        pattern = r'\b([A-Z]{1,5}|[A-Z]{2,15}\.(?:NS|BO))\b'
+        # Match explicit Indian symbols (e.g. TCS.NS) FIRST, then 1-5 char uppercase US tickers
+        # Indian pattern must come first so TCS.NS matches as TCS.NS, not just TCS
+        pattern = r'\b([A-Z]{2,15}\.(?:NS|BO)|[A-Z]{1,5})\b'
         candidates = re.findall(pattern, message.upper())
 
         stop_words = {

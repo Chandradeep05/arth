@@ -73,8 +73,12 @@ def normalize_ohlcv(data: Any, source: str) -> pd.DataFrame | None:
     Takes raw data from ANY provider and returns a standardized DataFrame 
     with columns: Open, High, Low, Close, Volume, sorted ascending by DatetimeIndex.
     """
-    if not data:
+    if data is None:
         return None
+    if isinstance(data, pd.DataFrame):
+        if data.empty:
+            return None
+        return data  # Already a DataFrame, return as-is
         
     try:
         if isinstance(data, dict) and 'bars' in data:
@@ -131,12 +135,12 @@ class MarketDataProvider:
     """Unified interface for market data."""
 
     def __init__(self):
-        from app.data.adapters.twelvedata import TwelveDataAdapter
+        from app.data.adapters.twelvedata import twelvedata_adapter
         from app.data.adapters.nse import nse_adapter
         from app.data.adapters.finnhub import finnhub_adapter
         from app.data.adapters.fmp import fmp_adapter
 
-        self._twelve = TwelveDataAdapter()
+        self._twelve = twelvedata_adapter  # Use singleton — not a new instance
         self._nse = nse_adapter
         self._finnhub = finnhub_adapter
         self._fmp = fmp_adapter
@@ -156,9 +160,11 @@ class MarketDataProvider:
     def _get_chain(self, symbol: str, capability: str) -> List[str]:
         is_indian = symbol.upper().endswith(('.NS', '.BO'))
         if is_indian:
+            # Indian symbols: NSE only — TwelveData doesn't understand .NS/.BO suffixes
+            # and sending them wastes our 8 credits/min free-tier quota
             if capability in ["quote", "history"]:
-                return ["nse", "twelvedata"]
-            return ["twelvedata"]
+                return ["nse"]
+            return []  # No provider for Indian news/fundamentals/financials yet
 
         # US Stocks provider chain
         chains = {
