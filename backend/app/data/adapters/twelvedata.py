@@ -391,13 +391,39 @@ class TwelveDataAdapter(BaseDataAdapter):
                     if item.get("status") == "error":
                         continue
                     try:
+                        def _safe_float(val, fallback=0.0):
+                            if val is None or val == "":
+                                return fallback
+                            try:
+                                return float(val)
+                            except (ValueError, TypeError):
+                                return fallback
+
+                        price = _safe_float(item.get("close"), 0)
+                        prev_close = _safe_float(item.get("previous_close"), price)
+                        # open/high/low may be "0" or "" when market is closed —
+                        # fall back to price/prev_close so the UI never shows blanks.
+                        raw_open = _safe_float(item.get("open"), 0)
+                        raw_high = _safe_float(item.get("high"), 0)
+                        raw_low = _safe_float(item.get("low"), 0)
+
                         results.append({
                             "symbol": item.get("symbol", ""),
                             "name": item.get("name", ""),
-                            "price": round(float(item.get("close", 0)), 2),
-                            "change": round(float(item.get("change", 0)), 2),
-                            "change_percent": round(float(item.get("percent_change", 0)), 2),
-                            "volume": int(item.get("volume", 0)),
+                            "price": round(price, 2),
+                            "change": round(_safe_float(item.get("change"), 0), 2),
+                            "change_percent": round(_safe_float(item.get("percent_change"), 0), 2),
+                            "volume": int(_safe_float(item.get("volume"), 0)),
+                            "high": round(raw_high if raw_high > 0 else price, 2),
+                            "low": round(raw_low if raw_low > 0 else price, 2),
+                            "open": round(raw_open if raw_open > 0 else prev_close, 2),
+                            "previous_close": round(prev_close, 2),
+                            "market_cap": None,
+                            "pe_ratio": None,
+                            "timestamp": datetime.now(timezone.utc),
+                            "exchange": item.get("exchange", "NASDAQ"),
+                            "market": "us",
+                            "currency": item.get("currency", "USD"),
                         })
                     except (ValueError, TypeError):
                         continue

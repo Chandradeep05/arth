@@ -190,6 +190,12 @@ class GroqClient(BaseLLMClient):
             # At end of stream, flush any remaining non-thinking buffer
             if buffer and not in_thinking_block and not past_thinking:
                 yield buffer
+            elif in_thinking_block and not past_thinking:
+                # Model burned its whole token budget inside <think> and never
+                # closed it — without this the generator yields nothing at all
+                # and the user gets a permanently empty response.
+                logger.warning("groq_stream_unterminated_think_block", model=model)
+                yield "I need a bit more room to think through that — could you ask again, maybe a little more specifically?"
 
         except Exception as e:
             logger.error("groq_stream_failed", model=model, error=str(e))

@@ -220,11 +220,19 @@ export default function FinancialsPage() {
     const balanceData = statementsData?.balance_sheet?.[period];
     const cashflowData = statementsData?.cash_flow?.[period];
 
+    // Indian symbols (.NS/.BO) report in Cr; everything else (US stocks) is USD.
+    // StatementTable defaults to INR/Cr, so this must be passed explicitly
+    // or every non-Indian statement renders with the wrong currency label.
+    const statementCurrency: 'INR' | 'USD' =
+      activeSymbol.toUpperCase().endsWith('.NS') || activeSymbol.toUpperCase().endsWith('.BO')
+        ? 'INR'
+        : 'USD';
+
     switch (activeTab) {
       case 'income': {
         const rows = statementsToTable(incomeData);
         return rows.length > 0 ? (
-          <StatementTable data={rows} title="Income Statement" />
+          <StatementTable data={rows} title="Income Statement" currency={statementCurrency} />
         ) : (
           <EmptyTab />
         );
@@ -232,7 +240,7 @@ export default function FinancialsPage() {
       case 'balance': {
         const rows = statementsToTable(balanceData);
         return rows.length > 0 ? (
-          <StatementTable data={rows} title="Balance Sheet" />
+          <StatementTable data={rows} title="Balance Sheet" currency={statementCurrency} />
         ) : (
           <EmptyTab />
         );
@@ -240,7 +248,7 @@ export default function FinancialsPage() {
       case 'cashflow': {
         const rows = statementsToTable(cashflowData);
         return rows.length > 0 ? (
-          <StatementTable data={rows} title="Cash Flow Statement" />
+          <StatementTable data={rows} title="Cash Flow Statement" currency={statementCurrency} />
         ) : (
           <EmptyTab />
         );
@@ -248,7 +256,7 @@ export default function FinancialsPage() {
       case 'ratios': {
         const rows = ratiosToTable(ratiosData?.ratios as Record<string, unknown> | undefined);
         return rows.length > 0 ? (
-          <StatementTable data={rows} title="Financial Ratios" />
+          <StatementTable data={rows} title="Financial Ratios" currency={statementCurrency} />
         ) : (
           <EmptyTab />
         );

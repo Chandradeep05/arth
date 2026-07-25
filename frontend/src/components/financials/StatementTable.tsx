@@ -12,16 +12,26 @@ export interface StatementTableProps {
   data: StatementPeriod[];
   title: string;
   className?: string;
+  /** Defaults to 'INR' to preserve existing behavior for existing callers. */
+  currency?: 'INR' | 'USD';
 }
 
 /* ── Number Formatting ── */
-function formatNumber(value: unknown): string {
+function formatNumber(value: unknown, currency: 'INR' | 'USD' = 'INR'): string {
   if (value === null || value === undefined || value === '') return '—';
   const num = typeof value === 'string' ? parseFloat(value) : (value as number);
   if (isNaN(num)) return String(value);
 
   const abs = Math.abs(num);
   const sign = num < 0 ? '-' : '';
+
+  if (currency === 'USD') {
+    if (abs >= 1e12) return `${sign}$${(abs / 1e12).toFixed(2)}T`;
+    if (abs >= 1e9) return `${sign}$${(abs / 1e9).toFixed(2)}B`;
+    if (abs >= 1e6) return `${sign}$${(abs / 1e6).toFixed(2)}M`;
+    if (abs >= 1e3) return `${sign}$${(abs / 1e3).toFixed(1)}K`;
+    return `${sign}$${abs.toFixed(2)}`;
+  }
 
   // Indian numbering: Cr (10M), L (100K)
   if (abs >= 1e9) return `${sign}${(abs / 1e7).toFixed(1)} Cr`;
@@ -51,7 +61,7 @@ function ChangeCell({ change }: { change: number | null }) {
 }
 
 /* ── Component ── */
-export default function StatementTable({ data, title, className = '' }: StatementTableProps) {
+export default function StatementTable({ data, title, className = '', currency = 'INR' }: StatementTableProps) {
   if (!data || data.length === 0) {
     return (
       <div className={`card p-6 ${className}`}>
@@ -115,7 +125,7 @@ export default function StatementTable({ data, title, className = '' }: Statemen
                       key={period.period}
                       className="text-right font-mono text-xs text-[var(--text)]"
                     >
-                      {formatNumber(period[key])}
+                      {formatNumber(period[key], currency)}
                     </td>
                   ))}
                   {periods.length >= 2 && (

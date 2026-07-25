@@ -229,7 +229,12 @@ class PredictionModel:
 
             # Use .shap_values() but immediately convert to Python list
             # to escape numpy's auto-coercion of bracket-wrapped strings.
-            raw = explainer.shap_values(live_df)
+            # Passing a plain float64 ndarray (rather than the DataFrame)
+            # sidesteps a SHAP/pandas object-dtype code path that is the
+            # actual source of the '[4.1156877E-3]' bracket-string bug —
+            # the DataFrame-sanitize above only guards live_df's own dtypes,
+            # it can't reach into SHAP's internal coercion.
+            raw = explainer.shap_values(live_df.to_numpy(dtype=np.float64))
 
             # raw can be: ndarray (2D or 1D), list of arrays, or Explanation
             # Convert to a flat Python list of raw values ASAP
