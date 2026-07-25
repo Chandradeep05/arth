@@ -211,8 +211,16 @@ async def get_indices(
         else:
             indices_list = []
 
+    # Parse indices safely — never let one bad index dict crash the whole response
+    parsed_indices = []
+    for idx in indices_list:
+        try:
+            parsed_indices.append(MarketIndex(**idx))
+        except Exception as e:
+            logger.warning("skipping_malformed_index", index_data=str(idx)[:200], error=str(e))
+
     return MarketOverviewResponse(
-        indices=[MarketIndex(**idx) for idx in indices_list],
+        indices=parsed_indices,
         freshness=_make_freshness(cache_hit=cache_hit),
     )
 

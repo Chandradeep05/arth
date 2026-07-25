@@ -168,7 +168,12 @@ class AssistantEngine:
     # ── Tool routing ────────────────────────────────────────────
 
     def _extract_symbols(self, message: str) -> List[str]:
-        """Extract stock symbols from user message."""
+        """Extract stock symbols from user message.
+
+        Uses a combination of regex matching, an expanded stop-word list,
+        and structural heuristics to avoid false positives like 'DOING',
+        'SEEN', 'HELD' etc. that are valid English words matching [A-Z]{1,5}.
+        """
         import re
         symbols = []
         # Match explicit Indian symbols (e.g. TCS.NS) FIRST, then 1-5 char uppercase US tickers
@@ -188,7 +193,8 @@ class AssistantEngine:
             "HIS", "HOW", "ITS", "LET", "MAY", "MEN", "NEW", "NOT",
             "NOW", "OLD", "ONE", "OUR", "OUT", "OWN", "PUT", "RUN",
             "SAY", "SHE", "THE", "TOO", "TRY", "TWO", "USE", "WAY",
-            "WHO", "WHY", "WON", "YES", "YET", "YOU",
+            "WHO", "WHY", "WON", "YES", "YET", "YOU", "SET", "TOP",
+            "LOW", "RED", "NET", "OWE", "PAY", "RAW", "SEE", "SAW",
             # 4-5 letter common words & verbs
             "ALSO", "BEEN", "BEST", "BOTH", "COME", "DOES", "DONE",
             "DOWN", "EACH", "EVEN", "FIND", "FROM", "GIVE", "GONE",
@@ -200,16 +206,43 @@ class AssistantEngine:
             "VERY", "WANT", "WELL", "WENT", "WERE", "WHAT", "WHEN",
             "WILL", "WITH", "WORK", "YEAR", "GOING", "WHICH", "BETTER",
             "EXPECT", "FUTURE", "SHOULD", "PERFORM", "TARGET",
-            # Financial words
+            # Common verbs/words that are 2-5 chars and match ticker pattern
+            # These caused false positives in production (e.g. "DOING" parsed as ticker)
+            "DOING", "BEING", "SEEN", "HELD", "SOLD", "TOLD", "SAID",
+            "USED", "GAVE", "TOOK", "CAME", "LEFT", "HELP", "MOVE",
+            "REAL", "SAME", "TURN", "NEED", "FEEL", "THINK", "STILL",
+            "ABOUT", "AFTER", "AGAIN", "BELOW", "COULD", "EVERY",
+            "FIRST", "GREAT", "HEARD", "MIGHT", "NEVER", "OTHER",
+            "PLACE", "POINT", "RIGHT", "SHALL", "SINCE", "START",
+            "THEIR", "THERE", "THESE", "THING", "THOSE", "THREE",
+            "TIMES", "TRIED", "UNDER", "UNTIL", "WHERE", "WHILE",
+            "WORLD", "WOULD", "WRITE", "WRONG", "YOURS",
+            # Financial words (not tickers)
             "RISK", "STOCK", "PRICE", "MARKET", "SHARE", "TRADE",
             "SELL", "RATE", "FUND", "BOND", "EARN", "LOSS", "GAIN",
             "BEAR", "BULL", "CALL", "PUTS", "SAFE", "DEBT", "CASH",
             "COMPARE", "ANALYZE", "ANALYSIS", "INVEST", "RETURN", "TODAY",
+            "WORTH", "VALUE", "CHART", "TREND", "WATCH", "SPLIT",
+            "RALLY", "CRASH", "SURGE", "RISE", "FALL", "DROP", "GROW",
+            "MONEY", "HEDGE", "SHORT", "YIELD", "ALERT", "CLOSE",
+            "OPEN", "BUY", "WHY",
         }
 
+        # Structural heuristic: if a candidate appears as lowercase in the
+        # original message, it's almost certainly an English word, not a ticker.
+        # Real tickers are written in uppercase by users (AAPL, GOOGL, TCS.NS).
+        original_words = set(re.findall(r'\b[a-z]{2,}\b', message))
+
         for sym in candidates:
-            if sym not in stop_words and len(sym) >= 2:
-                symbols.append(sym)
+            if sym in stop_words:
+                continue
+            if len(sym) < 2:
+                continue
+            # If the word appears in lowercase in the original message,
+            # treat it as a regular word, not a ticker symbol
+            if sym.lower() in original_words:
+                continue
+            symbols.append(sym)
 
         return symbols[:3]  # Max 3 symbols per query
 

@@ -220,6 +220,11 @@ class PredictionModel:
                 except (TypeError, ValueError):
                     return 0.0
 
+            # Sanitize live_df dtypes BEFORE calling SHAP — feature columns
+            # can contain stringified bracket values like '[4.115]' from cache
+            # deserialization, which crashes inside SHAP's numpy coercion.
+            live_df = live_df.apply(pd.to_numeric, errors='coerce').fillna(0.0)
+
             explainer = shap.TreeExplainer(model)
 
             # Use .shap_values() but immediately convert to Python list

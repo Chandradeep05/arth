@@ -240,6 +240,8 @@ class NSEAdapter:
             "NIFTY NEXT 50": "^NSMIDCP",
         }
 
+        now = datetime.now(timezone.utc)
+
         for idx in data.get("data", []):
             name = idx.get("index", "")
             if name in target_indices:
@@ -247,10 +249,10 @@ class NSEAdapter:
                     results.append({
                         "symbol": target_indices[name],
                         "name": name,
-                        "price": round(float(idx.get("last", 0)), 2),
+                        "value": round(float(idx.get("last", 0)), 2),
                         "change": round(float(idx.get("variation", 0)), 2),
                         "change_percent": round(float(idx.get("percentChange", 0)), 2),
-                        "market": "india",
+                        "timestamp": now,
                     })
                 except (ValueError, TypeError):
                     continue
@@ -264,10 +266,10 @@ class NSEAdapter:
                     results.append({
                         "symbol": "^BSESN",
                         "name": "S&P BSE SENSEX",
-                        "price": round(float(idx.get("last", 0)), 2),
+                        "value": round(float(idx.get("last", 0)), 2),
                         "change": round(float(idx.get("variation", 0)), 2),
                         "change_percent": round(float(idx.get("percentChange", 0)), 2),
-                        "market": "india",
+                        "timestamp": now,
                     })
                     break
                 except (ValueError, TypeError):

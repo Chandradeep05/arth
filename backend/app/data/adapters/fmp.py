@@ -2,12 +2,12 @@
 Financial Modeling Prep (FMP) adapter — API key authenticated source for financial statements and ratios.
 
 Free tier: 250 requests/day.
-Endpoints used:
-- /income-statement/            → get_income_statement
-- /balance-sheet-statement/      → get_balance_sheet
-- /cash-flow-statement/          → get_cash_flow
-- /ratios/                       → get_ratios
-- /profile/                      → get_company_profile
+Endpoints used (stable API):
+- /stable/income-statement?symbol=X         → get_income_statement
+- /stable/balance-sheet-statement?symbol=X   → get_balance_sheet
+- /stable/cash-flow-statement?symbol=X       → get_cash_flow
+- /stable/ratios?symbol=X                    → get_ratios
+- /stable/profile?symbol=X                   → get_company_profile
 """
 
 from __future__ import annotations
@@ -32,7 +32,7 @@ _CACHE_TTL_RATIOS = 86400      # 24 hours
 
 _http_client: Optional[httpx.AsyncClient] = None
 
-BASE_URL = "https://financialmodelingprep.com/api/v3"
+BASE_URL = "https://financialmodelingprep.com/stable"
 
 
 def _get_client() -> httpx.AsyncClient:
@@ -166,9 +166,9 @@ class FMPAdapter(BaseDataAdapter):
         """Fetch income statement, balance sheet, and cash flow for symbol."""
         clean_symbol = symbol.split(".")[0].upper()
 
-        inc = await self._throttled_get(f"income-statement/{clean_symbol}", {"limit": 4})
-        bal = await self._throttled_get(f"balance-sheet-statement/{clean_symbol}", {"limit": 4})
-        cf = await self._throttled_get(f"cash-flow-statement/{clean_symbol}", {"limit": 4})
+        inc = await self._throttled_get("income-statement", {"symbol": clean_symbol, "limit": 4})
+        bal = await self._throttled_get("balance-sheet-statement", {"symbol": clean_symbol, "limit": 4})
+        cf = await self._throttled_get("cash-flow-statement", {"symbol": clean_symbol, "limit": 4})
 
         if not inc and not bal and not cf:
             return None
@@ -183,7 +183,7 @@ class FMPAdapter(BaseDataAdapter):
     async def get_ratios(self, symbol: str) -> Optional[Dict[str, Any]]:
         """Fetch financial ratios for symbol."""
         clean_symbol = symbol.split(".")[0].upper()
-        raw = await self._throttled_get(f"ratios/{clean_symbol}", {"limit": 1})
+        raw = await self._throttled_get("ratios", {"symbol": clean_symbol, "limit": 1})
         if not raw or not isinstance(raw, list) or len(raw) == 0:
             return None
         return raw[0]
@@ -197,7 +197,7 @@ class FMPAdapter(BaseDataAdapter):
 
     async def get_company_info(self, symbol: str) -> Optional[Dict[str, Any]]:
         clean_symbol = symbol.split(".")[0].upper()
-        raw = await self._throttled_get(f"profile/{clean_symbol}")
+        raw = await self._throttled_get("profile", {"symbol": clean_symbol})
         if not raw or not isinstance(raw, list) or len(raw) == 0:
             return None
         item = raw[0]

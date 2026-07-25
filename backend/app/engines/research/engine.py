@@ -177,7 +177,8 @@ class ResearchEngine:
         ohlcv_result = history_result.data if history_result.available else None
         if ohlcv_result is not None:
             if hasattr(ohlcv_result, 'to_dict'):
-                ohlcv = ohlcv_result.reset_index().to_dict('records')
+                ohlcv_df = ohlcv_result.rename(columns=str.lower).reset_index()
+                ohlcv = ohlcv_df.rename(columns={'datetime': 'date'}).to_dict('records')
             elif isinstance(ohlcv_result, dict):
                 ohlcv = ohlcv_result.get("bars", ohlcv_result)
             else:
@@ -249,7 +250,8 @@ class ResearchEngine:
         if history_result.available and history_result.data is not None:
             ohlcv_data = history_result.data
             if hasattr(ohlcv_data, 'to_dict'):
-                bars = ohlcv_data.reset_index().to_dict('records')
+                ohlcv_df = ohlcv_data.rename(columns=str.lower).reset_index()
+                bars = ohlcv_df.rename(columns={'datetime': 'date'}).to_dict('records')
             elif isinstance(ohlcv_data, dict):
                 bars = ohlcv_data.get("bars", ohlcv_data)
             else:
@@ -344,7 +346,8 @@ class ResearchEngine:
         if history_result.available and history_result.data is not None:
             ohlcv_data = history_result.data
             if hasattr(ohlcv_data, 'to_dict'):
-                bars = ohlcv_data.reset_index().to_dict('records')
+                ohlcv_df = ohlcv_data.rename(columns=str.lower).reset_index()
+                bars = ohlcv_df.rename(columns={'datetime': 'date'}).to_dict('records')
             elif isinstance(ohlcv_data, dict):
                 bars = ohlcv_data.get("bars", ohlcv_data)
             else:
