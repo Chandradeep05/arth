@@ -141,70 +141,43 @@ class OutcomeTracker:
     ) -> int:
         """
         Evaluate all predictions whose horizon has expired.
-        
+
+        ⚠️  NOT IMPLEMENTED — DO NOT CALL IN PRODUCTION ⚠️
+
+        This method requires two data points to compute directional accuracy:
+          1. The reference price AT THE TIME of prediction (to compute actual % return)
+          2. The price AFTER the horizon expires
+
+        The original placeholder only stored the horizon-end price and compared
+        it directly against `predicted_return_pct` — dimensionally invalid
+        (absolute price ≈ 195.50 vs percentage change ≈ 2.5).
+
+        Worse, `directional_correct` was computed as `actual_price > 0`, which
+        is always True for any real stock price — meaning every bullish prediction
+        would score "correct" regardless of actual market outcome.
+
+        TO IMPLEMENT THIS CORRECTLY:
+          1. Add `reference_price: float | None = None` to PredictionRecord
+          2. Store the current price in store_prediction() alongside the forecast
+          3. On evaluation: actual_return = (horizon_price - ref_price) / ref_price * 100
+          4. directional_correct = (predicted_return_pct > 0) == (actual_return > 0)
+          5. magnitude_error_pp = abs(predicted_return_pct - actual_return)
+
         Args:
-            fetch_price_func: async callable(symbol) -> current_price
-            
+            fetch_price_func: async callable(symbol) -> current_price (float)
+
         Returns:
             Number of predictions newly evaluated.
+
+        Raises:
+            NotImplementedError: Always, until the reference price issue is resolved.
         """
-        now = datetime.now(timezone.utc)
-        evaluated_count = 0
-        
-        records = await self._get_all_records()
-        
-        for key, record in records.items():
-            # Skip already evaluated
-            if record.evaluated_at is not None:
-                continue
-            
-            # Check if horizon has passed
-            predicted_at = datetime.fromisoformat(record.predicted_at)
-            horizon_end = predicted_at + timedelta(days=record.horizon_days)
-            if now < horizon_end:
-                continue
-            
-            # Fetch actual return
-            try:
-                actual_price = await fetch_price_func(record.symbol)
-                if actual_price is None:
-                    continue
-                
-                # For simplicity, we store predicted_return_pct as the predicted change.
-                # Actual return needs a reference price — stored as predicted_return_pct
-                # at prediction time. This is a simplification; a production system
-                # would store the reference price.
-                # For now, mark as evaluated with the available data.
-                record.actual_return_pct = actual_price  # placeholder
-                record.directional_correct = (
-                    (record.predicted_return_pct > 0 and actual_price > 0) or
-                    (record.predicted_return_pct < 0 and actual_price < 0) or
-                    (record.predicted_return_pct == 0 and actual_price == 0)
-                )
-                record.magnitude_error_pp = abs(
-                    record.predicted_return_pct - actual_price
-                )
-                record.evaluated_at = now.isoformat()
-                
-                # Update storage
-                await self._update_record(key, record)
-                evaluated_count += 1
-                
-                logger.info(
-                    "prediction_evaluated",
-                    symbol=record.symbol,
-                    predicted=record.predicted_return_pct,
-                    actual=actual_price,
-                    correct=record.directional_correct,
-                )
-            except Exception as e:
-                logger.warning(
-                    "prediction_evaluation_failed",
-                    symbol=record.symbol,
-                    error=str(e),
-                )
-        
-        return evaluated_count
+        raise NotImplementedError(
+            "evaluate_pending() cannot produce correct accuracy metrics until "
+            "reference_price is stored at prediction time. See docstring for "
+            "the correct implementation path. Do not wire this to an endpoint "
+            "until the implementation is complete."
+        )
     
     async def get_accuracy(
         self,

@@ -180,6 +180,14 @@ class BaseDataAdapter(ABC):
                 self._last_failure = datetime.now(timezone.utc)
                 self._last_error_message = str(e)
 
+                # SECURITY: Always use str(e) here, never str(e.request.url) or
+                # e.request.url directly. httpx exception objects carry the full
+                # request URL (including any API key in a query param) in
+                # e.request.url. str(TimeoutException) and str(ConnectError) do
+                # NOT include the URL today, so str(e) is safe — but
+                # raise_for_status() exceptions (HTTPStatusError) *do* embed the
+                # URL. If you ever add raise_for_status() anywhere in an adapter,
+                # use `error=str(e).split("?")[0]` or strip the key explicitly.
                 # Check if circuit opened mid-retry — stop immediately
                 if not self._circuit.can_execute():
                     logger.warning(

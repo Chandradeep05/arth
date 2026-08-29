@@ -165,13 +165,36 @@ class TestRateLimitMatching(unittest.TestCase):
 class TestClientIPExtraction(unittest.TestCase):
     """Test X-Forwarded-For IP extraction."""
 
-    def test_forwarded_for_first_ip(self):
-        """Should take the first IP from X-Forwarded-For."""
+    def test_forwarded_for_last_ip(self):
+        """Should take the LAST IP from X-Forwarded-For (appended by trusted edge).
+        
+        The last entry is the IP appended by Render's edge router — the only one
+        that cannot be forged by the client. Taking the first entry would let any
+        client trivially bypass rate limiting by rotating a spoofed header value.
+        """
         from app.core.rate_limiter import _get_client_ip
         mock_request = MagicMock()
         mock_request.headers = {"x-forwarded-for": "1.2.3.4, 5.6.7.8"}
         mock_request.client = MagicMock(host="9.9.9.9")
-        self.assertEqual(_get_client_ip(mock_request), "1.2.3.4")
+        self.assertEqual(_get_client_ip(mock_request), "5.6.7.8")
+
+    def test_forwarded_for_spoof_resistance(self):
+        """A spoofed X-Forwarded-For cannot bypass rate limits.
+        
+        An attacker sends: X-Forwarded-For: 0.0.0.0 (fake IP they control)
+        Render's edge appends their real IP to produce: 0.0.0.0, 1.2.3.4
+        We take the last entry (1.2.3.4), ignoring the spoofed first entry.
+        """
+        from app.core.rate_limiter import _get_client_ip
+        mock_request = MagicMock()
+        mock_request.headers = {
+            "x-forwarded-for": "0.0.0.0, 10.0.0.1, 1.2.3.4"
+        }
+        mock_request.client = MagicMock(host="edge.render.com")
+        # Must NOT return 0.0.0.0 (the spoofed entry)
+        result = _get_client_ip(mock_request)
+        self.assertEqual(result, "1.2.3.4")
+        self.assertNotEqual(result, "0.0.0.0")
 
     def test_direct_client(self):
         """Should fall back to request.client.host."""
@@ -435,10 +458,19 @@ class TestOutcomeTrackerStore(unittest.TestCase):
             predicted_return_pct=1.2,
             confidence_score=0.8,
             confidence_band="high",
+            regime="ranging",
         ))
         self.assertIsNone(record.evaluated_at)
         self.assertIsNone(record.actual_return_pct)
         self.assertIsNone(record.directional_correct)
+
+    def test_evaluate_pending_raises_not_implemented(self):
+        """evaluate_pending should fail closed with NotImplementedError."""
+        async def dummy_fetch(sym):
+            return 100.0
+
+        with self.assertRaises(NotImplementedError):
+            run_async(self.tracker.evaluate_pending(dummy_fetch))
 
 
 class TestOutcomeTrackerHistory(unittest.TestCase):

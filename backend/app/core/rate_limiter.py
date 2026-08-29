@@ -94,11 +94,25 @@ _last_cleanup = 0.0
 
 
 def _get_client_ip(request: Request) -> str:
-    """Extract client IP, respecting X-Forwarded-For behind reverse proxies."""
+    """
+    Extract the verified client IP from behind a reverse proxy.
+
+    SECURITY NOTE — why we take the LAST entry, not the first:
+    - X-Forwarded-For is appended to by each hop: `client, proxy1, edge`
+    - Render's edge router appends the *real* client IP to the END of the chain.
+    - The FIRST entry is whatever the original request claimed — fully
+      attacker-controlled. A client can send `X-Forwarded-For: 1.2.3.4`
+      on every request to trivially spoof a different rate-limit bucket.
+    - Taking the LAST entry uses the IP appended by our trusted infrastructure,
+      which cannot be forged from the outside.
+
+    If you ever change hosting providers, verify which entry *their* edge
+    appends (first vs. last) and update accordingly.
+    """
     forwarded = request.headers.get("x-forwarded-for")
     if forwarded:
-        # Take the first IP (original client)
-        return forwarded.split(",")[0].strip()
+        # Last entry = IP appended by Render's trusted edge router
+        return forwarded.split(",")[-1].strip()
     if request.client:
         return request.client.host
     return "unknown"
