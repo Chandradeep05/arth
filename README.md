@@ -1,6 +1,7 @@
 <p align="center">
   <h1 align="center">ARTH</h1>
-  <p align="center"><strong>AI Research & Trading Hub</strong></p>
+> **Phase 2 Stable** | v0.5.0-beta | AI Financial Intelligence Platform
+  <p align="center"><strong>AI Financial Intelligence Platform</strong></p>
   <p align="center">
     Institutional-grade decision-support infrastructure combining real-time market intelligence,<br/>
     AI-generated research, probabilistic risk scoring, sentiment analysis, and live market data.

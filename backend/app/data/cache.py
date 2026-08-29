@@ -86,6 +86,9 @@ def _memory_delete(key: str) -> None:
     _memory_cache.pop(key, None)
 
 
+from pydantic import BaseModel
+
+
 class CacheManager:
     """Cache manager with Redis primary and in-memory fallback."""
 
@@ -132,13 +135,21 @@ class CacheManager:
         self._misses += 1
         return None
 
-    async def set(self, key: str, value: dict, ttl: int = 60) -> bool:
+    async def set(self, key: str, value: Any, ttl: int = 60) -> bool:
         """Set a cached value. Writes to both Redis and in-memory."""
+        # Convert Pydantic models or dicts cleanly
+        if isinstance(value, BaseModel):
+            data_dict = value.model_dump(mode="json")
+        elif isinstance(value, dict):
+            data_dict = dict(value)
+        else:
+            data_dict = {"data": value}
+
         # Add cache timestamp
-        value["_cached_at"] = datetime.now(timezone.utc).isoformat()
+        data_dict["_cached_at"] = datetime.now(timezone.utc).isoformat()
 
         # Always write to in-memory (even if Redis works — serves as backup)
-        _memory_set(key, value, ttl)
+        _memory_set(key, data_dict, ttl)
 
         # Try Redis
         if self._redis is not None:
@@ -146,7 +157,7 @@ class CacheManager:
                 await self._redis.setex(
                     key,
                     ttl,
-                    json.dumps(value, default=str),
+                    json.dumps(data_dict, default=str),
                 )
                 return True
             except Exception as e:

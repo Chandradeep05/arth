@@ -118,15 +118,16 @@ def create_app() -> FastAPI:
     settings = get_settings()
 
     app = FastAPI(
-        title="ARTH — AI Research & Trading Hub",
+        title="ARTH — AI Financial Intelligence Platform",
         description=(
-            "Institutional-grade decision-support infrastructure combining real-time "
-            "market intelligence, AI-generated research, probabilistic forecasting, "
-            "sentiment analysis, and risk detection."
+            "Production-oriented AI financial intelligence platform combining "
+            "real-time market intelligence, AI-generated research, probabilistic "
+            "forecasting, sentiment analysis, and risk detection."
         ),
         version="1.0.0",
-        docs_url="/docs",
-        redoc_url="/redoc",
+        # Security: disable API docs in production to prevent endpoint discovery
+        docs_url="/docs" if settings.is_development else None,
+        redoc_url="/redoc" if settings.is_development else None,
         default_response_class=ORJSONResponse,
         lifespan=lifespan,
     )
@@ -136,11 +137,15 @@ def create_app() -> FastAPI:
 
     # ── Middleware (order matters — last added = first executed) ──
 
-    # CORS — supports exact origins, wildcard "*", and regex for Vercel previews
+    # CORS — supports exact origins and regex for Vercel previews
     cors_origins = settings.cors_origins
 
-    # Step 1: Add CORS middleware (for HTTP requests)
     if "*" in cors_origins:
+        if settings.is_production:
+            logger.warning(
+                "cors_wildcard_in_production",
+                message="CORS allows all origins (*) in production — this is a security risk",
+            )
         app.add_middleware(
             CORSMiddleware,
             allow_origins=["*"],
@@ -160,27 +165,9 @@ def create_app() -> FastAPI:
             allow_origin_regex=r"https://.*\.vercel\.app",
         )
 
-    # Step 2: Add WebSocket bypass AFTER CORS (last added = first executed).
-    # This runs BEFORE CORSMiddleware, intercepting WS upgrades so they
-    # never reach CORSMiddleware (which would reject them with 403).
-    from starlette.types import ASGIApp, Receive, Scope, Send
-
-    _inner_app = app  # capture reference
-
-    class WebSocketCORSBypass:
-        """Intercept WebSocket upgrades before CORSMiddleware can block them."""
-        def __init__(self, app: ASGIApp):
-            self.app = app
-
-        async def __call__(self, scope: Scope, receive: Receive, send: Send):
-            if scope["type"] == "websocket":
-                # Route directly to the app, skipping CORS middleware.
-                # Origin validation is handled in the WebSocket endpoint.
-                await self.app(scope, receive, send)
-                return
-            await self.app(scope, receive, send)
-
-    app.add_middleware(WebSocketCORSBypass)
+    # ── Rate Limiting ── (protects Groq/TwelveData credits)
+    from app.core.rate_limiter import RateLimitMiddleware
+    app.add_middleware(RateLimitMiddleware)
 
     # Trace ID (adds UUID to every request)
     app.add_middleware(TraceIDMiddleware)
@@ -213,13 +200,12 @@ def create_app() -> FastAPI:
     register_exception_handlers(app)
 
     # ── Routes ──
-    from app.api.v1 import system, market, research, sentiment, risk, websocket, financials, watchlist, assistant, prediction
+    from app.api.v1 import system, market, research, sentiment, risk, financials, watchlist, assistant, prediction
     app.include_router(system.router, prefix=settings.api_prefix)
     app.include_router(market.router, prefix=settings.api_prefix)
     app.include_router(research.router, prefix=settings.api_prefix)
     app.include_router(sentiment.router, prefix=settings.api_prefix)
     app.include_router(risk.router, prefix=settings.api_prefix)
-    app.include_router(websocket.router, prefix=settings.api_prefix)
     app.include_router(financials.router, prefix=settings.api_prefix)
     app.include_router(watchlist.router, prefix=settings.api_prefix)
     app.include_router(assistant.router, prefix=settings.api_prefix)

@@ -1,9 +1,9 @@
 """
-ARTH — AI Research & Trading Hub
+ARTH — AI Financial Intelligence Platform
 Application configuration via pydantic-settings.
 
 All configuration is loaded from environment variables with sensible defaults
-for local development. In production, these are set via Railway/Render env vars.
+for local development. In production, these are set via Render env vars.
 """
 
 from __future__ import annotations
@@ -57,7 +57,8 @@ class Settings(BaseSettings):
         return [origin.strip() for origin in self.allowed_origins.split(",")]
 
     # ── Database (TimescaleDB) ──
-    database_url: str = "postgresql+asyncpg://arth_user:arth_dev_password@localhost:5432/arth"
+    # Default uses localhost with no credentials — production URL set via DATABASE_URL env var
+    database_url: str = "postgresql+asyncpg://localhost:5432/arth"
     database_pool_size: int = 10
     database_max_overflow: int = 20
 
@@ -71,6 +72,10 @@ class Settings(BaseSettings):
     redis_cache_ttl_tick: int = 300         # 5 min (was 15s — too short for blocked IPs)
     redis_cache_ttl_indicators: int = 600   # 10 min (was 60s)
     redis_cache_ttl_fundamentals: int = 86400  # 24 hours
+
+    # ── Upstash Redis (Phase 3 — persistent cache across Render cold starts) ──
+    upstash_redis_url: str = ""     # Set via UPSTASH_REDIS_URL env var
+    upstash_redis_token: str = ""   # Set via UPSTASH_REDIS_TOKEN env var
 
     # ── Yahoo Finance Proxy ──
     # Set YAHOO_PROXY_URL env var on Render to route through a clean IP.
@@ -120,15 +125,18 @@ class Settings(BaseSettings):
     fmp_enabled: bool = True
 
     # ── Security ──
-    jwt_secret_key: str = "change-this-to-a-random-secret-in-production"
+    # JWT secret: empty default forces explicit configuration before use.
+    # The application does not currently enforce JWT auth (personal-use, Phase 3+),
+    # but if JWT is ever enabled, this must be set to a strong random value.
+    jwt_secret_key: str = ""
     jwt_algorithm: str = "HS256"
     jwt_access_token_expire_minutes: int = 30
     jwt_refresh_token_expire_days: int = 7
     rate_limit_per_minute: int = 100
 
-    # ── WebSocket ──
-    ws_heartbeat_interval: int = 30
-    ws_reconnect_max_retries: int = 5
+    # Admin API key for gating /system/debug and /system/metrics endpoints
+    # Set via ADMIN_API_KEY env var in Render dashboard
+    admin_api_key: str = ""
 
     # ── Data Quality ──
     data_freshness_threshold_live: int = 60        # seconds

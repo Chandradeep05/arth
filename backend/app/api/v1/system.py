@@ -12,7 +12,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
+from fastapi.responses import ORJSONResponse
 from pydantic import BaseModel
 
 from app.dependencies import get_db, get_redis
@@ -186,8 +187,29 @@ async def get_metrics():
 
 
 @router.get("/debug")
-async def get_debug():
-    """Diagnostic endpoint — verify curl_cffi session and yfinance connectivity."""
+async def get_debug(request: Request):
+    """
+    Diagnostic endpoint — verify curl_cffi session and yfinance connectivity.
+
+    Gated behind ADMIN_API_KEY header in production. Returns 403 if key
+    is missing or incorrect when running in non-development environments.
+    """
+    from app.config import get_settings
+
+    settings = get_settings()
+
+    # Gate behind admin key in non-development environments
+    if not settings.is_development:
+        provided_key = request.headers.get("x-admin-key", "")
+        if not settings.admin_api_key or provided_key != settings.admin_api_key:
+            return ORJSONResponse(
+                status_code=403,
+                content={
+                    "error": "forbidden",
+                    "message": "Admin API key required. Set X-Admin-Key header.",
+                },
+            )
+
     from app.data.adapters.yahoo import _yf_session, make_ticker
 
     result = {
@@ -210,3 +232,4 @@ async def get_debug():
         result["yfinance_test"] = {"status": "error", "error": str(e)}
 
     return result
+

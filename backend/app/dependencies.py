@@ -58,17 +58,32 @@ async def close_db() -> None:
 
 
 async def init_redis(settings: Settings) -> None:
-    """Initialize the Redis client."""
+    """
+    Initialize the Redis client.
+    Supports Upstash Redis (Phase 3 persistent store) with fallback to standard Redis URL.
+    """
     global _redis_client
+    target_url = settings.upstash_redis_url or settings.redis_url
+    if not target_url:
+        logger.info("redis_disabled", reason="No redis URL configured")
+        return
+
     _redis_client = aioredis.from_url(
-        settings.redis_url,
+        target_url,
         encoding="utf-8",
         decode_responses=True,
     )
     # Verify connection
     try:
         await _redis_client.ping()
-        logger.info("redis_initialized", url=settings.redis_url)
+        logger.info("redis_initialized", url=target_url.split("@")[-1])
+        
+        # Connect outcome_tracker singleton to Redis
+        try:
+            from app.engines.prediction.outcome_tracker import outcome_tracker
+            outcome_tracker.set_redis(_redis_client)
+        except Exception as e:
+            logger.warning("outcome_tracker_redis_init_failed", error=str(e))
     except Exception as e:
         logger.warning("redis_connection_failed", error=str(e))
         _redis_client = None

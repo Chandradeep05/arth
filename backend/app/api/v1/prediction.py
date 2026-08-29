@@ -104,9 +104,36 @@ class AccuracyResponse(BaseModel):
     ),
 )
 async def generate_forecast(symbol: str):
-    """Generate prediction for a stock."""
+    """Generate prediction for a stock and record for outcome tracking."""
     logger.info("prediction_requested", symbol=symbol)
     result = await prediction_model.forecast(symbol)
+
+    # Phase 3: Store prediction in Outcome Tracker for credibility verification
+    try:
+        from app.engines.prediction.outcome_tracker import outcome_tracker
+        pred = result.get("prediction")
+        regime = result.get("regime")
+        model_info = result.get("model_info")
+
+        if pred and not result.get("error"):
+            pred_return = pred.get("predicted_return_pct") if isinstance(pred, dict) else getattr(pred, "predicted_return_pct", 0.0)
+            conf_score = pred.get("confidence_score") if isinstance(pred, dict) else getattr(pred, "confidence_score", 0.5)
+            conf_band = pred.get("confidence") if isinstance(pred, dict) else getattr(pred, "confidence", "medium")
+            regime_curr = regime.get("current") if isinstance(regime, dict) else getattr(regime, "current", "unknown")
+            r2 = model_info.get("r2_score") if isinstance(model_info, dict) else getattr(model_info, "r2_score", None)
+
+            await outcome_tracker.store_prediction(
+                symbol=symbol,
+                predicted_return_pct=pred_return,
+                confidence_score=conf_score,
+                confidence_band=conf_band,
+                regime=regime_curr or "unknown",
+                horizon_days=5,
+                model_r2=r2,
+            )
+    except Exception as e:
+        logger.warning("prediction_tracking_record_failed", symbol=symbol, error=str(e))
+
     return ForecastResponse(**result)
 
 
@@ -136,6 +163,31 @@ async def get_accuracy(
 
 
 @router.get(
+    "/{symbol}/history",
+    summary="Prediction Tracking History",
+    description=(
+        "Get historical tracked predictions and evaluated accuracy outcomes "
+        "for a symbol from the persistent outcome tracker (Phase 3 Trust Layer)."
+    ),
+)
+async def get_prediction_history(
+    symbol: str,
+    limit: int = Query(default=50, ge=1, le=200),
+):
+    """Get live tracked predictions and evaluation metrics."""
+    from app.engines.prediction.outcome_tracker import outcome_tracker
+
+    stats = await outcome_tracker.get_accuracy(symbol)
+    history = await outcome_tracker.get_history(symbol, limit=limit)
+
+    return {
+        "symbol": symbol.upper(),
+        "stats": stats.model_dump(),
+        "history": [r.model_dump() for r in history],
+    }
+
+
+@router.get(
     "/{symbol}/regime",
     summary="Market Regime Detection",
     description=(
@@ -162,3 +214,4 @@ async def get_regime(symbol: str):
             "error": True,
             "message": str(e),
         }
+
