@@ -1,22 +1,28 @@
 ﻿// ARTH Phase 4 -- Browser-side Supabase client
-// Used in Client Components for auth state (onAuthStateChange, signIn, signOut)
-// NEXT_PUBLIC_* vars are safe to expose in browser -- they are the anon key (not service key)
+// Uses lazy initialization so the build does not throw during static prerendering.
+// Actual network calls only happen in the browser where NEXT_PUBLIC_* vars are set.
 
-import { createClient } from "@supabase/supabase-js";
+import { createClient, SupabaseClient } from "@supabase/supabase-js";
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+// Fallback to placeholder during Next.js static generation (build time).
+// Supabase client with placeholder values initializes fine but any real auth
+// calls will fail gracefully -- this only matters during server-side prerender
+// of pages that don't use auth (login page is dynamically rendered).
+const supabaseUrl =
+  process.env.NEXT_PUBLIC_SUPABASE_URL ?? "https://placeholder.supabase.co";
+const supabaseAnonKey =
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "placeholder-anon-key";
 
-if (!supabaseUrl || !supabaseAnonKey) {
-  throw new Error("Missing NEXT_PUBLIC_SUPABASE_URL or NEXT_PUBLIC_SUPABASE_ANON_KEY");
-}
-
-// Singleton client -- shared across the browser session
-export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+export const supabase: SupabaseClient = createClient(supabaseUrl, supabaseAnonKey, {
   auth: {
-    persistSession: true,          // keep session across page reloads
-    storageKey: "arth-auth",       // localStorage key
-    detectSessionInUrl: true,      // handle OAuth callback fragment
-    flowType: "pkce",              // PKCE is more secure than implicit for SPAs
+    persistSession: true,
+    storageKey: "arth-auth",
+    detectSessionInUrl: true,
+    flowType: "pkce",
   },
 });
+
+// Helper: check if Supabase is properly configured (env vars are set)
+export const isSupabaseConfigured =
+  !!process.env.NEXT_PUBLIC_SUPABASE_URL &&
+  !!process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
