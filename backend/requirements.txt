@@ -36,9 +36,16 @@ structlog==25.4.0
 prometheus-client==0.22.1
 
 # ── Security ──
-python-jose[cryptography]==3.4.0
+# PyJWT: verifies Supabase JWTs (supports both HS256 and ES256/JWKS)
+# python-jose is replaced — PyJWT is lighter and has JWKS support via PyJWKClient
+PyJWT[cryptography]==2.10.1
 passlib[bcrypt]==1.7.4
 python-multipart==0.0.20
+
+# ── Database Drivers ──
+# asyncpg: async driver for FastAPI runtime (already above)
+# psycopg2-binary: sync driver for Alembic migrations (Alembic doesn't need async)
+psycopg2-binary==2.9.10
 
 # ── Utilities ──
 python-dotenv==1.1.0

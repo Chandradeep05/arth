@@ -138,6 +138,38 @@ class Settings(BaseSettings):
     # Set via ADMIN_API_KEY env var in Render dashboard
     admin_api_key: str = ""
 
+    # ── Supabase (Phase 4 — Auth + Postgres) ──
+    # All three are required for Phase 4 auth to function.
+    # SUPABASE_URL: your project URL, e.g. https://abc123.supabase.co
+    # SUPABASE_ANON_KEY: safe to expose to browser (used for auth callbacks)
+    # SUPABASE_SERVICE_KEY: backend-only, never in frontend, bypasses RLS on purpose
+    # SUPABASE_JWT_SECRET: from Supabase Settings → API → JWT Settings (used for HS256)
+    supabase_url: str = ""
+    supabase_anon_key: str = ""
+    supabase_service_key: str = ""
+    supabase_jwt_secret: str = ""
+
+    # Initial admin bootstrap — set INITIAL_ADMIN_EMAIL to your Google account email.
+    # On startup, if this email matches a profile, it is promoted to role='admin'.
+    # Idempotent — safe to leave set after first run.
+    initial_admin_email: str = ""
+
+    # ── Upstox (Phase 4 — Indian Market Data) ──
+    upstox_api_key: str = ""
+    upstox_api_secret: str = ""
+    upstox_access_token: str = ""   # Analytics Token (read-only, long-lived)
+    upstox_enabled: bool = False    # Set True via UPSTOX_ENABLED=true once token is configured
+
+    # ── Internal Job Secret ──
+    # Used to authenticate GitHub Actions → /internal/jobs/* calls.
+    # Separate from ADMIN_API_KEY — machine-to-machine only, never browser-facing.
+    internal_job_secret: str = ""
+
+    # ── Per-User Quotas (configurable via env vars) ──
+    quota_chat_per_hour: int = 30
+    quota_research_per_day: int = 10
+    quota_prediction_per_day: int = 20
+
     # ── Data Quality ──
     data_freshness_threshold_live: int = 60        # seconds
     data_freshness_threshold_fundamentals: int = 86400  # seconds

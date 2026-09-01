@@ -41,7 +41,7 @@ export default function StatusBar() {
         fixed bottom-0 right-0 z-30
         flex items-center justify-between
         h-8 px-6
-        left-16 lg:left-60
+        left-0 lg:left-16 xl:left-60
         bg-[var(--bg)]/90 backdrop-blur-sm
         border-t border-[var(--border)]
         font-mono text-[10px]

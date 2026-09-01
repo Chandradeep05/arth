@@ -162,7 +162,12 @@ def create_app() -> FastAPI:
             allow_methods=["*"],
             allow_headers=["*"],
             expose_headers=["X-Trace-ID"],
-            allow_origin_regex=r"https://.*\.vercel\.app",
+            # Scoped to ARTH's own Vercel namespace — not every vercel.app project.
+            # Handles: arth.vercel.app, arth-five.vercel.app,
+            #          arth-chandradeep05s-projects.vercel.app,
+            #          arth-git-main-chandradeep05s-projects.vercel.app
+            # The [a-z0-9-]+ inside the group allows multi-segment slugs (hyphen included).
+            allow_origin_regex=r"https://arth(-[a-z0-9-]+)?\.vercel\.app",
         )
 
     # ── Rate Limiting ── (protects Groq/TwelveData credits)
@@ -199,17 +204,24 @@ def create_app() -> FastAPI:
     # ── Exception Handlers ──
     register_exception_handlers(app)
 
-    # ── Routes ──
-    from app.api.v1 import system, market, research, sentiment, risk, financials, watchlist, assistant, prediction
+    # ── Routes: Phase 1-3 (unchanged) ──
+    from app.api.v1 import system, market, research, sentiment, risk, financials, watchlist, assistant, prediction, invite
     app.include_router(system.router, prefix=settings.api_prefix)
     app.include_router(market.router, prefix=settings.api_prefix)
     app.include_router(research.router, prefix=settings.api_prefix)
     app.include_router(sentiment.router, prefix=settings.api_prefix)
     app.include_router(risk.router, prefix=settings.api_prefix)
+
     app.include_router(financials.router, prefix=settings.api_prefix)
     app.include_router(watchlist.router, prefix=settings.api_prefix)
     app.include_router(assistant.router, prefix=settings.api_prefix)
     app.include_router(prediction.router, prefix=settings.api_prefix)
+
+    # ── Routes: Phase 4 (Identity, Workspace, Alerts, Admin) ──
+    app.include_router(invite.router, prefix=settings.api_prefix)
+    # user_watchlists, conversations, saved_research, alerts, admin, internal
+    # are registered here as they are implemented in subsequent stages.
+
 
     # Root health endpoint (no prefix, for Render health checks + self-ping keepalive)
     @app.get("/health")

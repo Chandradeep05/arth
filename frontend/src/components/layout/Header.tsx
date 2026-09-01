@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useMemo } from 'react';
-import { Search, Circle } from 'lucide-react';
+import { Search, Circle, Menu } from 'lucide-react';
 import { MARKET_HOURS, DATA_DELAY_LABEL } from '@/lib/constants';
 
 function isMarketOpen(): boolean {
@@ -23,7 +23,11 @@ function isMarketOpen(): boolean {
   return currentMinutes >= openMinutes && currentMinutes < closeMinutes;
 }
 
-export default function Header() {
+interface HeaderProps {
+  onMenuOpen?: () => void;
+}
+
+export default function Header({ onMenuOpen }: HeaderProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [marketOpen, setMarketOpen] = useState(false);
 
@@ -53,8 +57,25 @@ export default function Header() {
         border-b border-[var(--border)]
       "
     >
-      {/* Left: Page title area */}
+      {/* Left: Hamburger (mobile) + Page title */}
       <div className="flex items-center gap-2 min-w-0">
+        {/* Hamburger — visible only on mobile (<lg) */}
+        <button
+          onClick={onMenuOpen}
+          className="
+            lg:hidden
+            flex items-center justify-center
+            h-8 w-8 rounded-md shrink-0
+            text-[var(--text-muted)] hover:text-[var(--text)]
+            hover:bg-[var(--surface-2)]
+            transition-colors duration-150
+            cursor-pointer
+          "
+          aria-label="Open navigation menu"
+        >
+          <Menu className="h-5 w-5" />
+        </button>
+
         <h1 className="font-heading text-sm font-bold text-[var(--text)] truncate">
           Intelligence Dashboard
         </h1>

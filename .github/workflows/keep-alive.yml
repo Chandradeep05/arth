@@ -1,0 +1,21 @@
+﻿name: Keep ARTH Backend Alive
+
+on:
+  schedule:
+    # Every 14 minutes — Render free tier spins down after 15min of inactivity.
+    - cron: '*/14 * * * *'
+  workflow_dispatch:
+
+jobs:
+  ping:
+    name: Ping /health
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Ping ARTH backend
+        run: |
+          STATUS=$(curl -sf -o /dev/null -w "%{http_code}" https://arth-rdd5.onrender.com/health || echo "000")
+          echo "Health endpoint responded: $STATUS"
+          if [ "$STATUS" != "200" ]; then
+            echo "Warning: Backend returned $STATUS -- may be cold-starting"
+          fi
