@@ -9,6 +9,7 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.112.4",
     "framer-motion": "^12.40.0",
     "lightweight-charts": "^5.2.0",
     "lucide-react": "^1.16.0",

@@ -1,0 +1,24 @@
+﻿name: Alert Evaluator
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+jobs:
+  evaluate-alerts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Evaluate price alerts
+        run: |
+          response=$(curl -s -o /dev/null -w "%{http_code}" `
+            -X POST `
+            -H "X-Internal-Secret: ${{ secrets.INTERNAL_JOB_SECRET }}" `
+            -H "Content-Type: application/json" `
+            "${{ secrets.BACKEND_URL }}/api/v1/internal/jobs/evaluate-alerts" `
+            || echo "000")
+          echo "Response: $response"
+          if [ "$response" = "000" ]; then echo "Network error"; exit 0; fi
+          if [ "$response" != "200" ]; then echo "Status $response"; exit 0; fi
+          echo "Done."

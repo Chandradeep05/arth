@@ -204,24 +204,36 @@ def create_app() -> FastAPI:
     # ── Exception Handlers ──
     register_exception_handlers(app)
 
-    # ── Routes: Phase 1-3 (unchanged) ──
-    from app.api.v1 import system, market, research, sentiment, risk, financials, watchlist, assistant, prediction, invite
+    # ── Routes ──
+    # One consolidated router import (test_phase3 verifies exactly one api.v1 import line)
+    from app.api.v1 import (  # noqa: E402
+        system, market, research, sentiment, risk, financials,
+        watchlist, assistant, prediction,
+        # Phase 4
+        invite, user_watchlists, conversations, saved_research,
+        alerts, admin as admin_router, internal,
+    )
+
+    # Phase 1-3 routes
     app.include_router(system.router, prefix=settings.api_prefix)
     app.include_router(market.router, prefix=settings.api_prefix)
     app.include_router(research.router, prefix=settings.api_prefix)
     app.include_router(sentiment.router, prefix=settings.api_prefix)
     app.include_router(risk.router, prefix=settings.api_prefix)
-
     app.include_router(financials.router, prefix=settings.api_prefix)
     app.include_router(watchlist.router, prefix=settings.api_prefix)
     app.include_router(assistant.router, prefix=settings.api_prefix)
     app.include_router(prediction.router, prefix=settings.api_prefix)
 
-    # ── Routes: Phase 4 (Identity, Workspace, Alerts, Admin) ──
+    # Phase 4 routes
     app.include_router(invite.router, prefix=settings.api_prefix)
-    # user_watchlists, conversations, saved_research, alerts, admin, internal
-    # are registered here as they are implemented in subsequent stages.
-
+    app.include_router(user_watchlists.router, prefix=settings.api_prefix)
+    app.include_router(conversations.router, prefix=settings.api_prefix)
+    app.include_router(saved_research.router, prefix=settings.api_prefix)
+    app.include_router(alerts.router, prefix=settings.api_prefix)
+    app.include_router(alerts.notifications_router, prefix=settings.api_prefix)
+    app.include_router(admin_router.router, prefix=settings.api_prefix)
+    app.include_router(internal.router, prefix=settings.api_prefix)
 
     # Root health endpoint (no prefix, for Render health checks + self-ping keepalive)
     @app.get("/health")

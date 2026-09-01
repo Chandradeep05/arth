@@ -3,6 +3,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { Search, Circle, Menu } from 'lucide-react';
 import { MARKET_HOURS, DATA_DELAY_LABEL } from '@/lib/constants';
+import UserMenu from '@/components/layout/UserMenu';
 
 function isMarketOpen(): boolean {
   const now = new Date();
@@ -104,7 +105,7 @@ export default function Header({ onMenuOpen }: HeaderProps) {
         </div>
       </div>
 
-      {/* Right: Market status */}
+      {/* Right: Market status + User */}
       <div className="flex items-center gap-3 shrink-0">
         <div className="flex items-center gap-2">
           <Circle
@@ -114,9 +115,11 @@ export default function Header({ onMenuOpen }: HeaderProps) {
             {marketStatus.label}
           </span>
         </div>
-        <span className="text-[10px] font-mono text-[var(--text-dim)]">
+        <span className="text-[10px] font-mono text-[var(--text-dim)] hidden sm:inline">
           {DATA_DELAY_LABEL}
         </span>
+        <div className="w-px h-5 bg-[var(--border)] hidden sm:block" />
+        <UserMenu />
       </div>
     </header>
   );
