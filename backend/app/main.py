@@ -20,6 +20,7 @@ import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
+import asyncpg
 import httpx
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -67,7 +68,13 @@ async def lifespan(app: FastAPI):
     """
     Application lifespan — initialize and cleanup resources.
 
-    This replaces the deprecated @app.on_event("startup"/"shutdown") pattern.
+    Sets up:
+    - SQLAlchemy engine (for legacy Phase 1-3 endpoints using get_db())
+    - asyncpg connection pool (for Phase 4 endpoints using request.state.db)
+    - Redis client
+    - AssistantEngine on app.state
+    - Admin bootstrap (INITIAL_ADMIN_EMAIL)
+    - Self-ping keepalive
     """
     settings = get_settings()
 
@@ -80,19 +87,63 @@ async def lifespan(app: FastAPI):
         llm_tier=settings.llm_tier.value,
     )
 
-    # Initialize database
+    # Initialize SQLAlchemy (Phase 1-3 endpoints)
     try:
         await init_db(settings)
     except Exception as e:
         logger.error("database_init_failed", error=str(e))
-        # Don't crash — allow degraded operation
+        # Don't crash — allow degraded operation without Postgres
+
+    # Initialize asyncpg pool (Phase 4 endpoints — raw SQL with fetchrow/fetch/execute)
+    pg_pool = None
+    if settings.database_url:
+        try:
+            # Convert SQLAlchemy URL to plain asyncpg DSN
+            dsn = settings.database_url.replace("postgresql+asyncpg://", "postgresql://")
+            pg_pool = await asyncpg.create_pool(dsn, min_size=2, max_size=10)
+            logger.info("asyncpg_pool_created", dsn_host=dsn.split("@")[-1][:40] if "@" in dsn else "localhost")
+        except Exception as e:
+            logger.error("asyncpg_pool_failed", error=str(e))
+    app.state.pg_pool = pg_pool
 
     # Initialize Redis
     try:
         await init_redis(settings)
     except Exception as e:
         logger.warning("redis_init_failed", error=str(e))
-        # Don't crash — cache misses are acceptable
+
+    # Store Redis on app.state for alert evaluator and other Phase 4 endpoints
+    from app.dependencies import _redis_client
+    app.state.redis = _redis_client
+
+    # Initialize AssistantEngine on app.state (conversations.py reads it)
+    try:
+        from app.engines.assistant.engine import AssistantEngine
+        app.state.assistant_engine = AssistantEngine()
+        logger.info("assistant_engine_initialized")
+    except Exception as e:
+        logger.warning("assistant_engine_init_failed", error=str(e))
+        app.state.assistant_engine = None
+
+    # Admin bootstrap — auto-promote INITIAL_ADMIN_EMAIL on first startup
+    if pg_pool and settings.initial_admin_email:
+        try:
+            async with pg_pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    "SELECT id, role FROM profiles WHERE email = $1",
+                    settings.initial_admin_email,
+                )
+                if row and row["role"] != "admin":
+                    await conn.execute(
+                        "UPDATE profiles SET role = 'admin', access_status = 'active' WHERE id = $1",
+                        row["id"],
+                    )
+                    logger.info("admin_bootstrap_promoted", email=settings.initial_admin_email)
+                elif not row:
+                    logger.info("admin_bootstrap_pending", email=settings.initial_admin_email,
+                                reason="Profile not yet created -- will promote on first login")
+        except Exception as e:
+            logger.warning("admin_bootstrap_failed", error=str(e))
 
     # Start self-ping keepalive (Render free tier anti-sleep)
     keepalive_task = asyncio.create_task(_keepalive_loop())
@@ -108,6 +159,9 @@ async def lifespan(app: FastAPI):
         await keepalive_task
     except asyncio.CancelledError:
         pass
+    if pg_pool:
+        await pg_pool.close()
+        logger.info("asyncpg_pool_closed")
     await close_db()
     await close_redis()
     logger.info("application_stopped")
@@ -201,6 +255,24 @@ def create_app() -> FastAPI:
     # Store metrics on app state so system.py can access it
     app.state.metrics = _metrics
 
+    # ── Database Connection Middleware ──
+    # Acquires an asyncpg connection per-request, stores it on request.state.db.
+    # All Phase 4 endpoints (auth, watchlists, conversations, alerts, admin, etc.)
+    # use request.state.db.fetchrow() / .fetch() / .execute() for raw SQL.
+    @app.middleware("http")
+    async def db_connection_middleware(request: Request, call_next):
+        pool = getattr(app.state, "pg_pool", None)
+        if pool:
+            async with pool.acquire() as conn:
+                request.state.db = conn
+                response = await call_next(request)
+            return response
+        else:
+            # No pool (local dev without DATABASE_URL) — endpoints will get AttributeError
+            # which is preferable to silently returning None
+            response = await call_next(request)
+            return response
+
     # ── Exception Handlers ──
     register_exception_handlers(app)
 
@@ -211,7 +283,7 @@ def create_app() -> FastAPI:
         watchlist, assistant, prediction,
         # Phase 4
         invite, user_watchlists, conversations, saved_research,
-        alerts, admin as admin_router, internal,
+        alerts, admin as admin_router, internal, account,
     )
 
     # Phase 1-3 routes
@@ -234,6 +306,7 @@ def create_app() -> FastAPI:
     app.include_router(alerts.notifications_router, prefix=settings.api_prefix)
     app.include_router(admin_router.router, prefix=settings.api_prefix)
     app.include_router(internal.router, prefix=settings.api_prefix)
+    app.include_router(account.router, prefix=settings.api_prefix)
 
     # Root health endpoint (no prefix, for Render health checks + self-ping keepalive)
     @app.get("/health")

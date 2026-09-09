@@ -171,19 +171,36 @@ async def _resolve_or_create_profile(
         user_id,
     )
     if row:
+        # Update last_login for existing users
+        await db.execute(
+            "UPDATE profiles SET last_login = now() WHERE id = $1",
+            user_id,
+        )
         return row["access_status"], row["role"]
 
-    # First-time user -- create profile atomically
+    # First-time user -- create profile atomically (includes email for admin queries)
     logger.info("profile_auto_creating", user_id=str(user_id), email=email)
     await db.execute(
         """
-        INSERT INTO profiles (id, display_name, access_status, role)
-        VALUES ($1, $2, 'pending', 'user')
+        INSERT INTO profiles (id, email, display_name, access_status, role, last_login)
+        VALUES ($1, $2, $3, 'pending', 'user', now())
         ON CONFLICT (id) DO NOTHING
         """,
         user_id,
+        email,
         display_name or email.split("@")[0],
     )
+
+    # Check if this email should be auto-promoted to admin
+    from app.config import get_settings as _get_settings
+    _settings = _get_settings()
+    if _settings.initial_admin_email and email == _settings.initial_admin_email:
+        await db.execute(
+            "UPDATE profiles SET role = 'admin', access_status = 'active' WHERE id = $1",
+            user_id,
+        )
+        logger.info("admin_bootstrap_on_first_login", email=email)
+
     row = await db.fetchrow(
         "SELECT access_status, role FROM profiles WHERE id = $1",
         user_id,

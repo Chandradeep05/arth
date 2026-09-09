@@ -393,6 +393,58 @@ class AssistantEngine:
             "latency_ms": round(latency, 2),
         }
 
+    async def chat_stateless(
+        self,
+        user_message: str,
+        history: List[Dict[str, str]] | None = None,
+        symbol_context: str | None = None,
+    ) -> str:
+        """
+        Process a chat message with externally-provided history (from Postgres).
+
+        This is the Phase 4 stateless version of chat(). Instead of using
+        in-memory _sessions, conversation history is loaded from the database
+        by the caller (conversations.py) and passed in.
+
+        Returns: the assistant's response text (string, not dict).
+        """
+        if not self._llm:
+            return "LLM not configured. Set GROQ_API_KEY."
+
+        # Extract symbols from the user message
+        symbols = self._extract_symbols(user_message)
+
+        # If caller provided explicit symbol context, add it
+        if symbol_context:
+            sym = symbol_context.strip().upper()
+            if sym and sym not in symbols:
+                symbols.insert(0, sym)
+
+        # Build context with real market data
+        data_context = ""
+        for sym in symbols:
+            data_str = await self._fetch_market_data(sym)
+            if data_str:
+                data_context += data_str
+
+        # Augmented message (inject market data after user text)
+        augmented_message = user_message
+        if data_context:
+            augmented_message = f"{user_message}\n\n{data_context}"
+
+        # Build LLM messages: system prompt + history + current message
+        llm_messages = [
+            LLMMessage(role="system", content=ASSISTANT_SYSTEM_PROMPT),
+        ]
+        if history:
+            for msg in history[-12:]:  # Last 12 messages for token budget
+                llm_messages.append(LLMMessage(role=msg["role"], content=msg["content"]))
+        llm_messages.append(LLMMessage(role="user", content=augmented_message))
+
+        config = LLMConfig(max_tokens=3072, temperature=0.4)
+        response = await self._llm.generate(llm_messages, config)
+        return response.content
+
     async def stream_chat(
         self,
         message: str,

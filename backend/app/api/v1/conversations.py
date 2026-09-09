@@ -117,12 +117,24 @@ async def send_message(
     history = [{"role": r["role"], "content": r["content"]} for r in reversed(history_rows)]
 
     engine = request.app.state.assistant_engine
+    if not engine:
+        raise HTTPException(status_code=503, detail="AI engine not available")
+
+    # Per-user chat quota enforcement (Missing #3 from audit)
+    redis = getattr(request.app.state, "redis", None)
+    if redis:
+        from app.core.quotas import check_user_quota
+        await check_user_quota(user.user_id, "chat", redis)
+
     try:
-        ai_response = await engine.chat(
+        # chat_stateless() returns a string (not a dict)
+        ai_response = await engine.chat_stateless(
             user_message=body.content,
             history=history,
             symbol_context=body.symbol_context,
         )
+    except HTTPException:
+        raise  # Re-raise quota 429 errors
     except Exception as e:
         logger.error("chat_failed", error=str(e), conversation_id=str(conversation_id))
         raise HTTPException(status_code=500, detail="AI response failed. Try again.")

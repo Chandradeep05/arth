@@ -45,6 +45,13 @@ async def list_saved(request: Request, user: UserContext = Depends(require_activ
 @router.post("/saved")
 async def save_research(body: SaveResearchRequest, request: Request, user: UserContext = Depends(require_active_user)) -> dict:
     db = request.state.db
+
+    # Per-user research generation quota (10/day)
+    redis = getattr(request.app.state, "redis", None)
+    if redis:
+        from app.core.quotas import check_user_quota
+        await check_user_quota(user.user_id, "research_gen", redis)
+
     row = await db.fetchrow(
         """INSERT INTO saved_research (user_id, symbol, title, report_content, sources, generated_at, data_as_of, engine_version)
            VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6, $7, $8)
