@@ -126,23 +126,23 @@ export default function StockDetailPage() {
       <div className="flex items-start justify-between gap-4">
         <div className="flex items-start gap-4">
           <Link
-            href="/"
-            className="mt-1 p-2 rounded hover:bg-[var(--surface-2)] text-[var(--text-muted)] hover:text-[var(--accent)] transition-colors"
+            href="/markets"
+            className="mt-1 p-2 rounded-xl bg-white/[0.03] border border-white/[0.06] text-[var(--text-muted)] hover:text-white hover:bg-white/[0.08] transition-all"
           >
             <ArrowLeft className="w-4 h-4" />
           </Link>
 
           <div>
             <div className="flex items-center gap-3">
-              <h1 className="font-heading text-xl font-extrabold tracking-tight text-[var(--text)]">
+              <h1 className="font-heading text-2xl font-bold tracking-tight text-white">
                 {symbol}
               </h1>
-              <span className="badge badge-cyan">
-                {quote?.exchange ?? '...'}
+              <span className="badge badge-neutral">
+                {quote?.exchange ?? 'NSE'}
               </span>
             </div>
-            <p className="text-sm text-[var(--text-muted)] mt-0.5">
-              {quote?.name ?? company?.name ?? 'Loading...'}
+            <p className="text-xs font-mono text-[var(--text-dim)] mt-1">
+              {quote?.name ?? company?.name ?? 'Market Instrument'}
               {company?.sector && (
                 <span className="text-[var(--text-dim)]"> · {company.sector}</span>
               )}
@@ -154,14 +154,14 @@ export default function StockDetailPage() {
           <DataFreshness timestamp={lastUpdated} thresholdMs={60000} />
           <button
             onClick={fetchAll}
-            className="p-2 rounded hover:bg-[var(--surface-2)] text-[var(--text-muted)] hover:text-[var(--accent)] transition-colors cursor-pointer"
+            className="p-2 rounded-xl bg-white/[0.03] border border-white/[0.06] text-[var(--text-muted)] hover:text-white hover:bg-white/[0.08] transition-all cursor-pointer"
           >
             <RefreshCw className="w-4 h-4" />
           </button>
         </div>
       </div>
 
-      {/* Price Hero */}
+      {/* Price Hero (Matching Reference Panel 02) */}
       {loading ? (
         <LoadingSkeleton variant="card" />
       ) : quote ? (
@@ -170,59 +170,62 @@ export default function StockDetailPage() {
           animate={{ opacity: 1, y: 0 }}
           className="card p-6"
         >
-          <div className="flex items-end gap-6 flex-wrap">
-            {/* Price */}
+          <div className="flex items-start justify-between gap-6 flex-wrap">
+            {/* Price & Change */}
             <div>
-              <div className="font-heading text-4xl font-extrabold tracking-tight text-[var(--text)]">
+              <div className="text-[11px] font-mono text-[var(--text-dim)] uppercase tracking-wider mb-1">
+                Last Traded Price
+              </div>
+              <div className="font-heading text-4xl sm:text-5xl font-bold tracking-tight text-white">
                 {currency}{formatNumber(quote.price)}
               </div>
-              <div className="flex items-center gap-2 mt-1">
-                {isPositive ? (
-                  <TrendingUp className="w-4 h-4 text-[var(--green)]" />
-                ) : (
-                  <TrendingDown className="w-4 h-4 text-[var(--red)]" />
-                )}
-                <span className={`text-sm font-mono font-medium ${isPositive ? 'text-[var(--green)]' : 'text-[var(--red)]'}`}>
+              <div className="flex items-center gap-2 mt-2">
+                <span className={`inline-flex items-center gap-1.5 text-sm font-mono font-medium px-2.5 py-1 rounded-lg ${
+                  isPositive
+                    ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                    : 'bg-red-500/10 text-red-400 border border-red-500/20'
+                }`}>
+                  {isPositive ? <TrendingUp className="w-4 h-4" /> : <TrendingDown className="w-4 h-4" />}
                   {isPositive ? '+' : ''}{formatNumber(quote.change)} ({isPositive ? '+' : ''}{quote.change_percent.toFixed(2)}%)
                 </span>
               </div>
             </div>
 
-            {/* Quick Stats */}
-            <div className="flex gap-6 text-xs font-mono">
-              <div>
-                <span className="text-[var(--text-dim)] block">Open</span>
-                <span className="text-[var(--text)]">{currency}{formatNumber(quote.open)}</span>
+            {/* Quick Stats Grid */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-4 text-xs font-mono pt-2">
+              <div className="p-2 rounded-lg bg-white/[0.02] border border-white/[0.04]">
+                <span className="text-[10px] text-[var(--text-dim)] uppercase tracking-wider block">Open</span>
+                <span className="text-white font-medium">{currency}{formatNumber(quote.open)}</span>
               </div>
-              <div>
-                <span className="text-[var(--text-dim)] block">High</span>
-                <span className="text-[var(--text)]">{currency}{formatNumber(quote.high)}</span>
+              <div className="p-2 rounded-lg bg-white/[0.02] border border-white/[0.04]">
+                <span className="text-[10px] text-[var(--text-dim)] uppercase tracking-wider block">High</span>
+                <span className="text-white font-medium">{currency}{formatNumber(quote.high)}</span>
               </div>
-              <div>
-                <span className="text-[var(--text-dim)] block">Low</span>
-                <span className="text-[var(--text)]">{currency}{formatNumber(quote.low)}</span>
+              <div className="p-2 rounded-lg bg-white/[0.02] border border-white/[0.04]">
+                <span className="text-[10px] text-[var(--text-dim)] uppercase tracking-wider block">Low</span>
+                <span className="text-white font-medium">{currency}{formatNumber(quote.low)}</span>
               </div>
-              <div>
-                <span className="text-[var(--text-dim)] block">Prev Close</span>
-                <span className="text-[var(--text)]">{currency}{formatNumber(quote.previous_close)}</span>
+              <div className="p-2 rounded-lg bg-white/[0.02] border border-white/[0.04]">
+                <span className="text-[10px] text-[var(--text-dim)] uppercase tracking-wider block">Prev Close</span>
+                <span className="text-white font-medium">{currency}{formatNumber(quote.previous_close)}</span>
               </div>
-              <div>
-                <span className="text-[var(--text-dim)] block">Volume</span>
-                <span className="text-[var(--text)]">{(quote.volume / 1e6).toFixed(1)}M</span>
+              <div className="p-2 rounded-lg bg-white/[0.02] border border-white/[0.04]">
+                <span className="text-[10px] text-[var(--text-dim)] uppercase tracking-wider block">Volume</span>
+                <span className="text-white font-medium">{(quote.volume / 1e6).toFixed(1)}M</span>
               </div>
-              <div>
-                <span className="text-[var(--text-dim)] block">Mkt Cap</span>
-                <span className="text-[var(--text)]">{formatMarketCap(quote.market_cap, currency)}</span>
+              <div className="p-2 rounded-lg bg-white/[0.02] border border-white/[0.04]">
+                <span className="text-[10px] text-[var(--text-dim)] uppercase tracking-wider block">Mkt Cap</span>
+                <span className="text-white font-medium">{formatMarketCap(quote.market_cap, currency)}</span>
               </div>
-              <div>
-                <span className="text-[var(--text-dim)] block">P/E</span>
-                <span className="text-[var(--text)]">{quote.pe_ratio?.toFixed(2) ?? 'N/A'}</span>
+              <div className="p-2 rounded-lg bg-white/[0.02] border border-white/[0.04]">
+                <span className="text-[10px] text-[var(--text-dim)] uppercase tracking-wider block">P/E</span>
+                <span className="text-white font-medium">{quote.pe_ratio?.toFixed(2) ?? 'N/A'}</span>
               </div>
             </div>
           </div>
         </motion.div>
       ) : (
-        <div className="card p-8 text-center text-[var(--text-dim)]">
+        <div className="card p-8 text-center text-[var(--text-dim)] font-mono text-xs">
           <p>Could not load quote for {symbol}. Ensure the backend is running.</p>
         </div>
       )}

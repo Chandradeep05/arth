@@ -86,10 +86,12 @@ export default function ResearchReport({ symbol }: ResearchReportProps) {
       className="card overflow-hidden"
     >
       {/* Header */}
-      <div className="flex items-center justify-between px-5 py-3 border-b border-[var(--border)]">
+      <div className="flex items-center justify-between px-5 py-3.5 border-b border-white/[0.06]">
         <div className="flex items-center gap-2">
-          <FileText className="w-4 h-4 text-[var(--accent-purple)]" />
-          <h3 className="font-heading text-sm font-bold uppercase tracking-wider text-[var(--text-muted)]">
+          <div className="w-6 h-6 rounded-lg bg-white/[0.04] border border-white/[0.08] flex items-center justify-center">
+            <FileText className="w-3.5 h-3.5 text-emerald-400" />
+          </div>
+          <h3 className="font-heading text-xs font-bold uppercase tracking-wider text-white">
             AI Research Report
           </h3>
         </div>
@@ -97,10 +99,10 @@ export default function ResearchReport({ symbol }: ResearchReportProps) {
           onClick={generateReport}
           disabled={status === 'loading' || status === 'streaming'}
           className={`
-            px-3 py-1.5 text-xs font-mono rounded cursor-pointer transition-all
+            px-3 py-1.5 text-xs font-mono rounded-lg cursor-pointer transition-all
             ${status === 'loading' || status === 'streaming'
-              ? 'bg-[var(--surface-2)] text-[var(--text-dim)] cursor-not-allowed'
-              : 'bg-[var(--accent)]/15 text-[var(--accent)] border border-[var(--accent)]/30 hover:bg-[var(--accent)]/25'
+              ? 'bg-white/[0.03] text-[var(--text-dim)] cursor-not-allowed border border-white/[0.05]'
+              : 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 hover:bg-emerald-500/25'
             }
           `}
         >
@@ -121,34 +123,34 @@ export default function ResearchReport({ symbol }: ResearchReportProps) {
       {/* Content */}
       <div
         ref={contentRef}
-        className="p-5 max-h-[500px] overflow-y-auto"
+        className="p-6 max-h-[500px] overflow-y-auto"
       >
         {status === 'idle' && (
           <div className="text-center py-12 text-[var(--text-dim)]">
             <FileText className="w-8 h-8 mx-auto mb-3 opacity-30" />
-            <p className="text-sm font-mono">Click &quot;Generate Report&quot; to create an AI analysis</p>
-            <p className="text-[10px] mt-1 text-[var(--text-dim)]">
-              Uses real-time market data + Groq LLM
+            <p className="text-xs font-mono text-[var(--text-muted)]">Click &quot;Generate Report&quot; to create an institutional AI analysis</p>
+            <p className="text-[10px] mt-1 text-[var(--text-dim)] font-mono">
+              Synthesized from market fundamentals, SEC filings, and technical indicators
             </p>
           </div>
         )}
 
         {status === 'error' && (
           <div className="text-center py-8">
-            <AlertTriangle className="w-6 h-6 mx-auto mb-2 text-[var(--accent-orange)]" />
-            <p className="text-sm text-[var(--accent-orange)]">{error}</p>
-            <p className="text-[10px] mt-1 text-[var(--text-dim)]">
-              Ensure the backend is running and GROQ_API_KEY is set
+            <AlertTriangle className="w-5 h-5 mx-auto mb-2 text-amber-400" />
+            <p className="text-xs text-amber-400 font-mono">{error}</p>
+            <p className="text-[10px] mt-1 text-[var(--text-dim)] font-mono">
+              Ensure the backend is running with appropriate model keys configured
             </p>
           </div>
         )}
 
         {(status === 'streaming' || status === 'done') && (
           <div className="prose prose-invert prose-sm max-w-none">
-            <pre className="whitespace-pre-wrap font-sans text-sm text-[var(--text)] leading-relaxed">
+            <pre className="whitespace-pre-wrap font-sans text-xs text-[var(--text)] leading-relaxed">
               {content}
               {status === 'streaming' && (
-                <span className="inline-block w-2 h-4 bg-[var(--accent)] animate-pulse-dot ml-0.5" />
+                <span className="inline-block w-1.5 h-3.5 bg-emerald-400 animate-pulse-dot ml-0.5" />
               )}
             </pre>
           </div>
@@ -157,9 +159,9 @@ export default function ResearchReport({ symbol }: ResearchReportProps) {
 
       {/* Footer disclaimer */}
       {(status === 'streaming' || status === 'done') && (
-        <div className="px-5 py-2 border-t border-[var(--border)] bg-[var(--bg)]">
+        <div className="px-5 py-2.5 border-t border-white/[0.06] bg-transparent">
           <p className="text-[10px] font-mono text-[var(--text-dim)]">
-            ⚠ AI-generated · Not financial advice · Data delayed ~15s · Groq LLaMA 3.3 70B
+            ⚠ AI-generated · For informational purposes only · Groq LLaMA 3.3 70B
           </p>
         </div>
       )}

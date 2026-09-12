@@ -84,26 +84,26 @@ export default function NotificationBell() {
     <div className="relative" ref={dropdownRef}>
       <button
         onClick={() => (isOpen ? setIsOpen(false) : openDropdown())}
-        className="relative p-2 text-zinc-400 hover:text-white transition-colors"
+        className="relative p-2 text-[var(--text-muted)] hover:text-white rounded-lg hover:bg-white/[0.04] transition-all cursor-pointer"
         aria-label="Notifications"
       >
-        <Bell className="w-5 h-5" />
+        <Bell className="w-4 h-4" />
         {unreadCount > 0 && (
-          <span className="absolute -top-0.5 -right-0.5 bg-red-500 text-white text-[10px] font-bold rounded-full min-w-[18px] h-[18px] flex items-center justify-center px-1">
+          <span className="absolute -top-0.5 -right-0.5 bg-red-500 text-white text-[9px] font-bold rounded-full min-w-[16px] h-[16px] flex items-center justify-center px-0.5">
             {unreadCount > 99 ? '99+' : unreadCount}
           </span>
         )}
       </button>
 
       {isOpen && (
-        <div className="absolute right-0 top-full mt-2 w-80 max-h-96 bg-zinc-900 border border-zinc-700 rounded-lg shadow-xl overflow-hidden z-50">
+        <div className="absolute right-0 top-full mt-2 w-80 max-h-96 bg-[#090e0c]/95 backdrop-blur-2xl border border-white/[0.08] rounded-2xl shadow-[0_20px_50px_rgba(0,0,0,0.8)] overflow-hidden z-50">
           {/* Header */}
-          <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-700">
-            <span className="text-sm font-semibold text-white">Notifications</span>
+          <div className="flex items-center justify-between px-4 py-3 border-b border-white/[0.06]">
+            <span className="text-xs font-semibold text-white">Notifications</span>
             {unreadCount > 0 && (
               <button
                 onClick={markAllRead}
-                className="text-xs text-blue-400 hover:text-blue-300"
+                className="text-[11px] text-emerald-400 hover:text-emerald-300 font-medium cursor-pointer"
               >
                 Mark all read
               </button>
@@ -113,21 +113,21 @@ export default function NotificationBell() {
           {/* Body */}
           <div className="overflow-y-auto max-h-[320px]">
             {loading ? (
-              <div className="p-4 text-center text-zinc-500 text-sm">Loading...</div>
+              <div className="p-4 text-center text-[var(--text-dim)] text-xs font-mono">Loading...</div>
             ) : notifications.length === 0 ? (
-              <div className="p-6 text-center text-zinc-500 text-sm">
+              <div className="p-6 text-center text-[var(--text-dim)] text-xs font-mono">
                 No notifications yet
               </div>
             ) : (
               notifications.map((n) => (
                 <div
                   key={n.id}
-                  className={`px-4 py-3 border-b border-zinc-800 ${
-                    n.is_read ? 'opacity-60' : ''
+                  className={`px-4 py-3 border-b border-white/[0.04] ${
+                    n.is_read ? 'opacity-50' : ''
                   }`}
                 >
-                  <p className="text-sm text-zinc-200">{n.message}</p>
-                  <p className="text-xs text-zinc-500 mt-1">
+                  <p className="text-xs text-[var(--text)]">{n.message}</p>
+                  <p className="text-[10px] text-[var(--text-dim)] font-mono mt-1">
                     {new Date(n.created_at).toLocaleString()}
                   </p>
                 </div>

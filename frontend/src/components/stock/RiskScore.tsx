@@ -20,26 +20,25 @@ interface RiskScoreProps {
 }
 
 function getRiskColor(score: number): string {
-  if (score < 25) return 'var(--green)';
-  if (score < 50) return 'var(--gold)';
-  if (score < 75) return 'var(--accent-orange)';
-  return 'var(--red)';
+  if (score < 30) return '#10b981';
+  if (score < 55) return '#f59e0b';
+  return '#ef4444';
 }
 
 function DimensionBar({ dim }: { dim: RiskDimension }) {
   const color = getRiskColor(dim.score);
 
   return (
-    <div className="space-y-1.5">
-      <div className="flex items-center justify-between">
-        <span className="text-xs font-mono uppercase tracking-wider text-[var(--text-muted)]">
+    <div className="space-y-1.5 p-2 rounded-xl bg-white/[0.02] border border-white/[0.04]">
+      <div className="flex items-center justify-between text-xs font-mono">
+        <span className="text-[var(--text-muted)] font-medium">
           {dim.dimension.replace('_', ' ')}
         </span>
-        <span className="text-xs font-mono font-medium" style={{ color }}>
-          {dim.score.toFixed(0)} — {dim.label}
+        <span className="font-semibold" style={{ color }}>
+          {dim.score.toFixed(0)}/100 · {dim.label}
         </span>
       </div>
-      <div className="h-1.5 rounded-full bg-[var(--surface-2)] overflow-hidden">
+      <div className="h-1.5 rounded-full bg-white/[0.06] overflow-hidden">
         <motion.div
           initial={{ width: 0 }}
           animate={{ width: `${dim.score}%` }}
@@ -49,9 +48,9 @@ function DimensionBar({ dim }: { dim: RiskDimension }) {
         />
       </div>
       {dim.factors.length > 0 && (
-        <ul className="space-y-0.5">
+        <ul className="space-y-0.5 pt-0.5">
           {dim.factors.slice(0, 2).map((f, i) => (
-            <li key={i} className="text-[10px] text-[var(--text-dim)] pl-2 border-l border-[var(--border)]">
+            <li key={i} className="text-[10px] text-[var(--text-dim)] pl-2 border-l border-white/[0.08] truncate">
               {f}
             </li>
           ))}
@@ -87,44 +86,54 @@ export default function RiskScore({
     <motion.div
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ delay: 0.6 }}
-      className="card p-5"
+      transition={{ delay: 0.4 }}
+      className="card p-6 flex flex-col justify-between"
     >
-      <div className="flex items-center gap-2 mb-4">
-        <ShieldAlert className="w-4 h-4 text-[var(--accent-orange)]" />
-        <h3 className="font-heading text-sm font-bold uppercase tracking-wider text-[var(--text-muted)]">
-          Risk Assessment
-        </h3>
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center gap-2">
+          <div className="w-6 h-6 rounded-lg bg-white/[0.04] border border-white/[0.08] flex items-center justify-center">
+            <ShieldAlert className="w-3.5 h-3.5 text-amber-400" />
+          </div>
+          <h3 className="font-heading text-xs font-bold uppercase tracking-wider text-white">
+            Risk Assessment
+          </h3>
+        </div>
+        <span className="text-[10px] font-mono text-[var(--text-dim)]">
+          Confidence: {confidence.toFixed(0)}%
+        </span>
       </div>
 
-      {/* Composite Score */}
-      <div className="text-center mb-5">
-        <div className="relative inline-flex items-center justify-center">
-          {/* Circular progress */}
+      {/* Composite Score Ring Display */}
+      <div className="flex items-center gap-6 my-2">
+        <div className="relative w-24 h-24 shrink-0 flex items-center justify-center">
           <svg className="w-24 h-24 -rotate-90" viewBox="0 0 100 100">
             <circle
-              cx="50" cy="50" r="42"
+              cx="50"
+              cy="50"
+              r="40"
               fill="none"
-              stroke="var(--surface-2)"
+              stroke="rgba(255, 255, 255, 0.06)"
               strokeWidth="6"
             />
             <motion.circle
-              cx="50" cy="50" r="42"
+              cx="50"
+              cy="50"
+              r="40"
               fill="none"
               stroke={color}
               strokeWidth="6"
               strokeLinecap="round"
-              strokeDasharray={`${2 * Math.PI * 42}`}
-              initial={{ strokeDashoffset: 2 * Math.PI * 42 }}
+              strokeDasharray={`${2 * Math.PI * 40}`}
+              initial={{ strokeDashoffset: 2 * Math.PI * 40 }}
               animate={{
-                strokeDashoffset: 2 * Math.PI * 42 * (1 - compositeScore / 100),
+                strokeDashoffset: 2 * Math.PI * 40 * (1 - compositeScore / 100),
               }}
               transition={{ duration: 1, ease: 'easeOut' }}
-              style={{ filter: `drop-shadow(0 0 6px ${color})` }}
+              style={{ filter: `drop-shadow(0 0 6px ${color}80)` }}
             />
           </svg>
           <div className="absolute inset-0 flex flex-col items-center justify-center">
-            <span className="text-xl font-heading font-extrabold" style={{ color }}>
+            <span className="font-heading text-xl font-extrabold text-white">
               {compositeScore.toFixed(0)}
             </span>
             <span className="text-[9px] font-mono text-[var(--text-dim)] uppercase">
@@ -132,27 +141,32 @@ export default function RiskScore({
             </span>
           </div>
         </div>
-        <div className="text-sm font-heading font-bold mt-2" style={{ color }}>
-          {compositeLabel}
-        </div>
-        <div className="text-[10px] font-mono text-[var(--text-dim)] mt-0.5">
-          Confidence: {confidence.toFixed(0)}%
+
+        <div>
+          <div className="text-lg font-heading font-bold text-white mb-0.5">
+            {compositeLabel}
+          </div>
+          <p className="text-xs text-[var(--text-muted)] leading-relaxed">
+            Composite quantitative risk evaluation across financial volatility, liquidity, and solvency metrics.
+          </p>
         </div>
       </div>
 
       {/* Dimension Bars */}
-      <div className="space-y-4">
+      <div className="space-y-2 mt-4 pt-4 border-t border-white/[0.06]">
         {dimensions.map((dim) => (
           <DimensionBar key={dim.dimension} dim={dim} />
         ))}
       </div>
 
       {/* Disclaimer */}
-      <div className="mt-4 pt-3 border-t border-[var(--border)]">
-        <p className="text-[9px] font-mono text-[var(--text-dim)] leading-relaxed">
-          {disclaimer}
-        </p>
-      </div>
+      {disclaimer && (
+        <div className="mt-4 pt-3 border-t border-white/[0.06]">
+          <p className="text-[9px] font-mono text-[var(--text-dim)] leading-relaxed">
+            {disclaimer}
+          </p>
+        </div>
+      )}
     </motion.div>
   );
 }

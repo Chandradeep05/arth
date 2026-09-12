@@ -60,12 +60,12 @@ export default function RootLayout({
               - Mobile: no left margin (sidebar is a drawer, not always-visible)
               - Desktop collapsed (lg): 64px offset
               - Desktop expanded (xl): 240px offset */}
-          <div className="flex flex-col flex-1 ml-0 lg:ml-16 xl:ml-60 relative z-[1]">
+          <div className="flex flex-col flex-1 ml-0 lg:ml-16 xl:ml-60 relative z-[1] min-w-0 max-w-full overflow-x-hidden">
             {/* Sticky Header */}
             <Header onMenuOpen={() => setSidebarOpen(true)} />
 
             {/* Page Content */}
-            <main className="flex-1 p-4 lg:p-6">
+            <main className="flex-1 p-3 sm:p-4 lg:p-5 pb-14 sm:pb-16 min-w-0 max-w-full">
               {children}
             </main>
 

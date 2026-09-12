@@ -139,21 +139,24 @@ export default function ResearchPage() {
         {[
           { key: 'standard' as const, label: 'Standard Research', icon: Sparkles },
           { key: 'deep' as const, label: 'Deep Research (RAG)', icon: BookOpen },
-        ].map((m) => (
-          <button
-            key={m.key}
-            onClick={() => { setMode(m.key); resetDeepState(); }}
-            className={`px-4 py-2 rounded-lg text-xs font-bold uppercase tracking-wider flex items-center gap-2
-                        transition-all cursor-pointer border ${
-              mode === m.key
-                ? 'bg-[var(--accent)]/10 border-[var(--accent)] text-[var(--accent)]'
-                : 'bg-[var(--surface)] border-[var(--border)] text-[var(--text-muted)] hover:border-[var(--border-bright)]'
-            }`}
-          >
-            <m.icon className="w-3.5 h-3.5" />
-            {m.label}
-          </button>
-        ))}
+        ].map((m) => {
+          const isActive = mode === m.key;
+          return (
+            <button
+              key={m.key}
+              onClick={() => { setMode(m.key); resetDeepState(); }}
+              className={`px-4 py-2 rounded-full text-xs font-semibold tracking-wider flex items-center gap-2
+                          transition-all cursor-pointer border ${
+                isActive
+                  ? 'bg-[rgba(16,185,129,0.12)] border-[rgba(16,185,129,0.3)] text-[var(--green)] shadow-[0_0_12px_rgba(16,185,129,0.1)]'
+                  : 'bg-[rgba(255,255,255,0.03)] border-[rgba(255,255,255,0.06)] text-[var(--text-muted)] hover:text-white hover:bg-[rgba(255,255,255,0.06)]'
+              }`}
+            >
+              <m.icon className="w-3.5 h-3.5" />
+              {m.label}
+            </button>
+          );
+        })}
       </div>
 
       {/* Standard Research Mode */}
@@ -166,43 +169,43 @@ export default function ResearchPage() {
             className="card p-6 max-w-2xl"
           >
             <div className="flex items-center gap-2 mb-4">
-              <Sparkles className="w-5 h-5 text-[var(--accent)]" />
-              <h2 className="font-heading text-sm font-bold uppercase tracking-wider text-[var(--text)]">
-                Generate Report
+              <Sparkles className="w-4 h-4 text-[var(--green)]" />
+              <h2 className="font-heading text-xs font-bold uppercase tracking-wider text-[var(--text)]">
+                Generate Institutional Report
               </h2>
             </div>
 
-            <form onSubmit={handleStandardGenerate} className="flex gap-3">
+            <form onSubmit={handleStandardGenerate} className="flex gap-2 relative">
               <input
                 type="text"
                 value={symbol}
                 onChange={(e) => setSymbol(e.target.value)}
-                placeholder="Enter stock symbol (e.g., RELIANCE.NS, AAPL)"
-                className="flex-1 px-4 py-3 rounded-lg bg-[var(--bg)] border border-[var(--border)]
-                           text-[var(--text)] font-mono text-sm placeholder:text-[var(--text-dim)]
-                           focus:outline-none focus:border-[var(--accent)] focus:shadow-[0_0_0_3px_rgba(0,212,255,0.1)]
+                placeholder="Enter stock symbol (e.g., RELIANCE.NS, AAPL, NVDA)"
+                className="flex-1 px-4 py-3 rounded-full bg-[var(--surface-2)] border border-[var(--border)]
+                           text-[var(--text)] font-mono text-xs placeholder:text-[var(--text-dim)]
+                           focus:outline-none focus:border-[var(--green)]/50 focus:ring-1 focus:ring-[var(--green)]/30
                            transition-all"
               />
               <button
                 type="submit"
-                className="px-6 py-3 rounded-lg bg-[var(--accent)] text-[var(--bg)] text-sm font-bold
-                           uppercase tracking-wider hover:brightness-110 transition-all cursor-pointer
-                           flex items-center gap-2"
+                className="px-5 py-2.5 rounded-full bg-[var(--green)] text-black text-xs font-bold
+                           uppercase tracking-wider hover:bg-[var(--green-hover)] transition-all cursor-pointer
+                           flex items-center gap-2 shadow-sm"
               >
-                Analyze <ArrowRight className="w-4 h-4" />
+                Analyze <ArrowRight className="w-3.5 h-3.5" />
               </button>
             </form>
             <p className="text-[11px] text-[var(--text-dim)] mt-3 font-mono">
-              Uses Groq LLM · Data sourced from market providers · ~15s delayed
+              Powered by Groq LLM · Sourced from institutional filings & real-time feeds
             </p>
           </motion.div>
 
           {/* What's Included */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3 max-w-3xl">
             {[
-              { title: 'Company Analysis', desc: 'Business overview, sector positioning, competitive landscape', icon: FileText },
-              { title: 'Technical Signals', desc: 'RSI, MACD, Bollinger Bands, VWAP with interpretive signals', icon: Sparkles },
-              { title: 'Financial Health', desc: 'P/E, revenue growth, margins, debt ratios, ROE/ROA', icon: Clock },
+              { title: 'Company Analysis', desc: 'Business overview, sector positioning, competitive moat analysis', icon: FileText },
+              { title: 'Technical Signals', desc: 'RSI, MACD, Bollinger Bands, VWAP with algorithmic trade signals', icon: Sparkles },
+              { title: 'Financial Health', desc: 'Multi-period balance sheet analysis, cash flows, valuation multiples', icon: Clock },
             ].map((item, i) => (
               <motion.div
                 key={item.title}
@@ -211,9 +214,9 @@ export default function ResearchPage() {
                 transition={{ delay: 0.2 + i * 0.1 }}
                 className="card p-5"
               >
-                <item.icon className="w-5 h-5 text-[var(--accent)] mb-3" />
-                <h3 className="font-heading text-sm font-bold text-[var(--text)] mb-1">{item.title}</h3>
-                <p className="text-xs text-[var(--text-dim)] font-mono leading-relaxed">{item.desc}</p>
+                <item.icon className="w-4 h-4 text-[var(--green)] mb-3" />
+                <h3 className="font-heading text-xs font-bold text-[var(--text)] mb-1">{item.title}</h3>
+                <p className="text-[11px] text-[var(--text-dim)] font-mono leading-relaxed">{item.desc}</p>
               </motion.div>
             ))}
           </div>
@@ -229,16 +232,16 @@ export default function ResearchPage() {
             className="card p-6 max-w-2xl"
           >
             <div className="flex items-center gap-2 mb-4">
-              <BookOpen className="w-5 h-5 text-[var(--accent-purple)]" />
-              <h2 className="font-heading text-sm font-bold uppercase tracking-wider text-[var(--text)]">
+              <BookOpen className="w-4 h-4 text-[var(--green)]" />
+              <h2 className="font-heading text-xs font-bold uppercase tracking-wider text-[var(--text)]">
                 Deep Research with Citations
               </h2>
-              <span className="badge badge-purple text-[10px] font-mono ml-auto">RAG-Powered</span>
+              <span className="badge badge-green text-[10px] font-mono ml-auto">RAG Grounded</span>
             </div>
 
             <p className="text-xs text-[var(--text-muted)] font-mono mb-4 leading-relaxed">
-              Indexes company documents (news, financials, description) into a vector store,
-              then generates a cited research report backed by multiple sources.
+              Indexes corporate filings, quarterly releases, and financial metrics into a vector store,
+              then synthesizes a cited research report with strict source verification.
             </p>
 
             {/* Step 1: Enter Symbol */}
@@ -247,10 +250,10 @@ export default function ResearchPage() {
                 type="text"
                 value={symbol}
                 onChange={(e) => { setSymbol(e.target.value); resetDeepState(); }}
-                placeholder="Enter stock symbol (e.g., RELIANCE.NS)"
-                className="flex-1 px-4 py-3 rounded-lg bg-[var(--bg)] border border-[var(--border)]
-                           text-[var(--text)] font-mono text-sm placeholder:text-[var(--text-dim)]
-                           focus:outline-none focus:border-[var(--accent)] focus:shadow-[0_0_0_3px_rgba(0,212,255,0.1)]
+                placeholder="Enter stock symbol (e.g., RELIANCE.NS, TCS.NS)"
+                className="flex-1 px-4 py-3 rounded-full bg-[var(--surface-2)] border border-[var(--border)]
+                           text-[var(--text)] font-mono text-xs placeholder:text-[var(--text-dim)]
+                           focus:outline-none focus:border-[var(--green)]/50 focus:ring-1 focus:ring-[var(--green)]/30
                            transition-all"
               />
             </div>
@@ -260,19 +263,19 @@ export default function ResearchPage() {
               <button
                 onClick={handleIndex}
                 disabled={indexing || !symbol.trim()}
-                className="w-full px-4 py-3 rounded-lg border border-[var(--accent-purple)]/30 text-sm
-                           font-bold text-[var(--accent-purple)] hover:bg-[var(--accent-purple)]/5
+                className="w-full px-4 py-2.5 rounded-full border border-[var(--green)]/30 text-xs
+                           font-bold text-[var(--green)] hover:bg-[rgba(16,185,129,0.06)]
                            transition-all cursor-pointer flex items-center justify-center gap-2
                            disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 {indexing ? (
                   <>
-                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
                     Indexing documents...
                   </>
                 ) : (
                   <>
-                    <Database className="w-4 h-4" />
+                    <Database className="w-3.5 h-3.5" />
                     Index Documents for {symbol.trim().toUpperCase() || '...'}
                   </>
                 )}
@@ -282,28 +285,28 @@ export default function ResearchPage() {
             {/* Step 3: Indexed — Show Generate */}
             {indexed && !deepReport && (
               <div className="space-y-3">
-                <div className="flex items-center gap-2 p-3 rounded-lg bg-[var(--accent-green)]/5 border border-[var(--accent-green)]/20">
-                  <CheckCircle className="w-4 h-4 text-[var(--accent-green)]" />
-                  <span className="text-xs font-mono text-[var(--accent-green)]">
+                <div className="flex items-center gap-2 p-3 rounded-lg bg-[rgba(16,185,129,0.06)] border border-[rgba(16,185,129,0.2)]">
+                  <CheckCircle className="w-4 h-4 text-[var(--green)]" />
+                  <span className="text-xs font-mono text-[var(--green)]">
                     {indexedCount} documents indexed successfully
                   </span>
                 </div>
                 <button
                   onClick={handleDeepGenerate}
                   disabled={generating}
-                  className="w-full px-4 py-3 rounded-lg bg-[var(--accent-purple)] text-white text-sm
-                             font-bold uppercase tracking-wider hover:brightness-110 transition-all
+                  className="w-full px-4 py-2.5 rounded-full bg-[var(--green)] text-black text-xs
+                             font-bold uppercase tracking-wider hover:bg-[var(--green-hover)] transition-all
                              cursor-pointer flex items-center justify-center gap-2
-                             disabled:opacity-60 disabled:cursor-not-allowed"
+                             disabled:opacity-60 disabled:cursor-not-allowed shadow-sm"
                 >
                   {generating ? (
                     <>
-                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
                       Generating deep research...
                     </>
                   ) : (
                     <>
-                      <Sparkles className="w-4 h-4" />
+                      <Sparkles className="w-3.5 h-3.5" />
                       Generate Deep Research
                     </>
                   )}
@@ -313,7 +316,7 @@ export default function ResearchPage() {
 
             {/* Error Display */}
             {error && (
-              <div className="flex items-center gap-2 p-3 rounded-lg bg-[var(--red)]/5 border border-[var(--red)]/20 mt-3">
+              <div className="flex items-center gap-2 p-3 rounded-lg bg-[var(--red)]/10 border border-[var(--red)]/20 mt-3">
                 <AlertCircle className="w-4 h-4 text-[var(--red)]" />
                 <span className="text-xs font-mono text-[var(--red)]">{error}</span>
               </div>
@@ -324,9 +327,9 @@ export default function ResearchPage() {
           {!deepReport && (
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3 max-w-3xl">
               {[
-                { title: 'Multi-Source Analysis', desc: 'Company info, news, financials, and sector context indexed', icon: Database },
-                { title: 'Inline Citations', desc: 'Every claim backed by [SOURCE N] references you can verify', icon: BookOpen },
-                { title: 'Higher Confidence', desc: 'RAG grounding reduces hallucination, increases accuracy', icon: CheckCircle },
+                { title: 'Multi-Source Synthesis', desc: 'Regulatory filings, earnings transcripts, analyst estimates indexed', icon: Database },
+                { title: 'Inline Citations', desc: 'Every qualitative statement linked to [SOURCE N] references', icon: BookOpen },
+                { title: 'Hallucination Resistant', desc: 'Strict RAG grounding ensures assertions are verified', icon: CheckCircle },
               ].map((item, i) => (
                 <motion.div
                   key={item.title}
@@ -335,9 +338,9 @@ export default function ResearchPage() {
                   transition={{ delay: 0.2 + i * 0.1 }}
                   className="card p-5"
                 >
-                  <item.icon className="w-5 h-5 text-[var(--accent-purple)] mb-3" />
-                  <h3 className="font-heading text-sm font-bold text-[var(--text)] mb-1">{item.title}</h3>
-                  <p className="text-xs text-[var(--text-dim)] font-mono leading-relaxed">{item.desc}</p>
+                  <item.icon className="w-4 h-4 text-[var(--green)] mb-3" />
+                  <h3 className="font-heading text-xs font-bold text-[var(--text)] mb-1">{item.title}</h3>
+                  <p className="text-[11px] text-[var(--text-dim)] font-mono leading-relaxed">{item.desc}</p>
                 </motion.div>
               ))}
             </div>

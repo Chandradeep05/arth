@@ -27,7 +27,7 @@ interface WatchlistAPIItem {
 }
 
 export default function WatchlistPage() {
-  const { user, isLoading: authLoading } = useAuth();
+  const { user, loading: authLoading } = useAuth();
   const api = useAuthenticatedApi();
   
   const [watchlists, setWatchlists] = useState<Watchlist[]>([]);
@@ -51,8 +51,8 @@ export default function WatchlistPage() {
   const loadWatchlists = useCallback(async () => {
     try {
       setIsLoading(true);
-      const res = await api.get('/user/watchlists');
-      const lists = res.data || [];
+      const res = await api.get<any>('/user/watchlists');
+      const lists: Watchlist[] = (Array.isArray(res) ? res : res?.data) || [];
       setWatchlists(lists);
       
       if (lists.length > 0) {
@@ -82,15 +82,16 @@ export default function WatchlistPage() {
     try {
       if (isRefresh) setIsRefreshing(true);
       
-      const res = await api.get(`/user/watchlists/${activeListId}/items`);
-      const items: WatchlistAPIItem[] = res.data || [];
+      const res = await api.get<any>(`/user/watchlists/${activeListId}/items`);
+      const items: WatchlistAPIItem[] = (Array.isArray(res) ? res : res?.data) || [];
       setApiItems(items);
       
       if (items.length > 0) {
         const symbols = items.map(i => i.symbol);
-        const marketRes = await apiClient.post('/market/batch', { symbols });
-        if (marketRes.data?.quotes) {
-          setMarketData(marketRes.data.quotes);
+        const marketRes = await apiClient.post<any>('/market/batch', { symbols });
+        const quotes = marketRes?.data?.quotes || marketRes?.quotes;
+        if (quotes) {
+          setMarketData(quotes);
         }
       } else {
         setMarketData({});
@@ -110,26 +111,28 @@ export default function WatchlistPage() {
 
   // Handle WebSocket updates
   const activeSymbols = useMemo(() => apiItems.map(i => i.symbol), [apiItems]);
-  
-  const handleWsMessage = useCallback((message: any) => {
-    if (message.type === 'market_update' && message.data) {
-      const update = message.data;
-      if (activeSymbols.includes(update.symbol)) {
-        setMarketData(prev => ({
-          ...prev,
-          [update.symbol]: {
-            ...(prev[update.symbol] || {}),
-            ...update
-          }
-        }));
-      }
-    }
-  }, [activeSymbols]);
+  const { prices } = useWebSocket(activeSymbols);
 
-  const { isConnected } = useWebSocket({
-    onMessage: handleWsMessage,
-    subscribeOnConnect: activeSymbols.length > 0 ? { type: 'subscribe', channels: ['market_data'], symbols: activeSymbols } : undefined
-  });
+  useEffect(() => {
+    if (prices.size > 0) {
+      setMarketData(prev => {
+        const next = { ...prev };
+        prices.forEach((update, sym) => {
+          next[sym] = {
+            ...(next[sym] || {}),
+            price: update.price,
+            change: update.change,
+            change_pct: update.change_percent,
+            volume: update.volume,
+            day_high: update.high,
+            day_low: update.low,
+            timestamp: update.timestamp,
+          };
+        });
+        return next;
+      });
+    }
+  }, [prices]);
 
   // Actions
   const handleCreateList = async (e: React.FormEvent) => {
@@ -137,10 +140,12 @@ export default function WatchlistPage() {
     if (!newListName.trim()) return;
     
     try {
-      const res = await api.post('/user/watchlists', { name: newListName.trim() });
-      const newList = res.data;
-      setWatchlists(prev => [...prev, newList]);
-      setActiveListId(newList.id);
+      const res = await api.post<any>('/user/watchlists', { name: newListName.trim() });
+      const newList: Watchlist = res?.data || res;
+      if (newList && newList.id) {
+        setWatchlists(prev => [...prev, newList]);
+        setActiveListId(newList.id);
+      }
       setShowCreateModal(false);
       setNewListName('');
     } catch (err) {
@@ -208,7 +213,7 @@ export default function WatchlistPage() {
 
   if (authLoading || isLoading) {
     return (
-      <div className="min-h-screen bg-black text-white p-4 md:p-8 pt-20">
+      <div className="space-y-6 animate-fadeIn">
         <LoadingSkeleton />
       </div>
     );
@@ -217,130 +222,140 @@ export default function WatchlistPage() {
   const activeList = watchlists.find(l => l.id === activeListId);
 
   return (
-    <div className="min-h-screen bg-black text-white p-4 md:p-8 pt-20">
-      <div className="max-w-7xl mx-auto space-y-6">
+    <div className="space-y-6 animate-fadeIn">
+      {/* Header */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div>
+          <h1 className="font-heading text-xl font-extrabold tracking-tight text-[var(--text)] flex items-center gap-2">
+            <Star className="text-[var(--gold)] w-5 h-5 fill-[var(--gold)]/20" />
+            Watchlists & Holdings
+          </h1>
+          <p className="text-xs text-[var(--text-muted)] mt-1 font-mono">
+            Track custom asset baskets with real-time streaming quotes & risk metrics
+          </p>
+        </div>
         
-        {/* Header */}
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-          <div>
-            <h1 className="text-3xl font-bold flex items-center gap-2">
-              <Star className="text-yellow-400" size={28} />
-              Your Watchlists
-            </h1>
-            <p className="text-zinc-400 mt-1">Track your favorite assets in real-time</p>
-          </div>
-          
+        <button 
+          onClick={() => setShowCreateModal(true)}
+          className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-[rgba(255,255,255,0.04)] hover:bg-[rgba(255,255,255,0.08)] border border-[var(--border)] text-xs font-medium text-[var(--text)] transition-all cursor-pointer w-fit"
+        >
+          <Plus size={14} className="text-[var(--green)]" />
+          New Watchlist
+        </button>
+      </div>
+
+      {/* Tabs */}
+      {watchlists.length > 0 ? (
+        <div className="flex items-center gap-2 overflow-x-auto no-scrollbar pb-1">
+          {watchlists.map(list => {
+            const isActive = activeListId === list.id;
+            return (
+              <button 
+                key={list.id} 
+                onClick={() => setActiveListId(list.id)}
+                className={`flex items-center gap-2 px-3.5 py-1.5 rounded-full text-xs font-medium whitespace-nowrap transition-all cursor-pointer ${
+                  isActive 
+                    ? 'bg-[rgba(16,185,129,0.12)] text-[var(--green)] border border-[rgba(16,185,129,0.3)] shadow-[0_0_12px_rgba(16,185,129,0.1)]' 
+                    : 'bg-[rgba(255,255,255,0.03)] text-[var(--text-muted)] border border-[rgba(255,255,255,0.06)] hover:text-white hover:bg-[rgba(255,255,255,0.06)]'
+                }`}
+              >
+                <span>{list.name}</span>
+                <span className={`text-[10px] font-mono px-1.5 py-0.2 rounded-full ${
+                  isActive ? 'bg-[var(--green)]/20 text-[var(--green)]' : 'bg-[rgba(255,255,255,0.06)] text-[var(--text-dim)]'
+                }`}>
+                  {list.item_count || 0}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="text-center py-12 card">
+          <Star className="mx-auto text-[var(--text-dim)] mb-3 opacity-40" size={36} />
+          <h3 className="text-sm font-semibold mb-1 text-[var(--text)]">No watchlists found</h3>
+          <p className="text-xs text-[var(--text-dim)] mb-4 font-mono">Create your first watchlist to start tracking assets.</p>
           <button 
             onClick={() => setShowCreateModal(true)}
-            className="flex items-center gap-2 bg-zinc-800 hover:bg-zinc-700 px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+            className="bg-[var(--green)] hover:bg-[var(--green-hover)] text-black px-4 py-2 rounded-full text-xs font-bold transition-colors cursor-pointer"
           >
-            <Plus size={16} />
-            New Watchlist
+            Create Watchlist
           </button>
         </div>
+      )}
 
-        {/* Tabs */}
-        {watchlists.length > 0 ? (
-          <div className="border-b border-zinc-800 flex overflow-x-auto no-scrollbar">
-            {watchlists.map(list => (
-              <div 
-                key={list.id} 
-                className={`flex items-center gap-2 px-4 py-3 cursor-pointer whitespace-nowrap transition-colors ${
-                  activeListId === list.id ? 'border-b-2 border-white text-white' : 'text-zinc-500 hover:text-zinc-300'
-                }`}
-                onClick={() => setActiveListId(list.id)}
-              >
-                <span className="font-medium">{list.name}</span>
-                <span className="text-xs bg-zinc-800 px-2 py-0.5 rounded-full">{list.item_count || 0}</span>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <div className="text-center py-12 bg-zinc-900/50 rounded-xl border border-zinc-800">
-            <Star className="mx-auto text-zinc-600 mb-4" size={48} />
-            <h3 className="text-xl font-medium mb-2">No watchlists found</h3>
-            <p className="text-zinc-400 mb-6">Create your first watchlist to start tracking assets.</p>
-            <button 
-              onClick={() => setShowCreateModal(true)}
-              className="bg-white text-black hover:bg-zinc-200 px-6 py-2 rounded-lg font-medium transition-colors"
-            >
-              Create Watchlist
-            </button>
-          </div>
-        )}
-
-        {/* Active List Actions & Table */}
-        {activeListId && (
-          <div className="space-y-4">
-            <div className="flex flex-wrap items-center justify-between gap-4">
-              <h2 className="text-xl font-semibold flex items-center gap-2">
+      {/* Active List Actions & Table */}
+      {activeListId && (
+        <div className="space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div className="flex items-center gap-2.5">
+              <h2 className="font-heading text-sm font-bold text-[var(--text)] uppercase tracking-wider">
                 {activeList?.name}
-                {activeList && !activeList.is_default && (
-                  <button 
-                    onClick={() => handleDeleteList(activeList.id)}
-                    className="text-zinc-500 hover:text-red-400 p-1 rounded-md transition-colors"
-                    title="Delete watchlist"
-                  >
-                    <Trash2 size={16} />
-                  </button>
-                )}
               </h2>
-              
-              <div className="flex items-center gap-2">
+              {activeList && !activeList.is_default && (
                 <button 
-                  onClick={() => loadActiveListItems(true)}
-                  disabled={isRefreshing}
-                  className={`p-2 bg-zinc-900 border border-zinc-800 rounded-lg text-zinc-400 hover:text-white transition-colors ${isRefreshing ? 'opacity-50' : ''}`}
-                  title="Refresh data"
+                  onClick={() => handleDeleteList(activeList.id)}
+                  className="text-[var(--text-dim)] hover:text-[var(--red)] p-1 rounded-md transition-colors cursor-pointer"
+                  title="Delete watchlist"
                 >
-                  <RefreshCw size={18} className={isRefreshing ? 'animate-spin' : ''} />
+                  <Trash2 size={13} />
                 </button>
-                <button 
-                  onClick={() => setShowAddSymbolModal(true)}
-                  className="flex items-center gap-2 bg-zinc-100 text-black hover:bg-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
-                >
-                  <Plus size={16} />
-                  Add Symbol
-                </button>
-              </div>
-            </div>
-
-            <div className="bg-zinc-900/50 rounded-xl border border-zinc-800 overflow-hidden min-h-[400px]">
-              {apiItems.length > 0 ? (
-                <WatchlistTable 
-                  data={tableData}
-                  sortField={sortField}
-                  sortDir={sortDir}
-                  onSort={(field) => {
-                    if (sortField === field) {
-                      setSortDir(sortDir === 'asc' ? 'desc' : 'asc');
-                    } else {
-                      setSortField(field);
-                      setSortDir('desc');
-                    }
-                  }}
-                  onRemove={handleRemoveSymbol}
-                />
-              ) : (
-                <div className="flex flex-col items-center justify-center h-[400px] text-zinc-500">
-                  <Search size={48} className="mb-4 opacity-50" />
-                  <p className="text-lg mb-2">This watchlist is empty</p>
-                  <p className="text-sm mb-4">Add symbols to track their performance</p>
-                  <button 
-                    onClick={() => setShowAddSymbolModal(true)}
-                    className="text-white bg-zinc-800 hover:bg-zinc-700 px-4 py-2 rounded-lg text-sm font-medium transition-colors"
-                  >
-                    Add First Symbol
-                  </button>
-                </div>
               )}
             </div>
+            
+            <div className="flex items-center gap-2">
+              <button 
+                onClick={() => loadActiveListItems(true)}
+                disabled={isRefreshing}
+                className={`p-1.5 bg-[rgba(255,255,255,0.03)] border border-[var(--border)] rounded-full text-[var(--text-dim)] hover:text-white transition-colors cursor-pointer ${isRefreshing ? 'opacity-50' : ''}`}
+                title="Refresh market quotes"
+              >
+                <RefreshCw size={14} className={isRefreshing ? 'animate-spin' : ''} />
+              </button>
+              <button 
+                onClick={() => setShowAddSymbolModal(true)}
+                className="flex items-center gap-1.5 bg-[var(--green)] hover:bg-[var(--green-hover)] text-black px-3.5 py-1.5 rounded-full text-xs font-bold transition-colors cursor-pointer shadow-sm"
+              >
+                <Plus size={14} />
+                Add Symbol
+              </button>
+            </div>
           </div>
-        )}
-        
-        <div className="mt-8">
-          <Disclaimer />
+
+          <div className="min-h-[350px]">
+            {apiItems.length > 0 ? (
+              <WatchlistTable 
+                items={tableData}
+                sortBy={sortField}
+                sortDir={sortDir}
+                onSort={(field) => {
+                  if (sortField === field) {
+                    setSortDir(sortDir === 'asc' ? 'desc' : 'asc');
+                  } else {
+                    setSortField(field);
+                    setSortDir('desc');
+                  }
+                }}
+                onRemove={handleRemoveSymbol}
+              />
+            ) : (
+              <div className="card flex flex-col items-center justify-center h-[300px] text-[var(--text-dim)]">
+                <Search size={36} className="mb-3 opacity-30" />
+                <p className="text-sm font-medium text-[var(--text)] mb-1">This watchlist is empty</p>
+                <p className="text-xs text-[var(--text-dim)] font-mono mb-4">Add symbols like RELIANCE.NS, TCS.NS or AAPL</p>
+                <button 
+                  onClick={() => setShowAddSymbolModal(true)}
+                  className="bg-[rgba(255,255,255,0.05)] hover:bg-[rgba(255,255,255,0.1)] border border-[var(--border)] text-white px-4 py-2 rounded-full text-xs font-semibold transition-colors cursor-pointer"
+                >
+                  Add First Symbol
+                </button>
+              </div>
+            )}
+          </div>
         </div>
+      )}
+      
+      <div className="mt-8">
+        <Disclaimer />
       </div>
 
       {/* Modals */}
@@ -350,44 +365,44 @@ export default function WatchlistPage() {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm"
+            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md"
           >
             <motion.div 
               initial={{ scale: 0.95, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.95, opacity: 0 }}
-              className="bg-zinc-900 border border-zinc-800 rounded-xl w-full max-w-md p-6 shadow-2xl"
+              className="card w-full max-w-md p-6 shadow-2xl relative"
             >
-              <div className="flex justify-between items-center mb-6">
-                <h3 className="text-xl font-semibold">Create Watchlist</h3>
-                <button onClick={() => setShowCreateModal(false)} className="text-zinc-400 hover:text-white">
-                  <X size={24} />
+              <div className="flex justify-between items-center mb-5">
+                <h3 className="font-heading text-base font-bold text-[var(--text)]">Create Watchlist</h3>
+                <button onClick={() => setShowCreateModal(false)} className="text-[var(--text-dim)] hover:text-white cursor-pointer">
+                  <X size={18} />
                 </button>
               </div>
               <form onSubmit={handleCreateList}>
-                <div className="mb-6">
-                  <label className="block text-sm font-medium text-zinc-400 mb-2">Watchlist Name</label>
+                <div className="mb-5">
+                  <label className="block text-xs font-mono text-[var(--text-muted)] mb-2">Watchlist Name</label>
                   <input 
                     type="text" 
                     value={newListName}
                     onChange={e => setNewListName(e.target.value)}
-                    placeholder="e.g. Tech Stocks, Crypto..."
-                    className="w-full bg-black border border-zinc-800 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-zinc-600"
+                    placeholder="e.g. High Conviction, Nifty 50, US Tech"
+                    className="w-full bg-[var(--surface-2)] border border-[var(--border)] rounded-lg px-3.5 py-2.5 text-xs text-white placeholder:text-[var(--text-dim)] font-mono focus:outline-none focus:border-[var(--green)] transition-colors"
                     autoFocus
                   />
                 </div>
-                <div className="flex justify-end gap-3">
+                <div className="flex justify-end gap-2">
                   <button 
                     type="button" 
                     onClick={() => setShowCreateModal(false)}
-                    className="px-4 py-2 rounded-lg text-zinc-300 hover:bg-zinc-800 transition-colors"
+                    className="px-4 py-2 rounded-full text-xs text-[var(--text-muted)] hover:bg-[rgba(255,255,255,0.05)] transition-colors cursor-pointer"
                   >
                     Cancel
                   </button>
                   <button 
                     type="submit"
                     disabled={!newListName.trim()}
-                    className="bg-white text-black px-4 py-2 rounded-lg font-medium disabled:opacity-50 transition-colors"
+                    className="bg-[var(--green)] hover:bg-[var(--green-hover)] text-black px-4 py-2 rounded-full text-xs font-bold disabled:opacity-40 transition-colors cursor-pointer"
                   >
                     Create
                   </button>
@@ -402,44 +417,44 @@ export default function WatchlistPage() {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm"
+            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md"
           >
             <motion.div 
               initial={{ scale: 0.95, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.95, opacity: 0 }}
-              className="bg-zinc-900 border border-zinc-800 rounded-xl w-full max-w-md p-6 shadow-2xl"
+              className="card w-full max-w-md p-6 shadow-2xl relative"
             >
-              <div className="flex justify-between items-center mb-6">
-                <h3 className="text-xl font-semibold">Add Symbol</h3>
-                <button onClick={() => setShowAddSymbolModal(false)} className="text-zinc-400 hover:text-white">
-                  <X size={24} />
+              <div className="flex justify-between items-center mb-5">
+                <h3 className="font-heading text-base font-bold text-[var(--text)]">Add Symbol</h3>
+                <button onClick={() => setShowAddSymbolModal(false)} className="text-[var(--text-dim)] hover:text-white cursor-pointer">
+                  <X size={18} />
                 </button>
               </div>
               <form onSubmit={handleAddSymbol}>
-                <div className="mb-6">
-                  <label className="block text-sm font-medium text-zinc-400 mb-2">Symbol or Ticker</label>
+                <div className="mb-5">
+                  <label className="block text-xs font-mono text-[var(--text-muted)] mb-2">Symbol or Ticker</label>
                   <input 
                     type="text" 
                     value={newSymbol}
                     onChange={e => setNewSymbol(e.target.value.toUpperCase())}
-                    placeholder="e.g. RELIANCE.NS, BTC-USD..."
-                    className="w-full bg-black border border-zinc-800 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-zinc-600 uppercase"
+                    placeholder="e.g. RELIANCE.NS, TCS.NS, NVDA, AAPL"
+                    className="w-full bg-[var(--surface-2)] border border-[var(--border)] rounded-lg px-3.5 py-2.5 text-xs text-white placeholder:text-[var(--text-dim)] font-mono focus:outline-none focus:border-[var(--green)] transition-colors uppercase"
                     autoFocus
                   />
                 </div>
-                <div className="flex justify-end gap-3">
+                <div className="flex justify-end gap-2">
                   <button 
                     type="button" 
                     onClick={() => setShowAddSymbolModal(false)}
-                    className="px-4 py-2 rounded-lg text-zinc-300 hover:bg-zinc-800 transition-colors"
+                    className="px-4 py-2 rounded-full text-xs text-[var(--text-muted)] hover:bg-[rgba(255,255,255,0.05)] transition-colors cursor-pointer"
                   >
                     Cancel
                   </button>
                   <button 
                     type="submit"
                     disabled={!newSymbol.trim()}
-                    className="bg-white text-black px-4 py-2 rounded-lg font-medium disabled:opacity-50 transition-colors"
+                    className="bg-[var(--green)] hover:bg-[var(--green-hover)] text-black px-4 py-2 rounded-full text-xs font-bold disabled:opacity-40 transition-colors cursor-pointer"
                   >
                     Add
                   </button>

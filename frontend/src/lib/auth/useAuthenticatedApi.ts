@@ -70,6 +70,7 @@ export function useAuthenticatedApi() {
         authFetch<T>(path, { method: 'PATCH', body }),
       /** Make an authenticated DELETE request */
       del: <T = unknown>(path: string) => authFetch<T>(path, { method: 'DELETE' }),
+      delete: <T = unknown>(path: string) => authFetch<T>(path, { method: 'DELETE' }),
       /** Whether the user has a valid session token */
       isAuthenticated,
     }),

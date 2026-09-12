@@ -64,31 +64,31 @@ export default function RiskPage() {
         <h1 className="font-heading text-xl font-extrabold tracking-tight text-[var(--text)]">
           Risk Intelligence
         </h1>
-        <p className="text-sm text-[var(--text-muted)] mt-1 font-mono">
-          Multi-dimensional risk scoring · Volatility · Liquidity · Financial health
+        <p className="text-xs text-[var(--text-muted)] mt-1 font-mono">
+          Multi-dimensional risk scoring · Volatility · Liquidity · Balance sheet health
         </p>
       </div>
 
       {/* Input */}
-      <form onSubmit={handleAnalyze} className="flex gap-3 max-w-xl">
+      <form onSubmit={handleAnalyze} className="flex gap-2 max-w-xl relative">
         <input
           type="text"
           value={symbol}
           onChange={(e) => setSymbol(e.target.value)}
-          placeholder="Enter stock symbol (e.g., RELIANCE.NS, AAPL)"
-          className="flex-1 px-4 py-3 rounded-lg bg-[var(--surface)] border border-[var(--border)]
-                     text-[var(--text)] font-mono text-sm placeholder:text-[var(--text-dim)]
-                     focus:outline-none focus:border-[var(--accent)] focus:shadow-[0_0_0_3px_rgba(0,212,255,0.1)]
+          placeholder="Enter stock symbol (e.g., RELIANCE.NS, AAPL, TCS.NS)..."
+          className="flex-1 px-4 py-3 rounded-full bg-[var(--surface-2)] border border-[var(--border)]
+                     text-[var(--text)] font-mono text-xs placeholder:text-[var(--text-dim)]
+                     focus:outline-none focus:border-[var(--green)]/50 focus:ring-1 focus:ring-[var(--green)]/30
                      transition-all"
         />
         <button
           type="submit"
           disabled={loading}
-          className="px-6 py-3 rounded-lg bg-[var(--accent)] text-[var(--bg)] text-sm font-bold
-                     uppercase tracking-wider hover:brightness-110 transition-all cursor-pointer
-                     disabled:opacity-50 flex items-center gap-2"
+          className="px-5 py-2.5 rounded-full bg-[var(--green)] text-black text-xs font-bold
+                     uppercase tracking-wider hover:bg-[var(--green-hover)] transition-all cursor-pointer
+                     disabled:opacity-40 flex items-center gap-2 shadow-sm"
         >
-          {loading ? 'Analyzing...' : 'Scan'} <ArrowRight className="w-4 h-4" />
+          {loading ? 'Scanning...' : 'Scan'} <ArrowRight className="w-3.5 h-3.5" />
         </button>
       </form>
 
@@ -101,8 +101,8 @@ export default function RiskPage() {
       )}
 
       {error && (
-        <div className="card p-6 max-w-xl border-[var(--red)]/30">
-          <p className="text-sm text-[var(--red)]">{error}</p>
+        <div className="card p-5 max-w-xl border-[var(--red)]/30">
+          <p className="text-xs font-mono text-[var(--red)]">{error}</p>
         </div>
       )}
 
@@ -114,7 +114,7 @@ export default function RiskPage() {
         >
           {/* Composite Score */}
           <div className="card p-6">
-            <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center justify-between mb-4 pb-4 border-b border-[var(--border)]">
               <div>
                 <h2 className="font-heading text-lg font-bold text-[var(--text)]">
                   {risk.symbol}
@@ -125,14 +125,14 @@ export default function RiskPage() {
                 <div className="font-heading text-3xl font-extrabold" style={{ color: getRiskColor(risk.composite_score) }}>
                   {risk.composite_score?.toFixed(1)}
                 </div>
-                <div className="text-xs font-mono" style={{ color: getRiskColor(risk.composite_score) }}>
+                <div className="text-xs font-mono font-medium" style={{ color: getRiskColor(risk.composite_score) }}>
                   {risk.composite_label}
                 </div>
               </div>
             </div>
 
             {/* Dimensions */}
-            <div className="space-y-4 mt-6">
+            <div className="space-y-4 mt-4">
               {risk.dimensions?.map((dim: any) => (
                 <RiskBar
                   key={dim.name}
@@ -154,9 +154,9 @@ export default function RiskPage() {
       {!risk && !loading && (
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3 max-w-3xl">
           {[
-            { icon: Activity, title: 'Volatility Risk', desc: 'Measures price stability using standard deviation of returns over 30/90 day windows', color: 'var(--accent-orange)' },
-            { icon: BarChart3, title: 'Liquidity Risk', desc: 'Evaluates trading volume patterns to assess ease of entering/exiting positions', color: 'var(--accent)' },
-            { icon: TrendingDown, title: 'Financial Health', desc: 'Scores balance sheet strength: debt ratios, margins, ROE, current ratio', color: 'var(--accent-green)' },
+            { icon: Activity, title: 'Volatility Risk', desc: 'Measures price stability using standard deviation of returns over 30/90 day windows', color: 'var(--gold)' },
+            { icon: BarChart3, title: 'Liquidity Risk', desc: 'Evaluates trading volume patterns to assess ease of entering/exiting positions', color: 'var(--green)' },
+            { icon: TrendingDown, title: 'Financial Health', desc: 'Scores balance sheet strength: debt ratios, margins, ROE, current ratio', color: 'var(--green)' },
           ].map((item, i) => (
             <motion.div
               key={item.title}
@@ -165,9 +165,9 @@ export default function RiskPage() {
               transition={{ delay: 0.1 + i * 0.1 }}
               className="card p-5"
             >
-              <item.icon className="w-5 h-5 mb-3" style={{ color: item.color }} />
-              <h3 className="font-heading text-sm font-bold text-[var(--text)] mb-1">{item.title}</h3>
-              <p className="text-xs text-[var(--text-dim)] font-mono leading-relaxed">{item.desc}</p>
+              <item.icon className="w-4 h-4 mb-3" style={{ color: item.color }} />
+              <h3 className="font-heading text-xs font-bold text-[var(--text)] mb-1">{item.title}</h3>
+              <p className="text-[11px] text-[var(--text-dim)] font-mono leading-relaxed">{item.desc}</p>
             </motion.div>
           ))}
         </div>

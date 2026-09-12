@@ -46,95 +46,116 @@ export default function MarketsPage() {
         <h1 className="font-heading text-xl font-extrabold tracking-tight text-[var(--text)]">
           Markets Explorer
         </h1>
-        <p className="text-sm text-[var(--text-muted)] mt-1 font-mono">
-          Search any stock · NSE/BSE + NYSE/NASDAQ
+        <p className="text-xs text-[var(--text-muted)] mt-1 font-mono">
+          Search equities & indices across NSE/BSE and NYSE/NASDAQ with real-time analytics
         </p>
       </div>
 
       {/* Search */}
       <form onSubmit={handleSearch} className="relative max-w-xl">
-        <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-[var(--text-dim)]" />
+        <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--text-dim)]" />
         <input
           type="text"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search stocks... (e.g., RELIANCE.NS, AAPL, TCS.NS)"
-          className="w-full pl-12 pr-4 py-3 rounded-lg bg-[var(--surface)] border border-[var(--border)]
-                     text-[var(--text)] font-mono text-sm placeholder:text-[var(--text-dim)]
-                     focus:outline-none focus:border-[var(--accent)] focus:shadow-[0_0_0_3px_rgba(0,212,255,0.1)]
-                     transition-all"
+          placeholder="Search ticker or company (e.g., RELIANCE.NS, AAPL, TCS.NS)..."
+          className="w-full pl-11 pr-24 py-3 rounded-full bg-[var(--surface)] border border-[var(--border)]
+                     text-[var(--text)] font-mono text-xs placeholder:text-[var(--text-dim)]
+                     focus:outline-none focus:border-[var(--green)]/50 focus:ring-1 focus:ring-[var(--green)]/30
+                     transition-all shadow-inner"
         />
         <button
           type="submit"
-          className="absolute right-2 top-1/2 -translate-y-1/2 px-4 py-1.5 rounded-md
-                     bg-[var(--accent)] text-[var(--bg)] text-xs font-bold uppercase tracking-wider
-                     hover:brightness-110 transition-all cursor-pointer"
+          className="absolute right-1.5 top-1/2 -translate-y-1/2 px-4 py-1.5 rounded-full
+                     bg-[var(--green)] text-black text-xs font-bold uppercase tracking-wider
+                     hover:bg-[var(--green-hover)] transition-all cursor-pointer shadow-sm"
         >
-          Go
+          Explore
         </button>
       </form>
 
       {/* Indian Stocks */}
       <div>
         <div className="flex items-center gap-2 mb-4">
-          <TrendingUp className="w-4 h-4 text-[var(--accent-orange)]" />
-          <h2 className="font-heading text-sm font-bold uppercase tracking-wider text-[var(--text-muted)]">
-            Indian Markets · NSE
+          <TrendingUp className="w-4 h-4 text-[var(--green)]" />
+          <h2 className="font-heading text-xs font-bold uppercase tracking-wider text-[var(--text-muted)]">
+            Indian Markets · NSE Top Equities
           </h2>
         </div>
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
-          {POPULAR_STOCKS.india.map((stock, i) => (
-            <motion.div
-              key={stock.symbol}
-              initial={{ opacity: 0, y: 8 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: i * 0.05 }}
-            >
-              <Link
-                href={`/markets/${encodeURIComponent(stock.symbol)}`}
-                className="card p-4 block group hover:border-[var(--accent)] transition-colors"
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+          {POPULAR_STOCKS.india.map((stock, i) => {
+            const tickerClean = stock.symbol.replace('.NS', '');
+            const initials = tickerClean.slice(0, 2).toUpperCase();
+            return (
+              <motion.div
+                key={stock.symbol}
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: i * 0.04 }}
               >
-                <div className="font-mono text-sm font-medium text-[var(--accent)] group-hover:text-[var(--text)]">
-                  {stock.symbol.replace('.NS', '')}
-                </div>
-                <div className="text-[11px] text-[var(--text-dim)] mt-0.5 truncate">
-                  {stock.name}
-                </div>
-              </Link>
-            </motion.div>
-          ))}
+                <Link
+                  href={`/markets/${encodeURIComponent(stock.symbol)}`}
+                  className="card p-4 block group hover:border-[var(--green)]/40 transition-all"
+                >
+                  <div className="flex items-center gap-2.5 mb-2">
+                    <div className="w-7 h-7 rounded-full bg-[rgba(255,255,255,0.04)] border border-[rgba(255,255,255,0.08)] flex items-center justify-center shrink-0 group-hover:border-[var(--green)]/30 transition-colors">
+                      <span className="font-mono text-[10px] font-bold text-[var(--text-muted)] group-hover:text-[var(--green)]">
+                        {initials}
+                      </span>
+                    </div>
+                    <div className="font-mono text-xs font-bold text-[var(--text)] group-hover:text-white transition-colors">
+                      {tickerClean}
+                    </div>
+                  </div>
+                  <div className="text-[11px] text-[var(--text-dim)] truncate">
+                    {stock.name}
+                  </div>
+                </Link>
+              </motion.div>
+            );
+          })}
         </div>
       </div>
 
       {/* US Stocks */}
       <div>
         <div className="flex items-center gap-2 mb-4">
-          <Globe className="w-4 h-4 text-[var(--accent-purple)]" />
-          <h2 className="font-heading text-sm font-bold uppercase tracking-wider text-[var(--text-muted)]">
-            US Markets · NYSE/NASDAQ
+          <Globe className="w-4 h-4 text-[var(--text-muted)]" />
+          <h2 className="font-heading text-xs font-bold uppercase tracking-wider text-[var(--text-muted)]">
+            US Markets · NYSE / NASDAQ
           </h2>
         </div>
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
-          {POPULAR_STOCKS.us.map((stock, i) => (
-            <motion.div
-              key={stock.symbol}
-              initial={{ opacity: 0, y: 8 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.4 + i * 0.05 }}
-            >
-              <Link
-                href={`/markets/${encodeURIComponent(stock.symbol)}`}
-                className="card p-4 block group hover:border-[var(--accent)] transition-colors"
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+          {POPULAR_STOCKS.us.map((stock, i) => {
+            const initials = stock.symbol.slice(0, 2).toUpperCase();
+            return (
+              <motion.div
+                key={stock.symbol}
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.3 + i * 0.04 }}
               >
-                <div className="font-mono text-sm font-medium text-[var(--accent)] group-hover:text-[var(--text)]">
-                  {stock.symbol}
-                </div>
-                <div className="text-[11px] text-[var(--text-dim)] mt-0.5 truncate">
-                  {stock.name}
-                </div>
-              </Link>
-            </motion.div>
-          ))}
+                <Link
+                  href={`/markets/${encodeURIComponent(stock.symbol)}`}
+                  className="card p-4 block group hover:border-[var(--green)]/40 transition-all"
+                >
+                  <div className="flex items-center gap-2.5 mb-2">
+                    <div className="w-7 h-7 rounded-full bg-[rgba(255,255,255,0.04)] border border-[rgba(255,255,255,0.08)] flex items-center justify-center shrink-0 group-hover:border-[var(--green)]/30 transition-colors">
+                      <span className="font-mono text-[10px] font-bold text-[var(--text-muted)] group-hover:text-[var(--green)]">
+                        {initials}
+                      </span>
+                    </div>
+                    <div className="font-mono text-xs font-bold text-[var(--text)] group-hover:text-white transition-colors">
+                      {stock.symbol}
+                    </div>
+                  </div>
+                  <div className="text-[11px] text-[var(--text-dim)] truncate">
+                    {stock.name}
+                  </div>
+                </Link>
+              </motion.div>
+            );
+          })}
         </div>
       </div>
     </div>

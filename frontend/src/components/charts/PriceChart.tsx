@@ -38,32 +38,32 @@ export default function PriceChart({ data, symbol, height = 420 }: PriceChartPro
 
     const chart = createChart(container, {
       layout: {
-        background: { type: ColorType.Solid, color: '#0d1318' },
-        textColor: '#637080',
+        background: { type: ColorType.Solid, color: '#070b09' },
+        textColor: '#6b7c76',
         fontFamily: "'DM Mono', monospace",
         fontSize: 11,
       },
       grid: {
-        vertLines: { color: 'rgba(30, 45, 61, 0.5)' },
-        horzLines: { color: 'rgba(30, 45, 61, 0.5)' },
+        vertLines: { color: 'rgba(255, 255, 255, 0.025)' },
+        horzLines: { color: 'rgba(255, 255, 255, 0.025)' },
       },
       crosshair: {
         mode: 0,
         vertLine: {
-          color: 'rgba(0, 212, 255, 0.3)',
-          labelBackgroundColor: '#111920',
+          color: 'rgba(255, 255, 255, 0.15)',
+          labelBackgroundColor: '#121a16',
         },
         horzLine: {
-          color: 'rgba(0, 212, 255, 0.3)',
-          labelBackgroundColor: '#111920',
+          color: 'rgba(255, 255, 255, 0.15)',
+          labelBackgroundColor: '#121a16',
         },
       },
       rightPriceScale: {
-        borderColor: '#1e2d3d',
+        borderColor: 'rgba(255, 255, 255, 0.06)',
         scaleMargins: { top: 0.1, bottom: 0.25 },
       },
       timeScale: {
-        borderColor: '#1e2d3d',
+        borderColor: 'rgba(255, 255, 255, 0.06)',
         timeVisible: true,
         secondsVisible: false,
       },
@@ -71,14 +71,14 @@ export default function PriceChart({ data, symbol, height = 420 }: PriceChartPro
       height: height,
     });
 
-    // Candlestick series
+    // Candlestick series — strictly green and red
     const candlestickSeries = chart.addSeries(CandlestickSeries, {
-      upColor: '#00d4a0',
-      downColor: '#ff4444',
-      borderDownColor: '#ff4444',
-      borderUpColor: '#00d4a0',
-      wickDownColor: '#ff4444',
-      wickUpColor: '#00d4a0',
+      upColor: '#10b981',
+      downColor: '#ef4444',
+      borderDownColor: '#ef4444',
+      borderUpColor: '#10b981',
+      wickDownColor: '#ef4444',
+      wickUpColor: '#10b981',
     });
 
     const candleData = data.map((bar) => ({
@@ -91,22 +91,22 @@ export default function PriceChart({ data, symbol, height = 420 }: PriceChartPro
 
     candlestickSeries.setData(candleData as any);
 
-    // Volume series (using HistogramSeries in v5)
+    // Volume series (using HistogramSeries)
     const volumeSeries = chart.addSeries(HistogramSeries, {
       priceFormat: { type: 'volume' },
       priceScaleId: 'volume',
     });
 
     volumeSeries.priceScale().applyOptions({
-      scaleMargins: { top: 0.8, bottom: 0 },
+      scaleMargins: { top: 0.82, bottom: 0 },
     });
 
     const volumeData = data.map((bar) => ({
       time: (new Date(bar.date).getTime() / 1000) as number,
       value: bar.volume,
       color: bar.close >= bar.open
-        ? 'rgba(0, 212, 160, 0.3)'
-        : 'rgba(255, 68, 68, 0.3)',
+        ? 'rgba(16, 185, 129, 0.3)'
+        : 'rgba(239, 68, 68, 0.3)',
     }));
 
     volumeSeries.setData(volumeData as any);
@@ -128,21 +128,28 @@ export default function PriceChart({ data, symbol, height = 420 }: PriceChartPro
 
   return (
     <div className="card overflow-hidden">
-      {/* Timeframe selector */}
-      <div className="flex items-center justify-between px-4 py-2 border-b border-[var(--border)]">
-        <h3 className="font-heading text-xs font-bold uppercase tracking-wider text-[var(--text-muted)]">
-          {symbol} Price Chart
-        </h3>
-        <div className="flex gap-1">
+      {/* Timeframe selector & header */}
+      <div className="flex items-center justify-between px-5 py-3.5 border-b border-white/[0.06]">
+        <div className="flex items-center gap-2">
+          <span className="font-heading text-xs font-bold uppercase tracking-wider text-white">
+            {symbol}
+          </span>
+          <span className="text-[11px] font-mono text-[var(--text-dim)]">
+            Candlestick &amp; Volume
+          </span>
+        </div>
+
+        {/* Polished Capsule Segmented Control */}
+        <div className="flex items-center gap-0.5 p-0.5 rounded-lg bg-white/[0.03] border border-white/[0.06]">
           {TIMEFRAMES.map((tf) => (
             <button
               key={tf.label}
               onClick={() => setActiveTimeframe(tf.label)}
               className={`
-                px-2.5 py-1 text-[10px] font-mono rounded cursor-pointer transition-colors
+                px-2.5 py-1 text-[11px] font-mono rounded-md cursor-pointer transition-all
                 ${activeTimeframe === tf.label
-                  ? 'bg-[var(--accent)]/15 text-[var(--accent)] border border-[var(--accent)]/30'
-                  : 'text-[var(--text-dim)] hover:text-[var(--text-muted)] hover:bg-[var(--surface-2)]'
+                  ? 'bg-white/[0.1] text-white font-semibold shadow-sm border border-white/[0.08]'
+                  : 'text-[var(--text-dim)] hover:text-[var(--text)] hover:bg-white/[0.03] border border-transparent'
                 }
               `}
             >
@@ -153,7 +160,7 @@ export default function PriceChart({ data, symbol, height = 420 }: PriceChartPro
       </div>
 
       {/* Chart container */}
-      <div ref={chartContainerRef} />
+      <div ref={chartContainerRef} className="bg-[#070b09]" />
     </div>
   );
 }

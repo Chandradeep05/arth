@@ -10,7 +10,7 @@ interface TechnicalPanelProps {
 }
 
 function SignalBadge({ signal, type }: { signal: string | null; type: 'rsi' | 'macd' | 'bb' }) {
-  if (!signal) return <span className="badge badge-cyan">N/A</span>;
+  if (!signal) return <span className="badge badge-neutral">N/A</span>;
 
   const configs: Record<string, { class: string; icon: typeof TrendingUp }> = {
     overbought: { class: 'badge-red', icon: TrendingDown },
@@ -27,7 +27,7 @@ function SignalBadge({ signal, type }: { signal: string | null; type: 'rsi' | 'm
   const Icon = config.icon;
 
   return (
-    <span className={`badge ${config.class} gap-1`}>
+    <span className={`badge ${config.class} gap-1 font-mono`}>
       <Icon className="w-3 h-3" />
       {signal.replace('_', ' ')}
     </span>
@@ -46,12 +46,12 @@ function IndicatorRow({
   signalType?: 'rsi' | 'macd' | 'bb';
 }) {
   return (
-    <div className="flex items-center justify-between py-2.5 border-b border-[var(--border)] last:border-0">
-      <span className="text-xs text-[var(--text-muted)] font-mono uppercase tracking-wider">
+    <div className="flex items-center justify-between py-2.5 border-b border-white/[0.04] last:border-0">
+      <span className="text-xs text-[var(--text-muted)] font-sans">
         {label}
       </span>
       <div className="flex items-center gap-3">
-        <span className="text-sm font-mono text-[var(--text)] font-medium">
+        <span className="text-xs font-mono text-white font-medium">
           {value ?? '—'}
         </span>
         {signal !== undefined && signalType && (
@@ -82,16 +82,18 @@ export default function TechnicalPanel({ indicators, loading }: TechnicalPanelPr
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ delay: 0.3 }}
-      className="card p-5"
+      className="card p-6"
     >
       <div className="flex items-center gap-2 mb-4">
-        <Activity className="w-4 h-4 text-[var(--accent)]" />
-        <h3 className="font-heading text-sm font-bold uppercase tracking-wider text-[var(--text-muted)]">
+        <div className="w-6 h-6 rounded-lg bg-white/[0.04] border border-white/[0.08] flex items-center justify-center">
+          <Activity className="w-3.5 h-3.5 text-emerald-400" />
+        </div>
+        <h3 className="font-heading text-xs font-bold uppercase tracking-wider text-white">
           Technical Indicators
         </h3>
       </div>
 
-      <div className="space-y-0">
+      <div className="space-y-0.5">
         <IndicatorRow
           label="RSI (14)"
           value={indicators?.rsi_14?.toFixed(2) ?? null}

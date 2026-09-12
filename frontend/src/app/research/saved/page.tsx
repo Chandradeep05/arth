@@ -1,4 +1,4 @@
-'use client'
+'use client';
 
 import React, { useState, useEffect } from 'react';
 import { useAuthenticatedApi } from '@/lib/auth/useAuthenticatedApi';
@@ -33,9 +33,9 @@ export default function SavedResearchPage() {
 
   const fetchReports = async () => {
     try {
-      const res = await api.get('/api/v1/user/research/saved');
-      if (res.ok) {
-        setReports(await res.json());
+      const data = await api.get<SavedReportSummary[]>('/api/v1/user/research/saved');
+      if (data) {
+        setReports(data);
       }
     } catch (error) {
       console.error('Failed to fetch saved reports', error);
@@ -52,9 +52,9 @@ export default function SavedResearchPage() {
     setExpandedId(id);
     setDetailLoading(true);
     try {
-      const res = await api.get(`/api/v1/user/research/saved/${id}`);
-      if (res.ok) {
-        setExpandedDetail(await res.json());
+      const data = await api.get<SavedReportDetail>(`/api/v1/user/research/saved/${id}`);
+      if (data) {
+        setExpandedDetail(data);
       }
     } catch (error) {
       console.error('Failed to fetch detail', error);
@@ -66,97 +66,114 @@ export default function SavedResearchPage() {
   const handleDelete = async (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
     try {
-      const res = await api.delete(`/api/v1/user/research/saved/${id}`);
-      if (res.ok) {
-        setReports(reports.filter(r => r.id !== id));
-        if (expandedId === id) setExpandedId(null);
-      }
+      await api.delete(`/api/v1/user/research/saved/${id}`);
+      setReports(reports.filter(r => r.id !== id));
+      if (expandedId === id) setExpandedId(null);
     } catch (error) {
       console.error('Failed to delete report', error);
     }
   };
 
-  if (loading) return <div className="p-8 text-zinc-400">Loading saved research...</div>;
+  if (loading) {
+    return (
+      <div className="p-8 text-[var(--text-dim)] font-mono text-xs">
+        Loading saved research portfolio...
+      </div>
+    );
+  }
 
   return (
-    <div className="min-h-screen bg-zinc-950 text-zinc-100 p-4 md:p-8">
-      <div className="max-w-5xl mx-auto">
-        <div className="flex items-center gap-3 mb-8">
-          <FileText className="w-8 h-8 text-blue-500" />
-          <h1 className="text-3xl font-bold">Saved Research</h1>
+    <div className="space-y-8 animate-fadeIn max-w-5xl">
+      <div className="flex items-center gap-3">
+        <FileText className="w-6 h-6 text-[var(--green)]" />
+        <div>
+          <h1 className="font-heading text-xl font-extrabold tracking-tight text-[var(--text)]">
+            Saved Institutional Research
+          </h1>
+          <p className="text-xs text-[var(--text-muted)] mt-1 font-mono">
+            Archived company teardowns, multi-factor models, and RAG-grounded reports
+          </p>
         </div>
+      </div>
 
-        {reports.length === 0 ? (
-          <div className="text-center py-20 bg-zinc-900/50 rounded-2xl border border-zinc-800 border-dashed">
-            <FileText className="w-12 h-12 text-zinc-700 mx-auto mb-4" />
-            <p className="text-zinc-400 text-lg">No saved reports yet.</p>
-          </div>
-        ) : (
-          <div className="grid gap-4">
-            {reports.map((report) => (
-              <div key={report.id} className="bg-zinc-900 rounded-xl border border-zinc-800 overflow-hidden transition-colors hover:border-zinc-700">
-                <div 
-                  className="p-4 md:p-6 cursor-pointer flex items-center justify-between"
-                  onClick={() => fetchDetail(report.id)}
-                >
-                  <div className="flex items-center gap-4">
-                    <div className="bg-zinc-950 px-3 py-2 rounded-lg border border-zinc-800 flex flex-col items-center justify-center min-w-[70px]">
-                      <span className="text-lg font-bold text-white">{report.symbol}</span>
-                    </div>
-                    <div>
-                      <h3 className="font-semibold text-lg">{report.title}</h3>
-                      <div className="flex items-center gap-2 text-sm text-zinc-500 mt-1">
-                        <Calendar className="w-3.5 h-3.5" />
-                        {new Date(report.saved_at).toLocaleDateString()}
-                        <span>•</span>
-                        <span>Engine: {report.engine_version}</span>
-                      </div>
-                    </div>
+      {reports.length === 0 ? (
+        <div className="card text-center py-16">
+          <FileText className="w-10 h-10 text-[var(--text-dim)] mx-auto mb-3 opacity-40" />
+          <p className="text-sm font-medium text-[var(--text)]">No saved research reports</p>
+          <p className="text-xs text-[var(--text-dim)] font-mono mt-1">Generate and save intelligence reports from the Research Lab.</p>
+        </div>
+      ) : (
+        <div className="grid gap-3">
+          {reports.map((report) => (
+            <div key={report.id} className="card overflow-hidden">
+              <div 
+                className="p-4 md:p-5 cursor-pointer flex items-center justify-between hover:bg-[rgba(255,255,255,0.02)] transition-colors"
+                onClick={() => fetchDetail(report.id)}
+              >
+                <div className="flex items-center gap-3.5">
+                  <div className="w-10 h-10 rounded-full bg-[rgba(255,255,255,0.04)] border border-[rgba(255,255,255,0.08)] flex items-center justify-center shrink-0">
+                    <span className="font-mono text-xs font-bold text-white">{report.symbol.slice(0, 4)}</span>
                   </div>
-                  <div className="flex items-center gap-4">
-                    <button
-                      onClick={(e) => handleDelete(e, report.id)}
-                      className="p-2 text-zinc-500 hover:text-red-400 hover:bg-red-400/10 rounded-lg transition-colors"
-                    >
-                      <Trash2 className="w-5 h-5" />
-                    </button>
-                    {expandedId === report.id ? <ChevronUp className="w-5 h-5 text-zinc-400" /> : <ChevronDown className="w-5 h-5 text-zinc-400" />}
+                  <div>
+                    <h3 className="font-heading text-sm font-semibold text-white">{report.title}</h3>
+                    <div className="flex items-center gap-2 text-[11px] font-mono text-[var(--text-dim)] mt-0.5">
+                      <Calendar className="w-3 h-3" />
+                      {new Date(report.saved_at).toLocaleDateString()}
+                      <span>•</span>
+                      <span>Engine: {report.engine_version}</span>
+                    </div>
                   </div>
                 </div>
-
-                {expandedId === report.id && (
-                  <div className="border-t border-zinc-800 bg-zinc-950/50 p-6">
-                    {detailLoading ? (
-                      <div className="flex items-center gap-2 text-zinc-400">
-                        <Loader2 className="w-4 h-4 animate-spin" /> Loading report contents...
-                      </div>
-                    ) : expandedDetail ? (
-                      <div className="space-y-4">
-                        <h4 className="font-medium text-zinc-300">Report Content Preview</h4>
-                        <pre className="bg-zinc-950 p-4 rounded-lg border border-zinc-800 text-xs text-zinc-400 overflow-x-auto max-h-96">
-                          {JSON.stringify(expandedDetail.report_content, null, 2)}
-                        </pre>
-                        {expandedDetail.sources?.length > 0 && (
-                          <div>
-                            <h4 className="font-medium text-zinc-300 mb-2">Sources</h4>
-                            <ul className="list-disc pl-5 text-sm text-zinc-400 space-y-1">
-                              {expandedDetail.sources.map((s, i) => (
-                                <li key={i}>{typeof s === 'string' ? s : JSON.stringify(s)}</li>
-                              ))}
-                            </ul>
-                          </div>
-                        )}
-                      </div>
-                    ) : (
-                      <div className="text-red-400">Failed to load report detail.</div>
-                    )}
-                  </div>
-                )}
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={(e) => handleDelete(e, report.id)}
+                    className="p-1.5 text-[var(--text-dim)] hover:text-[var(--red)] hover:bg-[rgba(239,68,68,0.1)] rounded-full transition-colors cursor-pointer"
+                    title="Delete Report"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                  {expandedId === report.id ? (
+                    <ChevronUp className="w-4 h-4 text-[var(--text-dim)]" />
+                  ) : (
+                    <ChevronDown className="w-4 h-4 text-[var(--text-dim)]" />
+                  )}
+                </div>
               </div>
-            ))}
-          </div>
-        )}
-      </div>
+
+              {expandedId === report.id && (
+                <div className="border-t border-[var(--border)] bg-[rgba(0,0,0,0.3)] p-5">
+                  {detailLoading ? (
+                    <div className="flex items-center gap-2 text-xs font-mono text-[var(--text-dim)]">
+                      <Loader2 className="w-3.5 h-3.5 animate-spin text-[var(--green)]" /> Loading report contents...
+                    </div>
+                  ) : expandedDetail ? (
+                    <div className="space-y-4">
+                      <h4 className="text-xs font-mono font-semibold uppercase tracking-wider text-[var(--text-muted)]">Report Content</h4>
+                      <pre className="bg-[var(--surface-2)] p-4 rounded-xl border border-[var(--border)] text-xs font-mono text-[var(--text)] overflow-x-auto max-h-96">
+                        {typeof expandedDetail.report_content === 'string' 
+                          ? expandedDetail.report_content 
+                          : JSON.stringify(expandedDetail.report_content, null, 2)}
+                      </pre>
+                      {expandedDetail.sources?.length > 0 && (
+                        <div>
+                          <h4 className="text-xs font-mono font-semibold uppercase tracking-wider text-[var(--text-muted)] mb-2">Sources Referenced</h4>
+                          <ul className="list-disc pl-5 text-xs font-mono text-[var(--text-dim)] space-y-1">
+                            {expandedDetail.sources.map((s, i) => (
+                              <li key={i}>{typeof s === 'string' ? s : JSON.stringify(s)}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="text-xs font-mono text-[var(--red)]">Failed to load report detail.</div>
+                  )}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

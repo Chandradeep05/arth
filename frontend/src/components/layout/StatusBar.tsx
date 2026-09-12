@@ -40,28 +40,28 @@ export default function StatusBar() {
       className="
         fixed bottom-0 right-0 z-30
         flex items-center justify-between
-        h-8 px-6
+        h-7 px-6
         left-0 lg:left-16 xl:left-60
-        bg-[var(--bg)]/90 backdrop-blur-sm
-        border-t border-[var(--border)]
+        bg-[#060908]/90 backdrop-blur-md
+        border-t border-white/[0.05]
         font-mono text-[10px]
         select-none
-        transition-all duration-250
+        transition-all duration-200
       "
     >
       {/* Left: Connection status */}
       <div className="flex items-center gap-2">
         <span className={`inline-block h-1.5 w-1.5 rounded-full ${dot}`} />
-        <span className="text-[var(--text-muted)]">{label}</span>
+        <span className="text-[var(--text-dim)]">{label}</span>
       </div>
 
       {/* Center: Data source info */}
-      <div className="text-[var(--text-dim)]">
+      <div className="text-[var(--text-dim)] hidden sm:block">
         Data delayed ~15s &nbsp;|&nbsp; Sources: Twelve Data / NSE
       </div>
 
       {/* Right: Last updated */}
-      <div className="text-[var(--text-muted)]">
+      <div className="text-[var(--text-dim)]">
         Last updated: {lastUpdated}
       </div>
     </footer>

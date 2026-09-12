@@ -53,7 +53,7 @@ export default function AssistantPage() {
 
   const fetchConversations = async () => {
     try {
-      const data = await api.get('/user/conversations');
+      const data = await api.get<Conversation[]>('/user/conversations');
       setConversations(data || []);
       if (data && data.length > 0 && !activeConversationId) {
         setActiveConversationId(data[0].id);
@@ -65,10 +65,12 @@ export default function AssistantPage() {
 
   const createConversation = async () => {
     try {
-      const data = await api.post('/user/conversations', { title: 'New Conversation' });
-      setConversations([data, ...conversations]);
-      setActiveConversationId(data.id);
-      setMessages([]);
+      const data = await api.post<Conversation>('/user/conversations', { title: 'New Conversation' });
+      if (data) {
+        setConversations([data, ...conversations]);
+        setActiveConversationId(data.id);
+        setMessages([]);
+      }
     } catch (error) {
       console.error('Failed to create conversation:', error);
     }
@@ -95,10 +97,12 @@ export default function AssistantPage() {
     let convId = activeConversationId;
     if (!convId) {
       try {
-        const newConv = await api.post('/user/conversations', { title: input.substring(0, 30) });
-        setConversations([newConv, ...conversations]);
-        convId = newConv.id;
-        setActiveConversationId(convId);
+        const newConv = await api.post<Conversation>('/user/conversations', { title: input.substring(0, 30) });
+        if (newConv) {
+          setConversations([newConv, ...conversations]);
+          convId = newConv.id;
+          setActiveConversationId(convId);
+        }
       } catch (err) {
         console.error(err);
         return;
@@ -188,7 +192,7 @@ export default function AssistantPage() {
   };
 
   return (
-    <div className="flex h-screen bg-zinc-950 text-zinc-100 font-sans">
+    <div className="flex h-screen bg-[var(--bg)] text-[var(--text)] font-sans">
       {/* Mobile Sidebar Overlay */}
       <AnimatePresence>
         {isSidebarOpen && (
@@ -196,51 +200,55 @@ export default function AssistantPage() {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 bg-black/50 z-40 md:hidden"
+            className="fixed inset-0 bg-black/60 backdrop-blur-sm z-40 md:hidden"
             onClick={() => setIsSidebarOpen(false)}
           />
         )}
       </AnimatePresence>
 
       {/* Sidebar */}
-      <div className={`fixed inset-y-0 left-0 z-50 w-72 bg-zinc-900 border-r border-zinc-800 transform transition-transform duration-300 ease-in-out md:relative md:translate-x-0 flex flex-col ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
-        <div className="p-4 flex items-center justify-between border-b border-zinc-800">
-          <h2 className="text-lg font-semibold flex items-center gap-2">
-            <Bot className="w-5 h-5" /> ARTH Assistant
+      <div className={`fixed inset-y-0 left-0 z-50 w-72 bg-[var(--surface)] backdrop-blur-xl border-r border-[var(--border)] transform transition-transform duration-300 ease-in-out md:relative md:translate-x-0 flex flex-col ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
+        <div className="p-4 flex items-center justify-between border-b border-[var(--border)]">
+          <h2 className="text-sm font-semibold flex items-center gap-2 text-[var(--text)]">
+            <Bot className="w-4 h-4 text-[var(--green)]" /> ARTH Intelligence
           </h2>
-          <button onClick={() => setIsSidebarOpen(false)} className="md:hidden p-1 text-zinc-400 hover:text-white">
-            <X className="w-5 h-5" />
+          <button onClick={() => setIsSidebarOpen(false)} className="md:hidden p-1 text-[var(--text-dim)] hover:text-white cursor-pointer">
+            <X className="w-4 h-4" />
           </button>
         </div>
         
         <div className="p-3">
           <button
             onClick={createConversation}
-            className="w-full flex items-center gap-2 px-4 py-2 bg-zinc-800 hover:bg-zinc-700 rounded-lg text-sm font-medium transition-colors border border-zinc-700"
+            className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-[rgba(255,255,255,0.04)] hover:bg-[rgba(255,255,255,0.08)] rounded-full text-xs font-semibold text-[var(--text)] transition-colors border border-[var(--border)] cursor-pointer"
           >
-            <Plus className="w-4 h-4" /> New Chat
+            <Plus className="w-3.5 h-3.5 text-[var(--green)]" /> New Chat
           </button>
         </div>
 
         <div className="flex-1 overflow-y-auto px-3 pb-3 space-y-1">
           {conversations.length === 0 ? (
-            <div className="text-center py-6 text-zinc-500 text-sm">No conversations yet</div>
+            <div className="text-center py-6 text-[var(--text-dim)] text-xs font-mono">No previous sessions</div>
           ) : (
             conversations.map(conv => (
               <div
                 key={conv.id}
                 onClick={() => { setActiveConversationId(conv.id); setIsSidebarOpen(false); }}
-                className={`group flex items-center justify-between px-3 py-2.5 rounded-lg cursor-pointer transition-colors ${activeConversationId === conv.id ? 'bg-zinc-800 text-white' : 'text-zinc-400 hover:bg-zinc-800/50 hover:text-zinc-200'}`}
+                className={`group flex items-center justify-between px-3 py-2 rounded-lg cursor-pointer transition-colors text-xs ${
+                  activeConversationId === conv.id 
+                    ? 'bg-[rgba(16,185,129,0.12)] text-[var(--green)] border border-[rgba(16,185,129,0.25)]' 
+                    : 'text-[var(--text-muted)] hover:bg-[rgba(255,255,255,0.04)] hover:text-white'
+                }`}
               >
-                <div className="flex items-center gap-3 truncate">
-                  <MessageSquare className="w-4 h-4 shrink-0" />
-                  <span className="truncate text-sm">{conv.title}</span>
+                <div className="flex items-center gap-2.5 truncate">
+                  <MessageSquare className="w-3.5 h-3.5 shrink-0 opacity-70" />
+                  <span className="truncate">{conv.title}</span>
                 </div>
                 <button
                   onClick={(e) => deleteConversation(conv.id, e)}
-                  className="opacity-0 group-hover:opacity-100 p-1 text-zinc-500 hover:text-red-400 transition-opacity"
+                  className="opacity-0 group-hover:opacity-100 p-1 text-[var(--text-dim)] hover:text-[var(--red)] transition-opacity cursor-pointer"
                 >
-                  <Trash2 className="w-4 h-4" />
+                  <Trash2 className="w-3.5 h-3.5" />
                 </button>
               </div>
             ))
@@ -251,43 +259,53 @@ export default function AssistantPage() {
       {/* Main Chat Area */}
       <div className="flex-1 flex flex-col min-w-0">
         {/* Header */}
-        <header className="h-14 border-b border-zinc-800 flex items-center px-4 bg-zinc-950/80 backdrop-blur sticky top-0 z-10 shrink-0">
+        <header className="h-14 border-b border-[var(--border)] flex items-center px-4 bg-[var(--surface)]/80 backdrop-blur sticky top-0 z-10 shrink-0">
           <button
             onClick={() => setIsSidebarOpen(true)}
-            className="md:hidden p-2 -ml-2 mr-2 text-zinc-400 hover:text-white rounded-lg hover:bg-zinc-800"
+            className="md:hidden p-2 -ml-2 mr-2 text-[var(--text-dim)] hover:text-white rounded-lg hover:bg-[var(--surface-2)] cursor-pointer"
           >
-            <Menu className="w-5 h-5" />
+            <Menu className="w-4 h-4" />
           </button>
-          <h1 className="text-sm font-medium text-zinc-300">
-            {conversations.find(c => c.id === activeConversationId)?.title || 'New Chat'}
+          <h1 className="text-xs font-mono font-medium text-[var(--text)]">
+            {conversations.find(c => c.id === activeConversationId)?.title || 'Market Research Session'}
           </h1>
         </header>
 
         {/* Messages */}
-        <div className="flex-1 overflow-y-auto p-4 md:p-6 space-y-6">
+        <div className="flex-1 overflow-y-auto p-4 md:p-6 space-y-5">
           {messages.length === 0 ? (
-            <div className="h-full flex flex-col items-center justify-center text-zinc-500 space-y-4">
-              <Bot className="w-12 h-12 text-zinc-700" />
-              <p>Start a conversation with the AI assistant</p>
+            <div className="h-full flex flex-col items-center justify-center text-[var(--text-dim)] space-y-3">
+              <div className="w-12 h-12 rounded-full bg-[rgba(16,185,129,0.1)] border border-[var(--green)]/20 flex items-center justify-center">
+                <Bot className="w-6 h-6 text-[var(--green)]" />
+              </div>
+              <p className="text-xs font-mono text-[var(--text-muted)]">Ask ARTH about technical signals, risk dimensions, or corporate filings</p>
             </div>
           ) : (
             messages.map((msg, idx) => (
               <motion.div
                 key={msg.id}
-                initial={{ opacity: 0, y: 10 }}
+                initial={{ opacity: 0, y: 8 }}
                 animate={{ opacity: 1, y: 0 }}
-                className={`flex gap-4 max-w-4xl mx-auto ${msg.role === 'user' ? 'flex-row-reverse' : ''}`}
+                className={`flex gap-3 max-w-4xl mx-auto ${msg.role === 'user' ? 'flex-row-reverse' : ''}`}
               >
-                <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${msg.role === 'user' ? 'bg-blue-600' : 'bg-zinc-800'}`}>
-                  {msg.role === 'user' ? <User className="w-5 h-5 text-white" /> : <Bot className="w-5 h-5 text-zinc-300" />}
+                <div className={`w-7 h-7 rounded-full flex items-center justify-center shrink-0 ${
+                  msg.role === 'user' 
+                    ? 'bg-[var(--surface-2)] border border-[var(--border)] text-white' 
+                    : 'bg-[rgba(16,185,129,0.12)] border border-[rgba(16,185,129,0.3)] text-[var(--green)]'
+                }`}>
+                  {msg.role === 'user' ? <User className="w-3.5 h-3.5" /> : <Bot className="w-3.5 h-3.5" />}
                 </div>
-                <div className={`flex-1 rounded-2xl px-5 py-4 ${msg.role === 'user' ? 'bg-blue-600/20 text-blue-50 ml-12' : 'bg-zinc-900 text-zinc-200 border border-zinc-800 mr-12'}`}>
+                <div className={`flex-1 rounded-2xl px-4 py-3 text-xs leading-relaxed ${
+                  msg.role === 'user' 
+                    ? 'bg-[rgba(16,185,129,0.1)] text-emerald-100 border border-[rgba(16,185,129,0.22)] ml-12' 
+                    : 'bg-[var(--surface)] text-[var(--text)] border border-[var(--border)] mr-12 shadow-sm'
+                }`}>
                   {renderMarkdown(msg.content)}
                   {msg.role === 'assistant' && msg.content === '' && isLoading && idx === messages.length - 1 && (
                     <div className="flex gap-1 items-center h-5">
-                      <span className="w-1.5 h-1.5 bg-zinc-500 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
-                      <span className="w-1.5 h-1.5 bg-zinc-500 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
-                      <span className="w-1.5 h-1.5 bg-zinc-500 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+                      <span className="w-1.5 h-1.5 bg-[var(--green)] rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+                      <span className="w-1.5 h-1.5 bg-[var(--green)] rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+                      <span className="w-1.5 h-1.5 bg-[var(--green)] rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
                     </div>
                   )}
                 </div>
@@ -298,8 +316,8 @@ export default function AssistantPage() {
         </div>
 
         {/* Input */}
-        <div className="p-4 md:p-6 bg-zinc-950 border-t border-zinc-900 shrink-0">
-          <form onSubmit={sendMessage} className="max-w-4xl mx-auto relative flex items-end gap-2 bg-zinc-900 border border-zinc-800 rounded-xl focus-within:border-zinc-700 focus-within:ring-1 focus-within:ring-zinc-700 transition-all">
+        <div className="p-4 md:p-6 bg-[var(--bg)] border-t border-[var(--border)] shrink-0">
+          <form onSubmit={sendMessage} className="max-w-4xl mx-auto relative flex items-end gap-2 bg-[var(--surface)] border border-[var(--border)] rounded-xl focus-within:border-[var(--green)]/40 transition-all shadow-inner">
             <textarea
               value={input}
               onChange={(e) => setInput(e.target.value)}
@@ -309,20 +327,20 @@ export default function AssistantPage() {
                   sendMessage();
                 }
               }}
-              placeholder="Message the assistant..."
-              className="w-full max-h-48 min-h-[56px] py-4 pl-4 pr-12 bg-transparent text-zinc-100 placeholder-zinc-500 resize-none outline-none overflow-y-auto"
+              placeholder="Query ARTH Assistant (e.g., 'Compare RELIANCE and TCS risk metrics')..."
+              className="w-full max-h-48 min-h-[50px] py-3.5 pl-4 pr-12 bg-transparent text-[var(--text)] placeholder:text-[var(--text-dim)] text-xs resize-none outline-none overflow-y-auto"
               rows={1}
             />
             <button
               type="submit"
               disabled={!input.trim() || isLoading}
-              className="absolute right-3 bottom-3 p-2 bg-zinc-800 text-zinc-300 rounded-lg hover:bg-zinc-700 hover:text-white disabled:opacity-50 disabled:hover:bg-zinc-800 disabled:hover:text-zinc-300 transition-colors"
+              className="absolute right-2.5 bottom-2.5 p-2 bg-[var(--green)] text-black rounded-lg hover:bg-[var(--green-hover)] disabled:opacity-40 disabled:hover:bg-[var(--green)] transition-colors cursor-pointer"
             >
-              {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+              {isLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
             </button>
           </form>
-          <div className="text-center mt-2 text-xs text-zinc-600">
-            AI can make mistakes. Consider verifying important information.
+          <div className="text-center mt-2 text-[10px] font-mono text-[var(--text-dim)]">
+            Institutional algorithmic intelligence · Always verify before making investment decisions
           </div>
         </div>
       </div>

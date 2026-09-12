@@ -53,73 +53,87 @@ export default function Header({ onMenuOpen }: HeaderProps) {
     <header
       className="
         sticky top-0 z-30
-        flex items-center justify-between gap-4
-        h-14 px-6
-        bg-[var(--surface)]/80 backdrop-blur-xl
-        border-b border-[var(--border)]
+        flex items-center justify-between gap-2 sm:gap-4
+        h-14 sm:h-16 px-3 sm:px-6
+        bg-[#070b09]/80 backdrop-blur-2xl
+        border-b border-white/[0.06]
       "
     >
       {/* Left: Hamburger (mobile) + Page title */}
-      <div className="flex items-center gap-2 min-w-0">
+      <div className="flex items-center gap-2 sm:gap-3 min-w-0">
         {/* Hamburger — visible only on mobile (<lg) */}
         <button
           onClick={onMenuOpen}
           className="
             lg:hidden
             flex items-center justify-center
-            h-8 w-8 rounded-md shrink-0
-            text-[var(--text-muted)] hover:text-[var(--text)]
-            hover:bg-[var(--surface-2)]
+            h-8.5 w-8.5 rounded-lg shrink-0
+            text-[var(--text-muted)] hover:text-white
+            hover:bg-white/[0.05] border border-white/[0.06]
             transition-colors duration-150
             cursor-pointer
           "
           aria-label="Open navigation menu"
         >
-          <Menu className="h-5 w-5" />
+          <Menu className="h-4.5 w-4.5" />
         </button>
 
-        <h1 className="font-heading text-sm font-bold text-[var(--text)] truncate">
-          Intelligence Dashboard
-        </h1>
+        <span className="text-xs font-mono uppercase tracking-widest text-[var(--text-dim)] hidden sm:inline">
+          ARTH TERMINAL
+        </span>
       </div>
 
-      {/* Center: Search */}
-      <div className="flex-1 max-w-lg">
-        <div className="relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-[var(--text-dim)]" />
+      {/* Center: Reference-matching Search Pill */}
+      <div className="flex-1 max-w-xl mx-1 sm:mx-2 min-w-0">
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (searchQuery.trim()) {
+              window.location.href = `/markets/${encodeURIComponent(searchQuery.trim().toUpperCase())}`;
+            }
+          }}
+          className="relative group"
+        >
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 sm:h-4 sm:w-4 text-[var(--text-dim)] group-focus-within:text-emerald-400 transition-colors" />
           <input
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search stocks... (e.g., RELIANCE.NS, AAPL)"
+            placeholder="Search stocks, indices..."
             className="
-              w-full h-9 pl-10 pr-4
-              rounded-lg
-              bg-[var(--bg)] border border-[var(--border)]
-              text-sm text-[var(--text)] placeholder:text-[var(--text-dim)]
-              font-mono
+              w-full h-8.5 sm:h-9.5 pl-8.5 sm:pl-10 pr-3 sm:pr-4
+              rounded-full
+              bg-white/[0.03] border border-white/[0.07]
+              text-xs text-white placeholder:text-[var(--text-dim)]
+              font-sans
               outline-none
-              focus:border-[var(--accent)] focus:ring-1 focus:ring-[var(--accent)]/30
+              focus:border-emerald-500/40 focus:bg-white/[0.04] focus:ring-1 focus:ring-emerald-500/20
               transition-all duration-200
             "
           />
-        </div>
+        </form>
       </div>
 
-      {/* Right: Market status + User */}
-      <div className="flex items-center gap-3 shrink-0">
-        <div className="flex items-center gap-2">
-          <Circle
-            className={`h-2.5 w-2.5 fill-current ${marketStatus.dotColor}`}
+      {/* Right: Market status + Notification + User */}
+      <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+        <div className="flex items-center gap-1.5 sm:gap-2 px-2 sm:px-2.5 py-1 rounded-full bg-white/[0.02] border border-white/[0.05]">
+          <span
+            className={`h-2 w-2 rounded-full shrink-0 ${
+              marketOpen
+                ? 'bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)]'
+                : 'bg-red-400 shadow-[0_0_8px_rgba(248,113,113,0.8)]'
+            }`}
           />
-          <span className="text-xs font-medium text-[var(--text)]">
+          <span className="text-[11px] font-medium text-[var(--text)] whitespace-nowrap hidden md:inline">
             {marketStatus.label}
           </span>
+          <span className="text-[10px] font-mono text-[var(--text-dim)] hidden lg:inline whitespace-nowrap">
+            • {DATA_DELAY_LABEL}
+          </span>
         </div>
-        <span className="text-[10px] font-mono text-[var(--text-dim)] hidden sm:inline">
-          {DATA_DELAY_LABEL}
-        </span>
-        <div className="w-px h-5 bg-[var(--border)] hidden sm:block" />
+
+        <div className="w-px h-4 bg-white/[0.08] hidden sm:block" />
+
         <NotificationBell />
         <UserMenu />
       </div>

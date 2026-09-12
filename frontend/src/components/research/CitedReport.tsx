@@ -32,8 +32,8 @@ export default function CitedReport({ content, sources, companyName }: CitedRepo
     const el = document.getElementById(`source-ref-${id}`);
     if (el) {
       el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      el.classList.add('ring-2', 'ring-[var(--accent)]');
-      setTimeout(() => el.classList.remove('ring-2', 'ring-[var(--accent)]'), 2000);
+      el.classList.add('ring-1', 'ring-[var(--green)]');
+      setTimeout(() => el.classList.remove('ring-1', 'ring-[var(--green)]'), 2000);
     }
   }, []);
 
@@ -118,8 +118,8 @@ export default function CitedReport({ content, sources, companyName }: CitedRepo
             className="inline-flex items-center cursor-pointer group relative"
             onClick={() => scrollToRef(sourceId)}
           >
-            <span className="text-[10px] font-mono font-bold text-[var(--accent)] bg-[var(--accent)]/10 
-                             px-1 py-0.5 rounded hover:bg-[var(--accent)]/20 transition-colors">
+            <span className="text-[10px] font-mono font-bold text-[var(--green)] bg-[var(--green)]/10 
+                             px-1 py-0.5 rounded hover:bg-[var(--green)]/20 transition-colors">
               {sourceId}
             </span>
             {source && (
@@ -167,7 +167,7 @@ export default function CitedReport({ content, sources, companyName }: CitedRepo
       <div className="card p-6">
         {companyName && (
           <div className="flex items-center gap-2 mb-4 pb-3 border-b border-[var(--border)]">
-            <BookOpen className="w-4 h-4 text-[var(--accent)]" />
+            <BookOpen className="w-4 h-4 text-[var(--green)]" />
             <span className="font-heading text-sm font-bold text-[var(--text)]">
               Deep Research Report — {companyName}
             </span>
@@ -201,7 +201,7 @@ export default function CitedReport({ content, sources, companyName }: CitedRepo
                 id={`source-ref-${source.id}`}
                 className="flex items-start gap-3 p-2 rounded-lg hover:bg-[var(--surface-2)] transition-colors"
               >
-                <span className="text-[10px] font-mono font-bold text-[var(--accent)] bg-[var(--accent)]/10
+                <span className="text-[10px] font-mono font-bold text-[var(--green)] bg-[var(--green)]/10
                                  px-1.5 py-0.5 rounded mt-0.5 shrink-0">
                   {source.id}
                 </span>
@@ -212,7 +212,7 @@ export default function CitedReport({ content, sources, companyName }: CitedRepo
                   <p className="text-[10px] font-mono text-[var(--text-dim)]">
                     {source.source} · {source.type} · {source.date}
                     {source.relevance !== undefined && (
-                      <span className="ml-2 text-[var(--accent)]">
+                      <span className="ml-2 text-[var(--green)]">
                         {(source.relevance * 100).toFixed(0)}% relevant
                       </span>
                     )}
@@ -223,7 +223,7 @@ export default function CitedReport({ content, sources, companyName }: CitedRepo
                     href={source.url}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="text-[var(--text-dim)] hover:text-[var(--accent)] transition-colors shrink-0"
+                    className="text-[var(--text-dim)] hover:text-[var(--green)] transition-colors shrink-0"
                     onClick={(e) => e.stopPropagation()}
                   >
                     <ExternalLink className="w-3 h-3" />

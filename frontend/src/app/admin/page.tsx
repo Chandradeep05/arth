@@ -44,12 +44,12 @@ export default function AdminPage() {
 
   const fetchData = async () => {
     try {
-      const [usersRes, codesRes] = await Promise.all([
-        api.get('/api/v1/admin/users'),
-        api.get('/api/v1/admin/invite-codes')
+      const [usersData, codesData] = await Promise.all([
+        api.get<User[]>('/api/v1/admin/users'),
+        api.get<InviteCode[]>('/api/v1/admin/invite-codes')
       ]);
-      if (usersRes.ok) setUsers(await usersRes.json());
-      if (codesRes.ok) setInviteCodes(await codesRes.json());
+      if (usersData) setUsers(usersData);
+      if (codesData) setInviteCodes(codesData);
     } catch (error) {
       console.error('Failed to fetch admin data', error);
     } finally {
@@ -59,10 +59,8 @@ export default function AdminPage() {
 
   const handleUpdateRole = async (userId: string, newRole: 'user' | 'admin') => {
     try {
-      const res = await api.patch(`/api/v1/admin/users/${userId}/role`, { role: newRole });
-      if (res.ok) {
-        setUsers(users.map(u => u.id === userId ? { ...u, role: newRole } : u));
-      }
+      await api.patch(`/api/v1/admin/users/${userId}/role`, { role: newRole });
+      setUsers(users.map(u => u.id === userId ? { ...u, role: newRole } : u));
     } catch (error) {
       console.error('Failed to update role', error);
     }
@@ -70,10 +68,8 @@ export default function AdminPage() {
 
   const handleUpdateStatus = async (userId: string, newStatus: 'active' | 'suspended' | 'pending') => {
     try {
-      const res = await api.patch(`/api/v1/admin/users/${userId}/status`, { access_status: newStatus });
-      if (res.ok) {
-        setUsers(users.map(u => u.id === userId ? { ...u, access_status: newStatus } : u));
-      }
+      await api.patch(`/api/v1/admin/users/${userId}/status`, { access_status: newStatus });
+      setUsers(users.map(u => u.id === userId ? { ...u, access_status: newStatus } : u));
     } catch (error) {
       console.error('Failed to update status', error);
     }
@@ -83,9 +79,8 @@ export default function AdminPage() {
     e.preventDefault();
     try {
       const payload = newCodeMaxUses ? { max_uses: parseInt(newCodeMaxUses) } : {};
-      const res = await api.post('/api/v1/admin/invite-codes', payload);
-      if (res.ok) {
-        const data = await res.json();
+      const data = await api.post<{ code?: string }>('/api/v1/admin/invite-codes', payload);
+      if (data?.code) {
         setJustGeneratedCode(data.code);
         setNewCodeMaxUses('');
         fetchData();

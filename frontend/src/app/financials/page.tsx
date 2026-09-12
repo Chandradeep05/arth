@@ -296,32 +296,32 @@ export default function FinancialsPage() {
       </div>
 
       {/* Search Input */}
-      <form onSubmit={handleSearch} className="flex gap-3 max-w-xl">
+      <form onSubmit={handleSearch} className="flex gap-2 max-w-xl relative">
         <input
           type="text"
           value={symbol}
           onChange={(e) => setSymbol(e.target.value)}
-          placeholder="Enter stock symbol (e.g., RELIANCE.NS, AAPL)"
-          className="flex-1 px-4 py-3 rounded-lg bg-[var(--surface)] border border-[var(--border)]
-                     text-[var(--text)] font-mono text-sm placeholder:text-[var(--text-dim)]
-                     focus:outline-none focus:border-[var(--accent)] focus:shadow-[0_0_0_3px_rgba(0,212,255,0.1)]
+          placeholder="Enter stock symbol (e.g., RELIANCE.NS, AAPL, TCS.NS)..."
+          className="flex-1 px-4 py-3 rounded-full bg-[var(--surface-2)] border border-[var(--border)]
+                     text-[var(--text)] font-mono text-xs placeholder:text-[var(--text-dim)]
+                     focus:outline-none focus:border-[var(--green)]/50 focus:ring-1 focus:ring-[var(--green)]/30
                      transition-all"
         />
         <button
           type="submit"
           disabled={loading}
-          className="px-6 py-3 rounded-lg bg-[var(--accent)] text-[var(--bg)] text-sm font-bold
-                     uppercase tracking-wider hover:brightness-110 transition-all cursor-pointer
-                     disabled:opacity-50 flex items-center gap-2"
+          className="px-5 py-2.5 rounded-full bg-[var(--green)] text-black text-xs font-bold
+                     uppercase tracking-wider hover:bg-[var(--green-hover)] transition-all cursor-pointer
+                     disabled:opacity-40 flex items-center gap-2 shadow-sm"
         >
-          {loading ? 'Loading...' : 'Analyze'} <ArrowRight className="w-4 h-4" />
+          {loading ? 'Analyzing...' : 'Analyze'} <ArrowRight className="w-3.5 h-3.5" />
         </button>
       </form>
 
       {/* Error */}
       {error && (
-        <div className="card p-6 max-w-xl border-[var(--red)]/30">
-          <p className="text-sm text-[var(--red)]">{error}</p>
+        <div className="card p-5 max-w-xl border-[var(--red)]/30">
+          <p className="text-xs font-mono text-[var(--red)]">{error}</p>
         </div>
       )}
 
@@ -335,42 +335,46 @@ export default function FinancialsPage() {
           {/* Controls: Tabs + Period Toggle */}
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
             {/* Tabs */}
-            <div className="flex gap-1 overflow-x-auto">
-              {TABS.map(({ key, label, icon: Icon }) => (
-                <button
-                  key={key}
-                  onClick={() => setActiveTab(key)}
-                  className={`flex items-center gap-1.5 px-3 py-2 rounded-md text-xs font-mono
-                             whitespace-nowrap transition-colors cursor-pointer
-                             ${
-                               activeTab === key
-                                 ? 'bg-[var(--accent)]/10 text-[var(--accent)] border border-[var(--accent)]/30'
-                                 : 'text-[var(--text-muted)] hover:bg-[var(--surface-2)] hover:text-[var(--text)] border border-transparent'
-                             }`}
-                >
-                  <Icon className="w-3.5 h-3.5" />
-                  {label}
-                </button>
-              ))}
+            <div className="flex gap-1.5 overflow-x-auto no-scrollbar pb-1">
+              {TABS.map(({ key, label, icon: Icon }) => {
+                const isActive = activeTab === key;
+                return (
+                  <button
+                    key={key}
+                    onClick={() => setActiveTab(key)}
+                    className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-xs font-mono
+                               whitespace-nowrap transition-all cursor-pointer border ${
+                                 isActive
+                                   ? 'bg-[rgba(16,185,129,0.12)] text-[var(--green)] border-[rgba(16,185,129,0.3)] shadow-[0_0_12px_rgba(16,185,129,0.1)]'
+                                   : 'bg-[rgba(255,255,255,0.03)] text-[var(--text-muted)] border-[rgba(255,255,255,0.06)] hover:text-white hover:bg-[rgba(255,255,255,0.06)]'
+                               }`}
+                  >
+                    <Icon className="w-3.5 h-3.5" />
+                    {label}
+                  </button>
+                );
+              })}
             </div>
 
             {/* Period Toggle */}
             {activeTab !== 'health' && (
-              <div className="flex items-center gap-1 bg-[var(--surface)] border border-[var(--border)] rounded-md p-0.5">
-                {(['annual', 'quarterly'] as Period[]).map((p) => (
-                  <button
-                    key={p}
-                    onClick={() => handlePeriodChange(p)}
-                    className={`px-3 py-1.5 rounded text-xs font-mono capitalize transition-colors cursor-pointer
-                               ${
-                                 period === p
-                                   ? 'bg-[var(--accent)]/15 text-[var(--accent)]'
-                                   : 'text-[var(--text-muted)] hover:text-[var(--text)]'
-                               }`}
-                  >
-                    {p}
-                  </button>
-                ))}
+              <div className="flex items-center gap-1 bg-[rgba(255,255,255,0.03)] border border-[var(--border)] rounded-full p-1">
+                {(['annual', 'quarterly'] as Period[]).map((p) => {
+                  const isSel = period === p;
+                  return (
+                    <button
+                      key={p}
+                      onClick={() => handlePeriodChange(p)}
+                      className={`px-3 py-1 rounded-full text-xs font-mono capitalize transition-all cursor-pointer ${
+                        isSel
+                          ? 'bg-[rgba(16,185,129,0.15)] text-[var(--green)] font-semibold'
+                          : 'text-[var(--text-muted)] hover:text-white'
+                      }`}
+                    >
+                      {p}
+                    </button>
+                  );
+                })}
               </div>
             )}
           </div>
@@ -387,20 +391,20 @@ export default function FinancialsPage() {
             {
               icon: FileSpreadsheet,
               title: 'Financial Statements',
-              desc: 'View income statements, balance sheets, and cash flow statements with multi-period comparison',
-              color: 'var(--accent)',
+              desc: 'Standardized balance sheets, income statements, and cash flows with multi-period comparative figures',
+              color: 'var(--green)',
             },
             {
               icon: BarChart3,
               title: 'Key Ratios',
-              desc: 'Profitability, liquidity, and efficiency ratios with year-over-year change tracking',
-              color: 'var(--accent-green)',
+              desc: 'Solvency, liquidity, margins, and operational efficiency ratios with YoY delta analysis',
+              color: 'var(--green)',
             },
             {
               icon: HeartPulse,
               title: 'Health Score',
-              desc: 'Composite financial health score (0–100) across profitability, solvency, efficiency, and growth',
-              color: 'var(--accent-orange)',
+              desc: 'Multi-factor composite financial strength grading (0–100) across balance sheet dimensions',
+              color: 'var(--gold)',
             },
           ].map((item, i) => (
             <motion.div
@@ -410,11 +414,11 @@ export default function FinancialsPage() {
               transition={{ delay: 0.1 + i * 0.1 }}
               className="card p-5"
             >
-              <item.icon className="w-5 h-5 mb-3" style={{ color: item.color }} />
-              <h3 className="font-heading text-sm font-bold text-[var(--text)] mb-1">
+              <item.icon className="w-4 h-4 mb-3" style={{ color: item.color }} />
+              <h3 className="font-heading text-xs font-bold text-[var(--text)] mb-1">
                 {item.title}
               </h3>
-              <p className="text-xs text-[var(--text-dim)] font-mono leading-relaxed">
+              <p className="text-[11px] text-[var(--text-dim)] font-mono leading-relaxed">
                 {item.desc}
               </p>
             </motion.div>
