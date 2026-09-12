@@ -24,6 +24,7 @@ import Disclaimer from '@/components/shared/Disclaimer';
 import LoadingSkeleton from '@/components/shared/LoadingSkeleton';
 import PredictionPanel from '@/components/stock/PredictionPanel';
 import type { StockQuote, OHLCVBar, TechnicalIndicators } from '@/types/market';
+import { useStockAtmosphere } from '@/lib/atmosphere';
 
 function formatNumber(n: number | null | undefined): string {
   if (n == null || isNaN(n)) return '—';
@@ -46,6 +47,9 @@ export default function StockDetailPage() {
     : (params.symbol as string);
   const symbol = decodeURIComponent(rawSymbol);
 
+  // Random or mountains visual inheritance
+  const atmosphere = useStockAtmosphere(symbol);
+
   const [quote, setQuote] = useState<StockQuote | null>(null);
   const [ohlcv, setOhlcv] = useState<OHLCVBar[]>([]);
   const [indicators, setIndicators] = useState<TechnicalIndicators | null>(null);
@@ -57,8 +61,7 @@ export default function StockDetailPage() {
 
   const fetchAll = useCallback(async () => {
     try {
-      // Phase 1: Fetch quote (via batch for speed) + OHLCV in parallel
-      // Using batch endpoint even for 1 stock — it uses yf.download which is lighter than ticker.info
+      // Phase 1: Fetch quote + OHLCV in parallel from live backend
       const [batchRes, ohlcvRes] = await Promise.allSettled([
         apiClient.post<{ success: boolean; data: any[] }>(
           '/api/v1/market/batch-quotes',
@@ -70,25 +73,24 @@ export default function StockDetailPage() {
       if (batchRes.status === 'fulfilled' && batchRes.value.data?.[0]) {
         setQuote(batchRes.value.data[0]);
       } else {
-        // Fallback: try individual quote endpoint (uses fast_info/ticker.info)
         try {
           const quoteRes = await apiClient.get<{ data: StockQuote }>(
             `/api/v1/market/quote/${encodeURIComponent(symbol)}`
           );
           if (quoteRes.data) setQuote(quoteRes.data);
         } catch {
-          // Both batch and individual failed — quote stays null
+          // Both failed — quote stays null
         }
       }
+
       if (ohlcvRes.status === 'fulfilled') {
         const d = ohlcvRes.value.data;
         setOhlcv(Array.isArray(d) ? d : []);
       }
 
-      // Show chart + price ASAP
       setLoading(false);
 
-      // Phase 2: Fetch company + sentiment + risk + indicators (deferred — lower priority)
+      // Phase 2: Fetch company + sentiment + risk + indicators from live backend
       const [companyRes, sentRes, riskRes, indRes] = await Promise.allSettled([
         apiClient.get<{ data: any }>(`/api/v1/market/company/${encodeURIComponent(symbol)}`),
         apiClient.get<{ data: any }>(`/api/v1/sentiment/${encodeURIComponent(symbol)}`),
@@ -168,58 +170,61 @@ export default function StockDetailPage() {
         <motion.div
           initial={{ opacity: 0, y: 8 }}
           animate={{ opacity: 1, y: 0 }}
-          className="card p-6"
+          className="card p-6 relative overflow-hidden"
         >
-          <div className="flex items-start justify-between gap-6 flex-wrap">
-            {/* Price & Change */}
-            <div>
-              <div className="text-[11px] font-mono text-[var(--text-dim)] uppercase tracking-wider mb-1">
-                Last Traded Price
+          <div className={`card-atmosphere ${atmosphere}`} aria-hidden="true" />
+          <div className="relative z-10">
+            <div className="flex items-start justify-between gap-6 flex-wrap">
+              {/* Price & Change */}
+              <div>
+                <div className="text-[11px] font-mono text-[var(--text-dim)] uppercase tracking-wider mb-1">
+                  Last Traded Price
+                </div>
+                <div className="font-heading text-4xl sm:text-5xl font-bold tracking-tight text-white">
+                  {currency}{formatNumber(quote.price)}
+                </div>
+                <div className="flex items-center gap-2 mt-2">
+                  <span className={`inline-flex items-center gap-1.5 text-sm font-mono font-medium px-2.5 py-1 rounded-lg ${
+                    isPositive
+                      ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                      : 'bg-red-500/10 text-red-400 border border-red-500/20'
+                  }`}>
+                    {isPositive ? <TrendingUp className="w-4 h-4" /> : <TrendingDown className="w-4 h-4" />}
+                    {isPositive ? '+' : ''}{formatNumber(quote.change)} ({isPositive ? '+' : ''}{quote.change_percent.toFixed(2)}%)
+                  </span>
+                </div>
               </div>
-              <div className="font-heading text-4xl sm:text-5xl font-bold tracking-tight text-white">
-                {currency}{formatNumber(quote.price)}
-              </div>
-              <div className="flex items-center gap-2 mt-2">
-                <span className={`inline-flex items-center gap-1.5 text-sm font-mono font-medium px-2.5 py-1 rounded-lg ${
-                  isPositive
-                    ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
-                    : 'bg-red-500/10 text-red-400 border border-red-500/20'
-                }`}>
-                  {isPositive ? <TrendingUp className="w-4 h-4" /> : <TrendingDown className="w-4 h-4" />}
-                  {isPositive ? '+' : ''}{formatNumber(quote.change)} ({isPositive ? '+' : ''}{quote.change_percent.toFixed(2)}%)
-                </span>
-              </div>
-            </div>
 
-            {/* Quick Stats Grid */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-4 text-xs font-mono pt-2">
-              <div className="p-2 rounded-lg bg-white/[0.02] border border-white/[0.04]">
-                <span className="text-[10px] text-[var(--text-dim)] uppercase tracking-wider block">Open</span>
-                <span className="text-white font-medium">{currency}{formatNumber(quote.open)}</span>
-              </div>
-              <div className="p-2 rounded-lg bg-white/[0.02] border border-white/[0.04]">
-                <span className="text-[10px] text-[var(--text-dim)] uppercase tracking-wider block">High</span>
-                <span className="text-white font-medium">{currency}{formatNumber(quote.high)}</span>
-              </div>
-              <div className="p-2 rounded-lg bg-white/[0.02] border border-white/[0.04]">
-                <span className="text-[10px] text-[var(--text-dim)] uppercase tracking-wider block">Low</span>
-                <span className="text-white font-medium">{currency}{formatNumber(quote.low)}</span>
-              </div>
-              <div className="p-2 rounded-lg bg-white/[0.02] border border-white/[0.04]">
-                <span className="text-[10px] text-[var(--text-dim)] uppercase tracking-wider block">Prev Close</span>
-                <span className="text-white font-medium">{currency}{formatNumber(quote.previous_close)}</span>
-              </div>
-              <div className="p-2 rounded-lg bg-white/[0.02] border border-white/[0.04]">
-                <span className="text-[10px] text-[var(--text-dim)] uppercase tracking-wider block">Volume</span>
-                <span className="text-white font-medium">{(quote.volume / 1e6).toFixed(1)}M</span>
-              </div>
-              <div className="p-2 rounded-lg bg-white/[0.02] border border-white/[0.04]">
-                <span className="text-[10px] text-[var(--text-dim)] uppercase tracking-wider block">Mkt Cap</span>
-                <span className="text-white font-medium">{formatMarketCap(quote.market_cap, currency)}</span>
-              </div>
-              <div className="p-2 rounded-lg bg-white/[0.02] border border-white/[0.04]">
-                <span className="text-[10px] text-[var(--text-dim)] uppercase tracking-wider block">P/E</span>
-                <span className="text-white font-medium">{quote.pe_ratio?.toFixed(2) ?? 'N/A'}</span>
+              {/* Quick Stats Grid */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-4 text-xs font-mono pt-2">
+                <div className="p-2 rounded-lg bg-white/[0.02] border border-white/[0.04]">
+                  <span className="text-[10px] text-[var(--text-dim)] uppercase tracking-wider block">Open</span>
+                  <span className="text-white font-medium">{currency}{formatNumber(quote.open)}</span>
+                </div>
+                <div className="p-2 rounded-lg bg-white/[0.02] border border-white/[0.04]">
+                  <span className="text-[10px] text-[var(--text-dim)] uppercase tracking-wider block">High</span>
+                  <span className="text-white font-medium">{currency}{formatNumber(quote.high)}</span>
+                </div>
+                <div className="p-2 rounded-lg bg-white/[0.02] border border-white/[0.04]">
+                  <span className="text-[10px] text-[var(--text-dim)] uppercase tracking-wider block">Low</span>
+                  <span className="text-white font-medium">{currency}{formatNumber(quote.low)}</span>
+                </div>
+                <div className="p-2 rounded-lg bg-white/[0.02] border border-white/[0.04]">
+                  <span className="text-[10px] text-[var(--text-dim)] uppercase tracking-wider block">Prev Close</span>
+                  <span className="text-white font-medium">{currency}{formatNumber(quote.previous_close)}</span>
+                </div>
+                <div className="p-2 rounded-lg bg-white/[0.02] border border-white/[0.04]">
+                  <span className="text-[10px] text-[var(--text-dim)] uppercase tracking-wider block">Volume</span>
+                  <span className="text-white font-medium">{(quote.volume / 1e6).toFixed(1)}M</span>
+                </div>
+                <div className="p-2 rounded-lg bg-white/[0.02] border border-white/[0.04]">
+                  <span className="text-[10px] text-[var(--text-dim)] uppercase tracking-wider block">Mkt Cap</span>
+                  <span className="text-white font-medium">{formatMarketCap(quote.market_cap, currency)}</span>
+                </div>
+                <div className="p-2 rounded-lg bg-white/[0.02] border border-white/[0.04]">
+                  <span className="text-[10px] text-[var(--text-dim)] uppercase tracking-wider block">PE Ratio</span>
+                  <span className="text-white font-medium">{quote.pe_ratio != null ? quote.pe_ratio.toFixed(1) : '—'}</span>
+                </div>
               </div>
             </div>
           </div>

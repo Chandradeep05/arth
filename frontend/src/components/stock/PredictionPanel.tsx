@@ -95,8 +95,10 @@ export default function PredictionPanel({ symbol }: { symbol: string }) {
   };
 
   return (
-    <div className="card overflow-hidden">
-      <div className="px-5 py-3.5 border-b border-white/[0.06] flex items-center justify-between">
+    <div className="card overflow-hidden relative">
+      <div className="card-atmosphere card-atmosphere-intelligence" style={{ opacity: 0.05 }} aria-hidden="true" />
+      <div className="relative z-10">
+        <div className="px-5 py-3.5 border-b border-white/[0.06] flex items-center justify-between">
         <div className="flex items-center gap-2">
           <div className="w-6 h-6 rounded-lg bg-white/[0.04] border border-white/[0.08] flex items-center justify-center">
             <Brain className="w-3.5 h-3.5 text-emerald-400" />
@@ -307,6 +309,7 @@ export default function PredictionPanel({ symbol }: { symbol: string }) {
             </motion.div>
           )}
         </AnimatePresence>
+      </div>
       </div>
     </div>
   );

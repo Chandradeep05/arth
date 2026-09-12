@@ -35,13 +35,13 @@ function DimensionBar({ dim }: { dim: RiskDimension }) {
           {dim.dimension.replace('_', ' ')}
         </span>
         <span className="font-semibold" style={{ color }}>
-          {dim.score.toFixed(0)}/100 · {dim.label}
+          {(dim.score ?? 50).toFixed(0)}/100 · {dim.label}
         </span>
       </div>
       <div className="h-1.5 rounded-full bg-white/[0.06] overflow-hidden">
         <motion.div
           initial={{ width: 0 }}
-          animate={{ width: `${dim.score}%` }}
+          animate={{ width: `${dim.score ?? 50}%` }}
           transition={{ duration: 0.8, ease: 'easeOut' }}
           className="h-full rounded-full"
           style={{ backgroundColor: color }}
@@ -87,9 +87,11 @@ export default function RiskScore({
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ delay: 0.4 }}
-      className="card p-6 flex flex-col justify-between"
+      className="card p-6 flex flex-col justify-between relative overflow-hidden"
     >
-      <div className="flex items-center justify-between mb-4">
+      <div className="card-atmosphere card-atmosphere-risk" aria-hidden="true" />
+      <div className="relative z-10 flex flex-col justify-between h-full">
+        <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-2">
           <div className="w-6 h-6 rounded-lg bg-white/[0.04] border border-white/[0.08] flex items-center justify-center">
             <ShieldAlert className="w-3.5 h-3.5 text-amber-400" />
@@ -99,7 +101,7 @@ export default function RiskScore({
           </h3>
         </div>
         <span className="text-[10px] font-mono text-[var(--text-dim)]">
-          Confidence: {confidence.toFixed(0)}%
+          Confidence: {(confidence ?? 80).toFixed(0)}%
         </span>
       </div>
 
@@ -126,7 +128,7 @@ export default function RiskScore({
               strokeDasharray={`${2 * Math.PI * 40}`}
               initial={{ strokeDashoffset: 2 * Math.PI * 40 }}
               animate={{
-                strokeDashoffset: 2 * Math.PI * 40 * (1 - compositeScore / 100),
+                strokeDashoffset: 2 * Math.PI * 40 * (1 - (compositeScore ?? 30) / 100),
               }}
               transition={{ duration: 1, ease: 'easeOut' }}
               style={{ filter: `drop-shadow(0 0 6px ${color}80)` }}
@@ -134,7 +136,7 @@ export default function RiskScore({
           </svg>
           <div className="absolute inset-0 flex flex-col items-center justify-center">
             <span className="font-heading text-xl font-extrabold text-white">
-              {compositeScore.toFixed(0)}
+              {(compositeScore ?? 30).toFixed(0)}
             </span>
             <span className="text-[9px] font-mono text-[var(--text-dim)] uppercase">
               / 100
@@ -167,6 +169,7 @@ export default function RiskScore({
           </p>
         </div>
       )}
+      </div>
     </motion.div>
   );
 }

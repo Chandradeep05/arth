@@ -52,9 +52,18 @@ export default function Sidebar({ isMobileOpen = false, onMobileClose }: Sidebar
   // ── Shared nav content (used by both desktop and mobile) ──────────────────
   function NavContent() {
     return (
-      <div className="flex flex-col h-full select-none">
+      <div className="flex flex-col h-full select-none relative">
+        {/* Subtle amber/gold atmospheric glow pool at navigation base (reference finishing) */}
+        <div
+          className="absolute bottom-0 left-0 right-0 h-56 pointer-events-none z-0"
+          style={{
+            background: 'radial-gradient(circle at 25% 95%, rgba(245, 158, 11, 0.09) 0%, rgba(217, 119, 6, 0.03) 50%, transparent 80%)',
+          }}
+          aria-hidden="true"
+        />
+
         {/* Brand Header */}
-        <div className="flex items-center justify-between h-16 px-4 border-b border-white/[0.06]">
+        <div className="flex items-center justify-between h-16 px-4 border-b border-white/[0.06] relative z-10">
           <Link
             href="/"
             className="flex items-center gap-2.5 overflow-hidden group"
@@ -151,13 +160,13 @@ export default function Sidebar({ isMobileOpen = false, onMobileClose }: Sidebar
           })}
         </nav>
 
-        {/* Bottom User Card (Reference Layout) */}
-        <div className="p-3 border-t border-white/[0.06]">
+        {/* Bottom User Card (Reference Layout with subtle amber finishing) */}
+        <div className="p-3 border-t border-white/[0.06] relative z-10">
           <Link
             href="/login"
             className={`
               flex items-center gap-3 p-2 rounded-xl transition-all
-              bg-white/[0.02] border border-white/[0.05] hover:border-white/[0.1] hover:bg-white/[0.04]
+              bg-white/[0.02] border border-amber-500/15 hover:border-amber-500/35 hover:bg-amber-500/[0.04]
               ${collapsed ? 'justify-center' : ''}
             `}
           >
@@ -166,10 +175,10 @@ export default function Sidebar({ isMobileOpen = false, onMobileClose }: Sidebar
                 <img
                   src={userAvatar}
                   alt={userName}
-                  className="w-8 h-8 rounded-full object-cover ring-1 ring-emerald-500/30"
+                  className="w-8 h-8 rounded-full object-cover ring-1 ring-amber-500/30"
                 />
               ) : (
-                <div className="w-8 h-8 rounded-full bg-emerald-950/60 border border-emerald-500/30 flex items-center justify-center text-emerald-300 font-semibold text-xs">
+                <div className="w-8 h-8 rounded-full bg-emerald-950/60 border border-amber-500/30 flex items-center justify-center text-amber-300 font-semibold text-xs">
                   {userName.charAt(0).toUpperCase()}
                 </div>
               )}
@@ -190,7 +199,7 @@ export default function Sidebar({ isMobileOpen = false, onMobileClose }: Sidebar
                   <span className="text-xs font-semibold text-white leading-tight truncate">
                     {userName}
                   </span>
-                  <span className="text-[9px] font-mono text-emerald-400/80 leading-tight">
+                  <span className="text-[9px] font-mono text-amber-400/80 leading-tight">
                     Investor
                   </span>
                 </motion.div>
@@ -200,7 +209,7 @@ export default function Sidebar({ isMobileOpen = false, onMobileClose }: Sidebar
         </div>
 
         {/* Desktop Collapse Toggle */}
-        <div className="px-3 pb-3 hidden lg:block">
+        <div className="px-3 pb-3 hidden lg:block relative z-10">
           <button
             onClick={() => setCollapsed(!collapsed)}
             className="

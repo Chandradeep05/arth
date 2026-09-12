@@ -64,15 +64,16 @@
 html {
   scroll-behavior: smooth;
   color-scheme: dark;
-  background-color: #060908;
+  background-color: #060807;
 }
 
 body {
-  background-color: #060908;
+  background-color: #060807;
   background-image:
-    radial-gradient(1200px circle at 50% -20%, rgba(255, 255, 255, 0.025) 0%, transparent 70%),
-    radial-gradient(900px circle at 85% 20%, rgba(16, 185, 129, 0.015) 0%, transparent 60%),
-    radial-gradient(1000px circle at 15% 75%, rgba(20, 25, 22, 0.6) 0%, transparent 60%);
+    radial-gradient(1200px circle at 50% -10%, rgba(255, 255, 255, 0.02) 0%, transparent 70%),
+    radial-gradient(900px circle at 90% 15%, rgba(16, 185, 129, 0.015) 0%, transparent 60%),
+    radial-gradient(800px circle at 10% 85%, rgba(239, 68, 68, 0.012) 0%, transparent 60%),
+    radial-gradient(1400px circle at 20% 40%, rgba(14, 20, 17, 0.8) 0%, transparent 70%);
   background-attachment: fixed;
   color: var(--text);
   font-family: var(--font-sans);
@@ -166,24 +167,156 @@ body {
   animation: pulse-dot 2s ease-in-out infinite;
 }
 
-/* ── Card Component: Physical Translucent Obsidian Surface ── */
+/* ── Card Component: Physical Translucent Smoked Obsidian Surface ── */
 .card {
-  background: linear-gradient(180deg, rgba(14, 21, 18, 0.72) 0%, rgba(9, 14, 12, 0.82) 100%);
+  position: relative;
+  background: linear-gradient(180deg, rgba(13, 19, 16, 0.78) 0%, rgba(7, 11, 9, 0.88) 100%);
   border: 1px solid rgba(255, 255, 255, 0.065);
   border-radius: 16px;
   box-shadow:
-    0 12px 32px -8px rgba(0, 0, 0, 0.6),
-    inset 0 1px 0 0 rgba(255, 255, 255, 0.06);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
+    0 16px 36px -8px rgba(0, 0, 0, 0.75),
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.065);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
   transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  overflow: hidden;
 }
 
 .card:hover {
   border-color: rgba(255, 255, 255, 0.11);
   box-shadow:
-    0 16px 40px -10px rgba(0, 0, 0, 0.7),
-    inset 0 1px 0 0 rgba(255, 255, 255, 0.08);
+    0 20px 44px -10px rgba(0, 0, 0, 0.82),
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.09);
+}
+
+/* ── Embedded Atmospheric Subsurfaces ── */
+.card-atmosphere {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  overflow: hidden;
+  z-index: 0;
+}
+
+/* 0. Photorealistic Dark Orbit Globe (Dashboard Hero Card) */
+.card-atmosphere-globe {
+  background-image: url('/atmosphere/globe.jpg');
+  background-size: cover;
+  background-position: right 8% center;
+  background-repeat: no-repeat;
+  opacity: 0.38;
+  mix-blend-mode: screen;
+  mask-image: radial-gradient(circle at 82% 50%, rgba(0, 0, 0, 1) 25%, rgba(0, 0, 0, 0.5) 60%, transparent 90%);
+  -webkit-mask-image: radial-gradient(circle at 82% 50%, rgba(0, 0, 0, 1) 25%, rgba(0, 0, 0, 0.5) 60%, transparent 90%);
+}
+
+/* 0. Volcanic Obsidian Mountains (Nifty & Market Price Hero Card) */
+.card-atmosphere-mountains {
+  background-image: url('/atmosphere/mountains.jpg');
+  background-size: cover;
+  background-position: center top;
+  background-repeat: no-repeat;
+  opacity: 0.28;
+  mix-blend-mode: screen;
+  mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 0.95) 0%, rgba(0, 0, 0, 0.45) 45%, transparent 92%);
+  -webkit-mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 0.95) 0%, rgba(0, 0, 0, 0.45) 45%, transparent 92%);
+}
+
+/* 0. Fluid Aurora Emerald Wave */
+.card-atmosphere-aurora-emerald {
+  background-image: url('/atmosphere/aurora-emerald.jpg');
+  background-size: cover;
+  background-position: center right;
+  background-repeat: no-repeat;
+  opacity: 0.18;
+  mix-blend-mode: screen;
+  mask-image: radial-gradient(circle at 75% 50%, rgba(0, 0, 0, 0.9) 25%, transparent 85%);
+  -webkit-mask-image: radial-gradient(circle at 75% 50%, rgba(0, 0, 0, 0.9) 25%, transparent 85%);
+}
+
+/* 0. Fluid Aurora Crimson Wave */
+.card-atmosphere-aurora-crimson {
+  background-image: url('/atmosphere/aurora-crimson.jpg');
+  background-size: cover;
+  background-position: center right;
+  background-repeat: no-repeat;
+  opacity: 0.18;
+  mix-blend-mode: screen;
+  mask-image: radial-gradient(circle at 75% 50%, rgba(0, 0, 0, 0.9) 25%, transparent 85%);
+  -webkit-mask-image: radial-gradient(circle at 75% 50%, rgba(0, 0, 0, 0.9) 25%, transparent 85%);
+}
+
+/* 1. Dashboard Hero / Market Topography (approx 6-7% opacity) */
+.card-atmosphere-topography {
+  background-image: url('/atmosphere/topography.jpg');
+  background-size: cover;
+  background-position: right center;
+  background-repeat: no-repeat;
+  opacity: 0.07;
+  mix-blend-mode: screen;
+  mask-image: radial-gradient(circle at 85% 60%, black 20%, transparent 80%);
+  -webkit-mask-image: radial-gradient(circle at 85% 60%, black 20%, transparent 80%);
+}
+
+/* 2. Directional Market Flow (Bullish - Emerald, approx 5% opacity) */
+.card-atmosphere-flow-bullish {
+  background-image: url('/atmosphere/flow-bullish.jpg');
+  background-size: cover;
+  background-position: center right;
+  background-repeat: no-repeat;
+  opacity: 0.055;
+  mix-blend-mode: screen;
+  mask-image: radial-gradient(circle at 75% 50%, black 25%, transparent 85%);
+  -webkit-mask-image: radial-gradient(circle at 75% 50%, black 25%, transparent 85%);
+}
+
+/* 2. Directional Market Flow (Bearish - Oxblood, approx 5% opacity) */
+.card-atmosphere-flow-bearish {
+  background-image: url('/atmosphere/flow-bearish.jpg');
+  background-size: cover;
+  background-position: center right;
+  background-repeat: no-repeat;
+  opacity: 0.055;
+  mix-blend-mode: screen;
+  mask-image: radial-gradient(circle at 75% 50%, black 25%, transparent 85%);
+  -webkit-mask-image: radial-gradient(circle at 75% 50%, black 25%, transparent 85%);
+}
+
+/* 3. AI Market Outlook / Research Intelligence (approx 6% opacity) */
+.card-atmosphere-intelligence {
+  background-image: url('/atmosphere/intelligence.jpg');
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  opacity: 0.06;
+  mix-blend-mode: screen;
+  mask-image: radial-gradient(circle at 65% 45%, black 25%, transparent 80%);
+  -webkit-mask-image: radial-gradient(circle at 65% 45%, black 25%, transparent 80%);
+}
+
+/* 4. Market Sentiment Radial Energy (approx 6% opacity) */
+.card-atmosphere-sentiment {
+  background-image: url('/atmosphere/sentiment-radial.jpg');
+  background-size: 130% 130%;
+  background-position: center 38%;
+  background-repeat: no-repeat;
+  opacity: 0.065;
+  mix-blend-mode: screen;
+  mask-image: radial-gradient(circle at center 40%, black 20%, transparent 75%);
+  -webkit-mask-image: radial-gradient(circle at center 40%, black 20%, transparent 75%);
+}
+
+/* 5. Risk Assessment Radial Energy (approx 5% opacity) */
+.card-atmosphere-risk {
+  background-image: url('/atmosphere/risk-radial.jpg');
+  background-size: 130% 130%;
+  background-position: center 38%;
+  background-repeat: no-repeat;
+  opacity: 0.055;
+  mix-blend-mode: screen;
+  mask-image: radial-gradient(circle at center 40%, black 20%, transparent 75%);
+  -webkit-mask-image: radial-gradient(circle at center 40%, black 20%, transparent 75%);
 }
 
 /* ── Glass Surface ── */

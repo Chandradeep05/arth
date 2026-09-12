@@ -17,6 +17,7 @@ import type { WSStatus } from '@/lib/useWebSocket';
 import DataFreshness from '@/components/shared/DataFreshness';
 import LoadingSkeleton from '@/components/shared/LoadingSkeleton';
 import type { MarketIndex } from '@/types/market';
+import { useStockAtmosphere } from '@/lib/atmosphere';
 
 /* ── Stocks to scan for gainers/losers (US market — reliable via Twelve Data) ── */
 /* 8 stocks = exactly 8 credits/min on free tier (one batch call) */
@@ -32,6 +33,63 @@ interface StockMover {
   change: number;
   change_percent: number;
   volume: number;
+}
+
+/* ── Stock Mover Card with Dynamic Atmospheric Subsurface ── */
+function StockMoverCard({ stock, index }: { stock: StockMover; index: number }) {
+  const atmosphere = useStockAtmosphere(stock.symbol);
+  const isPositive = (stock.change_percent ?? 0) >= 0;
+  const cleanSymbol = stock.symbol.replace('.NS', '').replace('.BO', '');
+  const isINR = stock.symbol.endsWith('.NS') || stock.symbol.endsWith('.BO');
+  const currencySymbol = isINR ? '₹' : '$';
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 6 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ delay: index * 0.06, duration: 0.3 }}
+    >
+      <Link
+        href={`/markets/${encodeURIComponent(stock.symbol)}`}
+        className="card p-3 sm:p-3.5 group block hover:border-white/[0.14] transition-all relative overflow-hidden"
+      >
+        <div className={`card-atmosphere ${atmosphere}`} aria-hidden="true" />
+        <div className="relative z-10">
+          <div className="flex items-center justify-between mb-1.5">
+            <div className="flex items-center gap-1.5 min-w-0">
+              <span className="font-mono text-xs font-bold text-white group-hover:text-emerald-400 transition-colors">
+                {cleanSymbol}
+              </span>
+              <span className="text-[10px] text-[var(--text-dim)] font-mono truncate max-w-[80px] sm:max-w-[110px]">
+                {stock.name}
+              </span>
+            </div>
+            {isPositive ? (
+              <TrendingUp className="w-3 h-3 text-emerald-400 shrink-0" />
+            ) : (
+              <TrendingDown className="w-3 h-3 text-red-400 shrink-0" />
+            )}
+          </div>
+
+          <div className="text-lg sm:text-xl font-heading font-bold text-white mb-1">
+            {currencySymbol}{formatNumber(stock.price)}
+          </div>
+
+          <div className="flex items-center gap-1.5">
+            <span
+              className={`inline-flex items-center gap-0.5 text-[11px] font-mono font-medium px-1.5 py-0.5 rounded-md ${
+                isPositive
+                  ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
+                  : 'bg-red-500/10 text-red-400 border border-red-500/20'
+              }`}
+            >
+              {isPositive ? '+' : ''}{stock.change.toFixed(2)} ({isPositive ? '+' : ''}{stock.change_percent.toFixed(2)}%)
+            </span>
+          </div>
+        </div>
+      </Link>
+    </motion.div>
+  );
 }
 
 /* ── Helper: format number with commas ── */
@@ -256,16 +314,15 @@ export default function DashboardPage() {
 
   const fetchDashboard = useCallback(async () => {
     try {
-      // 1. Fetch indices
+      // 1. Fetch live indices
       const indicesRes = await apiClient.get<{ indices: MarketIndex[] }>('/api/v1/market/indices');
       if (indicesRes.indices && indicesRes.indices.length > 0) {
         setIndices(indicesRes.indices);
         setApiConnected(true);
       }
-      // Set loading to false once indices are loaded so cards and system status display immediately
       setLoading(false);
 
-      // 2. Batch-fetch all stock quotes in ONE call (instead of 30 individual calls)
+      // 2. Batch-fetch all live stock quotes via original API
       const batchRes = await apiClient.post<{ success: boolean; data: any[] }>(
         '/api/v1/market/batch-quotes',
         { symbols: MARKET_STOCKS }
@@ -274,12 +331,10 @@ export default function DashboardPage() {
       const quotes = (batchRes.data || []) as StockMover[];
 
       if (quotes.length > 0) {
-        // Sort by change_percent descending for gainers
         const sorted = [...quotes].sort((a, b) => b.change_percent - a.change_percent);
         setGainers(sorted.filter(s => s.change_percent >= 0).slice(0, 5));
         setLosers(sorted.filter(s => s.change_percent < 0).reverse().slice(0, 5));
 
-        // Compute sector averages
         const sectorData: { name: string; change: number }[] = [];
         for (const [sector, symbols] of Object.entries(SECTOR_MAP)) {
           const sectorQuotes = quotes.filter(q => symbols.includes(q.symbol));
@@ -311,6 +366,7 @@ export default function DashboardPage() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 sm:gap-3.5">
         {/* Left: Philosophy Card (Reference Panel 01) */}
         <div className="card p-3.5 sm:p-4.5 lg:col-span-2 relative overflow-hidden flex flex-col justify-between">
+          <div className="card-atmosphere card-atmosphere-globe" aria-hidden="true" />
           <div className="relative z-10">
             <div className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-[10px] font-mono text-emerald-400 uppercase tracking-wider mb-2 sm:mb-2.5">
               <Activity className="w-3 h-3" />
@@ -324,15 +380,16 @@ export default function DashboardPage() {
             </p>
           </div>
 
-          <div className="mt-2.5 pt-2 sm:mt-3 sm:pt-2.5 border-t border-white/[0.06] flex items-center justify-between text-[10px] sm:text-[11px] font-mono text-[var(--text-dim)]">
+          <div className="relative z-10 mt-2.5 pt-2 sm:mt-3 sm:pt-2.5 border-t border-white/[0.06] flex items-center justify-between text-[10px] sm:text-[11px] font-mono text-[var(--text-dim)]">
             <span>Market Session: Open</span>
             <span>Real-time Quote Pipeline</span>
           </div>
         </div>
 
         {/* Right: Quick Controls & Session Status */}
-        <div className="card p-3.5 sm:p-4.5 flex flex-col justify-between">
-          <div>
+        <div className="card p-3.5 sm:p-4.5 flex flex-col justify-between relative overflow-hidden">
+          <div className="card-atmosphere card-atmosphere-intelligence" style={{ opacity: 0.045 }} aria-hidden="true" />
+          <div className="relative z-10">
             <div className="flex items-center justify-between mb-2">
               <span className="text-[10px] font-mono uppercase tracking-wider text-[var(--text-muted)]">
                 Network Stream
@@ -355,7 +412,7 @@ export default function DashboardPage() {
             </p>
           </div>
 
-          <div className="mt-2.5 pt-2 sm:mt-3 sm:pt-2.5 border-t border-white/[0.06] flex items-center justify-between">
+          <div className="relative z-10 mt-2.5 pt-2 sm:mt-3 sm:pt-2.5 border-t border-white/[0.06] flex items-center justify-between">
             <DataFreshness timestamp={lastUpdated} thresholdMs={60000} />
             <button
               onClick={fetchDashboard}
@@ -377,48 +434,9 @@ export default function DashboardPage() {
         </div>
       ) : gainers.length > 0 || losers.length > 0 ? (
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5 sm:gap-3">
-          {[...gainers.slice(0, 2), ...losers.slice(0, 2)].map((stock, i) => {
-            const isPositive = stock.change_percent >= 0;
-            return (
-              <motion.div
-                key={stock.symbol}
-                initial={{ opacity: 0, y: 6 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: i * 0.06, duration: 0.3 }}
-                className="card p-3 sm:p-3.5 group cursor-pointer hover:border-white/[0.12] transition-all"
-              >
-                <div className="flex items-center justify-between mb-1.5">
-                  <div className="flex items-center gap-1.5 min-w-0">
-                    <span className="font-mono text-xs font-bold text-white group-hover:text-emerald-400 transition-colors">
-                      {stock.symbol}
-                    </span>
-                    <span className="text-[10px] text-[var(--text-dim)] font-mono truncate max-w-[80px] sm:max-w-[110px]">
-                      {stock.name}
-                    </span>
-                  </div>
-                  {isPositive ? (
-                    <TrendingUp className="w-3 h-3 text-emerald-400 shrink-0" />
-                  ) : (
-                    <TrendingDown className="w-3 h-3 text-red-400 shrink-0" />
-                  )}
-                </div>
-
-                <div className="text-lg sm:text-xl font-heading font-bold text-white mb-1">
-                  ${formatNumber(stock.price)}
-                </div>
-
-                <div className="flex items-center gap-1.5">
-                  <span className={`inline-flex items-center gap-0.5 text-[11px] font-mono font-medium px-1.5 py-0.5 rounded-md ${
-                    isPositive
-                      ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
-                      : 'bg-red-500/10 text-red-400 border border-red-500/20'
-                  }`}>
-                    {isPositive ? '+' : ''}{stock.change.toFixed(2)} ({isPositive ? '+' : ''}{stock.change_percent.toFixed(2)}%)
-                  </span>
-                </div>
-              </motion.div>
-            );
-          })}
+          {[...gainers.slice(0, 2), ...losers.slice(0, 2)].map((stock, i) => (
+            <StockMoverCard key={stock.symbol} stock={stock} index={i} />
+          ))}
         </div>
       ) : (
         <div className="card p-4">

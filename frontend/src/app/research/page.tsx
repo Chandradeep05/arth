@@ -166,38 +166,41 @@ export default function ResearchPage() {
             initial={{ opacity: 0, y: 12 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.1 }}
-            className="card p-6 max-w-2xl"
+            className="card p-6 max-w-2xl relative overflow-hidden"
           >
-            <div className="flex items-center gap-2 mb-4">
-              <Sparkles className="w-4 h-4 text-[var(--green)]" />
-              <h2 className="font-heading text-xs font-bold uppercase tracking-wider text-[var(--text)]">
-                Generate Institutional Report
-              </h2>
-            </div>
+            <div className="card-atmosphere card-atmosphere-intelligence" style={{ opacity: 0.05 }} aria-hidden="true" />
+            <div className="relative z-10">
+              <div className="flex items-center gap-2 mb-4">
+                <Sparkles className="w-4 h-4 text-[var(--green)]" />
+                <h2 className="font-heading text-xs font-bold uppercase tracking-wider text-[var(--text)]">
+                  Generate Institutional Report
+                </h2>
+              </div>
 
-            <form onSubmit={handleStandardGenerate} className="flex gap-2 relative">
-              <input
-                type="text"
-                value={symbol}
-                onChange={(e) => setSymbol(e.target.value)}
-                placeholder="Enter stock symbol (e.g., RELIANCE.NS, AAPL, NVDA)"
-                className="flex-1 px-4 py-3 rounded-full bg-[var(--surface-2)] border border-[var(--border)]
-                           text-[var(--text)] font-mono text-xs placeholder:text-[var(--text-dim)]
-                           focus:outline-none focus:border-[var(--green)]/50 focus:ring-1 focus:ring-[var(--green)]/30
-                           transition-all"
-              />
-              <button
-                type="submit"
-                className="px-5 py-2.5 rounded-full bg-[var(--green)] text-black text-xs font-bold
-                           uppercase tracking-wider hover:bg-[var(--green-hover)] transition-all cursor-pointer
-                           flex items-center gap-2 shadow-sm"
-              >
-                Analyze <ArrowRight className="w-3.5 h-3.5" />
-              </button>
-            </form>
-            <p className="text-[11px] text-[var(--text-dim)] mt-3 font-mono">
-              Powered by Groq LLM · Sourced from institutional filings & real-time feeds
-            </p>
+              <form onSubmit={handleStandardGenerate} className="flex gap-2 relative">
+                <input
+                  type="text"
+                  value={symbol}
+                  onChange={(e) => setSymbol(e.target.value)}
+                  placeholder="Enter stock symbol (e.g., RELIANCE.NS, AAPL, NVDA)"
+                  className="flex-1 px-4 py-3 rounded-full bg-[var(--surface-2)] border border-[var(--border)]
+                             text-[var(--text)] font-mono text-xs placeholder:text-[var(--text-dim)]
+                             focus:outline-none focus:border-[var(--green)]/50 focus:ring-1 focus:ring-[var(--green)]/30
+                             transition-all"
+                />
+                <button
+                  type="submit"
+                  className="px-5 py-2.5 rounded-full bg-[var(--green)] text-black text-xs font-bold
+                             uppercase tracking-wider hover:bg-[var(--green-hover)] transition-all cursor-pointer
+                             flex items-center gap-2 shadow-sm"
+                >
+                  Analyze <ArrowRight className="w-3.5 h-3.5" />
+                </button>
+              </form>
+              <p className="text-[11px] text-[var(--text-dim)] mt-3 font-mono">
+                Powered by Groq LLM · Sourced from institutional filings & real-time feeds
+              </p>
+            </div>
           </motion.div>
 
           {/* What's Included */}
