@@ -25,9 +25,15 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 @router.get("/me")
 async def get_current_profile(
+    request: Request,
     user: UserContext = Depends(get_current_user),
 ) -> dict:
-    """Return the authenticated user's profile info for the frontend."""
+    """Return the authenticated user's profile info for the frontend.
+    Also updates last_login — this endpoint is called once per session,
+    not per API request, so the semantics are correct.
+    """
+    db = request.state.db
+    await db.execute("UPDATE profiles SET last_login = now() WHERE id = $1", user.user_id)
     return {
         "user_id": str(user.user_id),
         "email": user.email,

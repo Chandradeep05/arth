@@ -171,11 +171,6 @@ async def _resolve_or_create_profile(
         user_id,
     )
     if row:
-        # Update last_login for existing users
-        await db.execute(
-            "UPDATE profiles SET last_login = now() WHERE id = $1",
-            user_id,
-        )
         return row["access_status"], row["role"]
 
     # First-time user -- create profile atomically (includes email for admin queries)
@@ -237,7 +232,10 @@ async def get_current_user(
     token = _extract_bearer_token(request)
     payload = _decode_supabase_jwt(token, settings)
 
-    user_id = UUID(payload["sub"])
+    try:
+        user_id = UUID(payload["sub"])
+    except (ValueError, KeyError):
+        raise HTTPException(status_code=401, detail="Invalid user identity in token")
     email = payload.get("email", "")
     user_meta = payload.get("user_metadata", {})
     display_name = user_meta.get("full_name") if isinstance(user_meta, dict) else None

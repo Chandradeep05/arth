@@ -73,7 +73,14 @@ async def delete_account(
                 detail="Cannot reach authentication service. Try again later.",
             )
     else:
-        logger.warning("supabase_auth_delete_skipped", reason="Supabase not configured")
+        # In production, refuse to delete if Supabase isn't configured —
+        # deleting only the profile while auth.users survives is worse than refusing.
+        if settings.app_env.value == "production":
+            raise HTTPException(
+                status_code=503,
+                detail="Account deletion is temporarily unavailable. Please try again later.",
+            )
+        logger.warning("supabase_auth_delete_skipped", reason="Supabase not configured (dev mode)")
 
     # Step 2: Delete profile + CASCADE all child tables
     await db.execute("DELETE FROM profiles WHERE id = $1", user.user_id)

@@ -107,18 +107,24 @@ async def _run_eval(db, redis, now: datetime) -> dict:
 
         if condition and state == "armed":
             direction = "above" if atype == "price_above" else "below"
-            await db.execute(
-                "INSERT INTO notifications (user_id, alert_id, title, body) VALUES ($1, $2, $3, $4)",
-                alert["user_id"], alert["id"],
-                f"{symbol} {direction} {threshold}",
-                f"Price: {current:.2f} | Threshold: {threshold:.2f}",
-            )
-            await db.execute(
-                "UPDATE alerts SET trigger_state = $1, last_evaluated_value = $2, last_triggered_at = $3 WHERE id = $4",
-                "triggered", current, now, alert["id"],
-            )
-            triggered += 1
-            logger.info("alert_triggered", symbol=symbol, price=current, threshold=threshold)
+            # Atomic: state transition is the authoritative idempotency guard.
+            # If UPDATE matches 0 rows, another evaluator already triggered.
+            async with db.transaction():
+                updated = await db.execute(
+                    "UPDATE alerts SET trigger_state = $1, last_evaluated_value = $2, last_triggered_at = $3 "
+                    "WHERE id = $4 AND trigger_state = 'armed'",
+                    "triggered", current, now, alert["id"],
+                )
+                # Only insert notification if we actually flipped the state
+                if updated and updated != "UPDATE 0":
+                    await db.execute(
+                        "INSERT INTO notifications (user_id, alert_id, title, body) VALUES ($1, $2, $3, $4)",
+                        alert["user_id"], alert["id"],
+                        f"{symbol} {direction} {threshold}",
+                        f"Price: {current:.2f} | Threshold: {threshold:.2f}",
+                    )
+                    triggered += 1
+                    logger.info("alert_triggered", symbol=symbol, price=current, threshold=threshold)
         elif cleared and state == "triggered":
             await db.execute(
                 "UPDATE alerts SET trigger_state = $1, last_evaluated_value = $2 WHERE id = $3",
@@ -168,7 +174,7 @@ async def warm_alert_symbols(
                 await redis.set(
                     f"quote:{symbol}",
                     json.dumps(res.data),
-                    ex=300
+                    ex=1860  # 31 minutes — survives between 30-min warmup cycles
                 )
                 warmed += 1
         except Exception as e:
