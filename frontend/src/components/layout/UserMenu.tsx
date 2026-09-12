@@ -1,12 +1,13 @@
-﻿"use client";
+"use client";
 
 // UserMenu -- avatar dropdown shown in Header when user is signed in
 // Shows: user email, access status badge, links to profile/settings, sign out
 
 import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { LogOut, User, Bell } from "lucide-react";
+import { LogOut, User, Bell, Shield } from "lucide-react";
 import { supabase } from "@/lib/supabase/client";
+import { useAuth } from "@/lib/auth/AuthProvider";
 
 interface UserInfo {
   email: string;
@@ -18,6 +19,7 @@ export default function UserMenu() {
   const [open, setOpen] = useState(false);
   const [user, setUser] = useState<UserInfo | null>(null);
   const [unreadCount, setUnreadCount] = useState(0);
+  const { isAdmin } = useAuth();
   const menuRef = useRef<HTMLDivElement>(null);
   const router = useRouter();
 
@@ -113,6 +115,22 @@ export default function UserMenu() {
               <Bell className="h-4 w-4 text-[var(--text-muted)]" />
               Alerts &amp; Notifications
             </button>
+            <button
+              onClick={() => { router.push("/research/saved"); setOpen(false); }}
+              className="w-full flex items-center gap-3 px-4 py-2 text-sm text-[var(--text)] hover:bg-[var(--surface-2)] transition-colors"
+            >
+              <User className="h-4 w-4 text-[var(--text-muted)]" />
+              Saved Research
+            </button>
+            {isAdmin && (
+              <button
+                onClick={() => { router.push("/admin"); setOpen(false); }}
+                className="w-full flex items-center gap-3 px-4 py-2 text-sm text-[var(--text)] hover:bg-[var(--surface-2)] transition-colors"
+              >
+                <Shield className="h-4 w-4 text-[var(--text-muted)]" />
+                Admin Dashboard
+              </button>
+            )}
           </div>
 
           {/* Sign out */}

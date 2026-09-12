@@ -70,21 +70,42 @@ async def check_user_quota(
     now = time.time()
     window_start = now - win_secs
 
-    # Sliding window: remove entries outside the window, count remaining, add current
-    pipe = redis.pipeline()
-    pipe.zremrangebyscore(key, 0, window_start)
-    pipe.zcard(key)
-    pipe.zadd(key, {str(now): now})
-    pipe.expire(key, win_secs + 10)
-    results = await pipe.execute()
+    # Atomic quota check via Lua script:
+    # 1. Remove expired entries
+    # 2. Count remaining
+    # 3. If under limit, add new entry and return 1 (allowed)
+    # 4. If at/over limit, return 0 (rejected)
+    _QUOTA_LUA = """
+    redis.call('zremrangebyscore', KEYS[1], 0, ARGV[1])
+    local count = redis.call('zcard', KEYS[1])
+    if count < tonumber(ARGV[2]) then
+        redis.call('zadd', KEYS[1], ARGV[3], ARGV[4])
+        redis.call('expire', KEYS[1], tonumber(ARGV[5]))
+        return count + 1
+    else
+        redis.call('expire', KEYS[1], tonumber(ARGV[5]))
+        return -1
+    end
+    """
+    import secrets as _secrets
+    member = f"{now}:{_secrets.token_hex(4)}"  # Unique member to prevent collision
+    result = await redis.eval(
+        _QUOTA_LUA,
+        1,  # number of keys
+        key,  # KEYS[1]
+        str(window_start),  # ARGV[1] - window start
+        str(max_req),       # ARGV[2] - limit
+        str(now),           # ARGV[3] - score
+        member,             # ARGV[4] - unique member
+        str(win_secs + 10), # ARGV[5] - TTL
+    )
 
-    current_count = results[1]  # count before adding the new request
-    if current_count >= max_req:
+    if result == -1:
         logger.warning(
             "user_quota_exceeded",
             user_id=str(user_id),
             endpoint_group=endpoint_group,
-            count=current_count,
+            count=max_req,
             limit=max_req,
             window_seconds=win_secs,
         )
@@ -101,6 +122,6 @@ async def check_user_quota(
         "user_quota_ok",
         user_id=str(user_id),
         endpoint_group=endpoint_group,
-        count=current_count + 1,
+        count=result,
         limit=max_req,
     )

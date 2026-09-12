@@ -1,22 +1,22 @@
-name: Alert Evaluator
+name: Alert Warmup
 
 on:
   schedule:
-    - cron: '*/5 * * * *'
+    - cron: '*/30 * * * *'
   workflow_dispatch:
 
 jobs:
-  evaluate-alerts:
+  warmup-alerts:
     runs-on: ubuntu-latest
-    timeout-minutes: 2
+    timeout-minutes: 5
     steps:
-      - name: Evaluate price alerts
+      - name: Warm up alert symbols
         run: |
           response=$(curl -s -o /dev/null -w "%{http_code}" \
             -X POST \
             -H "X-Internal-Secret: ${{ secrets.INTERNAL_JOB_SECRET }}" \
             -H "Content-Type: application/json" \
-            "${{ secrets.BACKEND_URL }}/api/v1/internal/jobs/evaluate-alerts" \
+            "${{ secrets.BACKEND_URL }}/api/v1/internal/jobs/warm-alert-symbols" \
             || echo "000")
           echo "Response: $response"
           if [ "$response" = "000" ]; then
@@ -27,4 +27,4 @@ jobs:
             echo "Unexpected status $response"
             exit 1
           fi
-          echo "Alert evaluation completed."
+          echo "Alert warmup completed."

@@ -2,16 +2,18 @@
 ARTH Phase 4 -- Account Deletion
 
 DELETE /api/v1/user/account
-    Deletes all user data and the profile itself.
-    Cascading FKs handle watchlists, conversations, messages, alerts, etc.
-    Requires active user authentication (can't delete someone else's account).
+    Two-part delete:
+    1. Delete Supabase auth.users record (via Admin API)
+    2. Delete profiles row (CASCADE handles all child tables)
 
-PRD Section 1.3: "Account deletion: a real (if simple) 'delete my account and data' path."
+    If step 1 fails, abort — don't leave user in half-deleted state.
 """
 from __future__ import annotations
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 
+from app.config import get_settings
 from app.core.auth import UserContext, require_active_user
 from app.core.logging import get_logger
 
@@ -25,23 +27,13 @@ async def delete_account(
     user: UserContext = Depends(require_active_user),
 ) -> dict:
     """
-    Permanently delete the authenticated user's account and all associated data.
+    Permanently delete the authenticated user's account and all data.
 
-    Because all tables have ON DELETE CASCADE referencing profiles(id),
-    deleting the profile row cascades to:
-    - watchlists + watchlist_items
-    - conversations + messages
-    - saved_research
-    - alerts + notifications
-    - background_jobs
-    - invite_codes (created_by / used_by set to NULL via ON DELETE SET NULL)
+    1. Deletes Supabase auth.users via Admin API (invalidates JWT)
+    2. Deletes profiles row (CASCADE to all child tables)
     """
     db = request.state.db
-
-    # Double-check the profile exists (defense against race conditions)
-    exists = await db.fetchval("SELECT id FROM profiles WHERE id = $1", user.user_id)
-    if not exists:
-        raise HTTPException(status_code=404, detail="Profile not found")
+    settings = get_settings()
 
     # Prevent the last admin from deleting themselves
     role = await db.fetchval("SELECT role FROM profiles WHERE id = $1", user.user_id)
@@ -53,7 +45,37 @@ async def delete_account(
                 detail="Cannot delete the last admin account. Transfer admin role first.",
             )
 
-    # CASCADE handles all child tables
+    # Step 1: Delete Supabase Auth user (must succeed before touching our DB)
+    if settings.supabase_url and settings.supabase_service_key:
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.delete(
+                    f"{settings.supabase_url}/auth/v1/admin/users/{user.user_id}",
+                    headers={
+                        "Authorization": f"Bearer {settings.supabase_service_key}",
+                        "apikey": settings.supabase_service_key,
+                    },
+                )
+                if resp.status_code not in (200, 204):
+                    logger.error(
+                        "supabase_auth_delete_failed",
+                        status=resp.status_code,
+                        body=resp.text[:200],
+                    )
+                    raise HTTPException(
+                        status_code=502,
+                        detail="Failed to delete authentication account. Try again later.",
+                    )
+        except httpx.RequestError as e:
+            logger.error("supabase_auth_delete_network_error", error=str(e))
+            raise HTTPException(
+                status_code=502,
+                detail="Cannot reach authentication service. Try again later.",
+            )
+    else:
+        logger.warning("supabase_auth_delete_skipped", reason="Supabase not configured")
+
+    # Step 2: Delete profile + CASCADE all child tables
     await db.execute("DELETE FROM profiles WHERE id = $1", user.user_id)
 
     logger.info(

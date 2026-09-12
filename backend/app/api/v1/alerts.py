@@ -64,12 +64,44 @@ async def list_alerts(request: Request, user: UserContext = Depends(require_acti
 @router.post("")
 async def create_alert(body: CreateAlertRequest, request: Request, user: UserContext = Depends(require_active_user)) -> dict:
     db = request.state.db
+    
+    # Duplicate prevention
+    existing = await db.fetchval(
+        "SELECT id FROM alerts WHERE user_id = $1 AND symbol = $2 AND alert_type = $3 AND threshold = $4 AND is_active = true",
+        user.user_id, body.symbol, body.alert_type, body.threshold
+    )
+    if existing:
+        raise HTTPException(status_code=409, detail="Identical active alert already exists.")
+        
     count = await db.fetchval("SELECT COUNT(*) FROM alerts WHERE user_id = $1 AND is_active = true", user.user_id)
     if count >= 50:
         raise HTTPException(status_code=429, detail="Max 50 active alerts reached.")
+        
+    # Check redis cache to determine initial trigger_state
+    redis = getattr(request.app.state, "redis", None)
+    initial_state = "armed"
+    if redis:
+        import json
+        for key in [f"quote:{body.symbol}", f"market:quote:{body.symbol}", f"tick:{body.symbol}"]:
+            raw = await redis.get(key)
+            if raw:
+                try:
+                    data = json.loads(raw)
+                    price = (data.get("price") or data.get("close") or
+                             data.get("last_price") or
+                             (data.get("data") or {}).get("price"))
+                    if price:
+                        price = float(price)
+                        condition = (body.alert_type == "price_above" and price >= body.threshold) or (body.alert_type == "price_below" and price <= body.threshold)
+                        if condition:
+                            initial_state = "triggered"
+                        break
+                except Exception:
+                    continue
+
     row = await db.fetchrow(
-        "INSERT INTO alerts (user_id, symbol, alert_type, threshold) VALUES ($1, $2, $3, $4) RETURNING id, symbol, alert_type, threshold, is_active, trigger_state, created_at",
-        user.user_id, body.symbol, body.alert_type, body.threshold,
+        "INSERT INTO alerts (user_id, symbol, alert_type, threshold, trigger_state) VALUES ($1, $2, $3, $4, $5) RETURNING id, symbol, alert_type, threshold, is_active, trigger_state, created_at",
+        user.user_id, body.symbol, body.alert_type, body.threshold, initial_state,
     )
     return dict(row)
 

@@ -3,6 +3,8 @@ import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
 
 // Routes that require authentication
+// NOTE: /research is intentionally PUBLIC (demo page for interviewers).
+//       Only /research/saved (personal feature) is gated.
 const PROTECTED_ROUTES = [
   '/watchlist',
   '/assistant',
@@ -10,6 +12,7 @@ const PROTECTED_ROUTES = [
   '/notifications',
   '/admin',
   '/settings',
+  '/research/saved',
 ]
 
 // Routes that should redirect to dashboard if already authenticated
@@ -82,6 +85,7 @@ export const config = {
     '/notifications/:path*',
     '/admin/:path*',
     '/settings/:path*',
+    '/research/saved/:path*',
     '/login',
   ],
 }

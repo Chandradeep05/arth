@@ -1,385 +1,330 @@
 'use client';
 
-import { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import {
-  Bot, Send, User, Loader2, Sparkles, TrendingUp, BarChart3,
-  ShieldAlert, MessageSquare, Trash2, ArrowDown,
-} from 'lucide-react';
-import Disclaimer from '@/components/shared/Disclaimer';
-import { apiClient } from '@/lib/api';
-import { STREAMING_API_URL } from '@/lib/constants';
+import { MessageSquare, Plus, Trash2, Edit3, Send, Bot, User, Menu, X, Loader2 } from 'lucide-react';
+import { useAuth } from '@/lib/auth/AuthProvider';
+import { useAuthenticatedApi } from '@/lib/auth/useAuthenticatedApi';
 
-interface ChatMessage {
+const API_URL = process.env.NEXT_PUBLIC_API_URL || 'https://arth-rdd5.onrender.com';
+
+interface Conversation {
   id: string;
-  role: 'user' | 'assistant' | 'system';
+  title: string;
+  last_message_at: string;
+  message_count: number;
+}
+
+interface Message {
+  id: string;
+  role: 'user' | 'assistant';
   content: string;
-  timestamp: Date;
-  toolsUsed?: string[];
-  isStreaming?: boolean;
 }
 
-const SUGGESTED_QUERIES = [
-  { icon: TrendingUp, text: 'How is RELIANCE.NS doing today?' },
-  { icon: BarChart3, text: 'Analyze TCS.NS financials' },
-  { icon: ShieldAlert, text: 'What are the risks for INFY.NS?' },
-  { icon: Sparkles, text: 'Compare HDFCBANK.NS vs ICICIBANK.NS' },
-];
-
-function generateId(): string {
-  return `msg-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-}
-
-/* ── Markdown-lite renderer ── */
-function renderContent(text: string) {
-  const lines = text.split('\n');
-  return lines.map((line, i) => {
-    if (line.startsWith('## ')) {
-      return <h3 key={i} className="font-heading text-sm font-bold text-[var(--text)] mt-3 mb-1">{renderInline(line.slice(3))}</h3>;
-    }
-    if (line.startsWith('### ')) {
-      return <h4 key={i} className="font-heading text-xs font-bold text-[var(--text-muted)] mt-2 mb-1">{renderInline(line.slice(4))}</h4>;
-    }
-    if (line.startsWith('- ') || line.startsWith('* ')) {
-      return <li key={i} className="text-sm text-[var(--text)] ml-4 mb-0.5 list-disc list-inside">{renderInline(line.slice(2))}</li>;
-    }
-    if (line.startsWith('⚠') || line.startsWith('---')) {
-      return <p key={i} className="text-[11px] text-[var(--gold)] font-mono mt-3 py-1">{line}</p>;
-    }
-    if (line.trim() === '') return <div key={i} className="h-1.5" />;
-    return <p key={i} className="text-sm text-[var(--text)] leading-relaxed mb-1">{renderInline(line)}</p>;
-  });
-}
-
-function renderInline(text: string) {
-  // Handle **bold**
-  const parts = text.split(/(\*\*.*?\*\*)/g);
-  return parts.map((part, i) => {
-    if (part.startsWith('**') && part.endsWith('**')) {
-      return <strong key={i} className="font-semibold text-[var(--accent)]">{part.slice(2, -2)}</strong>;
-    }
-    return part;
-  });
-}
-
-/* ── Chat bubble component ── */
-function ChatBubble({ message }: { message: ChatMessage }) {
-  const isUser = message.role === 'user';
-  return (
-    <motion.div
-      initial={{ opacity: 0, y: 8 }}
-      animate={{ opacity: 1, y: 0 }}
-      className={`flex gap-3 ${isUser ? 'justify-end' : ''}`}
-    >
-      {!isUser && (
-        <div className="w-7 h-7 rounded-full bg-[var(--accent)]/15 flex items-center justify-center shrink-0 mt-1">
-          <Bot className="w-4 h-4 text-[var(--accent)]" />
-        </div>
-      )}
-
-      <div className={`max-w-[85%] ${isUser
-        ? 'rounded-2xl rounded-tr-sm px-4 py-3 bg-[var(--accent)]/10 border border-[var(--accent)]/20'
-        : 'rounded-2xl rounded-tl-sm px-4 py-3 card'
-      }`}>
-        {/* Tool usage badges */}
-        {!isUser && message.toolsUsed && message.toolsUsed.length > 0 && (
-          <div className="flex flex-wrap gap-1 mb-2">
-            {message.toolsUsed.map((tool, i) => (
-              <span key={i} className="badge badge-blue text-[9px] font-mono">
-                📊 {tool}
-              </span>
-            ))}
-          </div>
-        )}
-
-        <div className="prose-arth">
-          {isUser ? (
-            <p className="text-sm text-[var(--text)]">{message.content}</p>
-          ) : (
-            renderContent(message.content)
-          )}
-          {message.isStreaming && (
-            <span className="inline-block w-2 h-4 bg-[var(--accent)] animate-pulse ml-0.5" />
-          )}
-        </div>
-
-        <div className="text-[10px] font-mono text-[var(--text-dim)] mt-2">
-          {message.timestamp.toLocaleTimeString()}
-        </div>
-      </div>
-
-      {isUser && (
-        <div className="w-7 h-7 rounded-full bg-[var(--surface-2)] flex items-center justify-center shrink-0 mt-1">
-          <User className="w-4 h-4 text-[var(--text-muted)]" />
-        </div>
-      )}
-    </motion.div>
-  );
-}
-
-/* ═══════════════════════════════════════════════════════════════
-   AI Assistant Page
-   ═══════════════════════════════════════════════════════════════ */
 export default function AssistantPage() {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const { session } = useAuth();
+  const api = useAuthenticatedApi();
+  
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
+  const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const [sessionId, setSessionId] = useState<string | null>(null);
-  const [entities, setEntities] = useState<string[]>([]);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
-  const chatContainerRef = useRef<HTMLDivElement>(null);
+  
+  useEffect(() => {
+    fetchConversations();
+  }, []);
+  
+  useEffect(() => {
+    if (activeConversationId) {
+      // In a real app we'd fetch messages for this conversation here.
+      // Assuming a GET /user/conversations/{id}/messages endpoint or similar.
+      // For now, we'll just clear messages on switch if we can't fetch them.
+      setMessages([]);
+    }
+  }, [activeConversationId]);
 
-  const scrollToBottom = useCallback(() => {
+  useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, []);
+  }, [messages]);
 
-  useEffect(() => {
-    scrollToBottom();
-  }, [messages, scrollToBottom]);
+  const fetchConversations = async () => {
+    try {
+      const data = await api.get('/user/conversations');
+      setConversations(data || []);
+      if (data && data.length > 0 && !activeConversationId) {
+        setActiveConversationId(data[0].id);
+      }
+    } catch (error) {
+      console.error('Failed to fetch conversations:', error);
+    }
+  };
 
-  // Add welcome message on first mount
-  useEffect(() => {
-    setMessages([{
-      id: generateId(),
-      role: 'assistant',
-      content: `Hello! I'm **ARTH**, your AI financial research assistant.\n\nI can analyze stocks, explain market movements, compare companies, and assess risks. Just mention a stock symbol (like **RELIANCE.NS** or **AAPL**) and I'll fetch live data.\n\nWhat would you like to explore?`,
-      timestamp: new Date(),
-    }]);
-  }, []);
+  const createConversation = async () => {
+    try {
+      const data = await api.post('/user/conversations', { title: 'New Conversation' });
+      setConversations([data, ...conversations]);
+      setActiveConversationId(data.id);
+      setMessages([]);
+    } catch (error) {
+      console.error('Failed to create conversation:', error);
+    }
+  };
 
-  const handleSubmit = async (text?: string) => {
-    const msg = text || input.trim();
-    if (!msg || isLoading) return;
+  const deleteConversation = async (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    try {
+      await api.delete(`/user/conversations/${id}`);
+      setConversations(conversations.filter(c => c.id !== id));
+      if (activeConversationId === id) {
+        setActiveConversationId(null);
+        setMessages([]);
+      }
+    } catch (error) {
+      console.error('Failed to delete conversation:', error);
+    }
+  };
 
-    const userMessage: ChatMessage = {
-      id: generateId(),
-      role: 'user',
-      content: msg,
-      timestamp: new Date(),
-    };
+  const sendMessage = async (e?: React.FormEvent) => {
+    e?.preventDefault();
+    if (!input.trim() || isLoading) return;
 
-    setMessages(prev => [...prev, userMessage]);
+    let convId = activeConversationId;
+    if (!convId) {
+      try {
+        const newConv = await api.post('/user/conversations', { title: input.substring(0, 30) });
+        setConversations([newConv, ...conversations]);
+        convId = newConv.id;
+        setActiveConversationId(convId);
+      } catch (err) {
+        console.error(err);
+        return;
+      }
+    }
+
+    const userMsg: Message = { id: Date.now().toString(), role: 'user', content: input };
+    setMessages(prev => [...prev, userMsg]);
     setInput('');
     setIsLoading(true);
 
-    // Create placeholder for streaming response
-    const assistantId = generateId();
-    const assistantMessage: ChatMessage = {
-      id: assistantId,
-      role: 'assistant',
-      content: '',
-      timestamp: new Date(),
-      toolsUsed: [],
-      isStreaming: true,
-    };
-    setMessages(prev => [...prev, assistantMessage]);
+    const assistantMsgId = (Date.now() + 1).toString();
+    setMessages(prev => [...prev, { id: assistantMsgId, role: 'assistant', content: '' }]);
 
     try {
-      // SSE streaming
-      // Use direct backend URL for SSE (Next.js rewrites may buffer streams)
-      const url = `${STREAMING_API_URL}/api/v1/assistant/chat`;
-      const response = await fetch(url, {
+      // First save the message to DB
+      await api.post(`/user/conversations/${convId}/messages`, { content: userMsg.content });
+      
+      // Then start SSE stream
+      const response = await fetch(`${API_URL}/api/v1/assistant/chat`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          message: msg,
-          session_id: sessionId,
-          stream: true,
-        }),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session?.access_token}`
+        },
+        body: JSON.stringify({ message: userMsg.content, session_id: convId, stream: true })
       });
 
-      if (!response.ok || !response.body) {
-        throw new Error(`HTTP ${response.status}`);
-      }
-
-      const reader = response.body.getReader();
+      if (!response.ok) throw new Error('Stream failed');
+      
+      const reader = response.body?.getReader();
       const decoder = new TextDecoder();
-      let buffer = '';
-      let accumulatedContent = '';
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() ?? '';
-
-        for (const line of lines) {
-          if (!line.startsWith('data: ')) continue;
-          const jsonStr = line.slice(6).trim();
-          if (!jsonStr) continue;
-
-          try {
-            const event = JSON.parse(jsonStr);
-
-            if (event.type === 'session' && event.session_id) {
-              setSessionId(event.session_id);
-            } else if (event.type === 'tools' && event.symbols) {
-              setMessages(prev => prev.map(m =>
-                m.id === assistantId
-                  ? { ...m, toolsUsed: event.symbols.map((s: string) => `quote:${s}`) }
-                  : m
-              ));
-            } else if (event.type === 'token') {
-              accumulatedContent += event.content.replace(/\\n/g, '\n');
-              setMessages(prev => prev.map(m =>
-                m.id === assistantId
-                  ? { ...m, content: accumulatedContent }
-                  : m
-              ));
-            } else if (event.type === 'done') {
-              if (event.entities) {
-                setEntities(event.entities);
+      
+      if (reader) {
+        let aiContent = '';
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          
+          const chunk = decoder.decode(value, { stream: true });
+          const lines = chunk.split('\n');
+          
+          for (const line of lines) {
+            if (line.startsWith('data: ') && line !== 'data: [DONE]') {
+              try {
+                const data = JSON.parse(line.slice(6));
+                if (data.delta) {
+                  aiContent += data.delta;
+                  setMessages(prev => prev.map(m => m.id === assistantMsgId ? { ...m, content: aiContent } : m));
+                }
+              } catch (e) {
+                console.error('SSE parse error:', e);
               }
-              setMessages(prev => prev.map(m =>
-                m.id === assistantId
-                  ? { ...m, isStreaming: false }
-                  : m
-              ));
             }
-          } catch {
-            // Skip malformed events
           }
         }
       }
     } catch (error) {
-      const errMsg = error instanceof Error && error.message.includes('fetch')
-        ? 'Could not connect to the backend server. Make sure it is running.'
-        : 'AI assistant encountered an error. The GROQ_API_KEY may not be configured, or the backend may be unavailable.';
-      setMessages(prev => prev.map(m =>
-        m.id === assistantId
-          ? {
-            ...m,
-            content: errMsg,
-            isStreaming: false,
-          }
-          : m
-      ));
+      console.error('Chat error:', error);
+      setMessages(prev => prev.map(m => m.id === assistantMsgId ? { ...m, content: 'Error: Could not get response.' } : m));
     } finally {
       setIsLoading(false);
-      inputRef.current?.focus();
     }
   };
 
-  const handleClear = () => {
-    setMessages([{
-      id: generateId(),
-      role: 'assistant',
-      content: 'Chat cleared. How can I help you?',
-      timestamp: new Date(),
-    }]);
-    setSessionId(null);
-    setEntities([]);
+  const renderMarkdown = (content: string) => {
+    // Simple markdown renderer for code blocks and basic text
+    const parts = content.split('```');
+    return parts.map((part, index) => {
+      if (index % 2 === 1) {
+        // Code block
+        const newlineIdx = part.indexOf('\n');
+        const lang = newlineIdx > -1 ? part.slice(0, newlineIdx) : '';
+        const code = newlineIdx > -1 ? part.slice(newlineIdx + 1) : part;
+        return (
+          <div key={index} className="my-2 rounded bg-zinc-950 border border-zinc-800 overflow-hidden">
+            {lang && <div className="px-3 py-1 bg-zinc-900 text-xs text-zinc-400 border-b border-zinc-800">{lang}</div>}
+            <pre className="p-3 overflow-x-auto text-sm text-zinc-300">
+              <code>{code}</code>
+            </pre>
+          </div>
+        );
+      }
+      // Text
+      return <div key={index} className="whitespace-pre-wrap">{part}</div>;
+    });
   };
 
   return (
-    <div className="flex flex-col h-[calc(100vh-80px)] animate-fadeIn">
-      <Disclaimer />
-
-      {/* Header */}
-      <div className="flex items-center justify-between mb-3">
-        <div>
-          <h1 className="font-heading text-xl font-extrabold tracking-tight text-[var(--text)]">
-            AI Assistant
-          </h1>
-          <p className="text-sm text-[var(--text-muted)] mt-0.5 font-mono">
-            Conversational financial intelligence powered by Groq
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          {entities.length > 0 && (
-            <div className="flex gap-1">
-              {entities.slice(-3).map(e => (
-                <span key={e} className="badge badge-blue text-[10px] font-mono">{e}</span>
-              ))}
-            </div>
-          )}
-          <button
-            onClick={handleClear}
-            className="p-2 rounded-lg hover:bg-[var(--surface-2)] text-[var(--text-dim)]
-                       hover:text-[var(--red)] transition-colors cursor-pointer"
-            title="Clear chat"
-          >
-            <Trash2 className="w-4 h-4" />
-          </button>
-        </div>
-      </div>
-
-      {/* Chat Messages */}
-      <div
-        ref={chatContainerRef}
-        className="flex-1 overflow-y-auto space-y-4 px-1 py-4 scrollbar-thin"
-      >
-        <AnimatePresence>
-          {messages.map(msg => (
-            <ChatBubble key={msg.id} message={msg} />
-          ))}
-        </AnimatePresence>
-
-        {/* Suggested queries (only when no user messages yet) */}
-        {messages.length <= 1 && (
+    <div className="flex h-screen bg-zinc-950 text-zinc-100 font-sans">
+      {/* Mobile Sidebar Overlay */}
+      <AnimatePresence>
+        {isSidebarOpen && (
           <motion.div
-            initial={{ opacity: 0, y: 12 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.3 }}
-            className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-w-2xl mx-auto mt-4"
-          >
-            {SUGGESTED_QUERIES.map((q) => (
-              <button
-                key={q.text}
-                onClick={() => handleSubmit(q.text)}
-                className="card p-3 flex items-center gap-3 text-left hover:border-[var(--accent)]/30
-                           transition-all cursor-pointer group"
-              >
-                <q.icon className="w-4 h-4 text-[var(--text-dim)] group-hover:text-[var(--accent)] transition-colors shrink-0" />
-                <span className="text-xs text-[var(--text-muted)] group-hover:text-[var(--text)] transition-colors">
-                  {q.text}
-                </span>
-              </button>
-            ))}
-          </motion.div>
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-black/50 z-40 md:hidden"
+            onClick={() => setIsSidebarOpen(false)}
+          />
         )}
+      </AnimatePresence>
 
-        <div ref={messagesEndRef} />
+      {/* Sidebar */}
+      <div className={`fixed inset-y-0 left-0 z-50 w-72 bg-zinc-900 border-r border-zinc-800 transform transition-transform duration-300 ease-in-out md:relative md:translate-x-0 flex flex-col ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
+        <div className="p-4 flex items-center justify-between border-b border-zinc-800">
+          <h2 className="text-lg font-semibold flex items-center gap-2">
+            <Bot className="w-5 h-5" /> ARTH Assistant
+          </h2>
+          <button onClick={() => setIsSidebarOpen(false)} className="md:hidden p-1 text-zinc-400 hover:text-white">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+        
+        <div className="p-3">
+          <button
+            onClick={createConversation}
+            className="w-full flex items-center gap-2 px-4 py-2 bg-zinc-800 hover:bg-zinc-700 rounded-lg text-sm font-medium transition-colors border border-zinc-700"
+          >
+            <Plus className="w-4 h-4" /> New Chat
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-3 pb-3 space-y-1">
+          {conversations.length === 0 ? (
+            <div className="text-center py-6 text-zinc-500 text-sm">No conversations yet</div>
+          ) : (
+            conversations.map(conv => (
+              <div
+                key={conv.id}
+                onClick={() => { setActiveConversationId(conv.id); setIsSidebarOpen(false); }}
+                className={`group flex items-center justify-between px-3 py-2.5 rounded-lg cursor-pointer transition-colors ${activeConversationId === conv.id ? 'bg-zinc-800 text-white' : 'text-zinc-400 hover:bg-zinc-800/50 hover:text-zinc-200'}`}
+              >
+                <div className="flex items-center gap-3 truncate">
+                  <MessageSquare className="w-4 h-4 shrink-0" />
+                  <span className="truncate text-sm">{conv.title}</span>
+                </div>
+                <button
+                  onClick={(e) => deleteConversation(conv.id, e)}
+                  className="opacity-0 group-hover:opacity-100 p-1 text-zinc-500 hover:text-red-400 transition-opacity"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </div>
+            ))
+          )}
+        </div>
       </div>
 
-      {/* Input Area */}
-      <div className="border-t border-[var(--border)] pt-3 pb-1">
-        <form
-          onSubmit={(e) => { e.preventDefault(); handleSubmit(); }}
-          className="flex gap-2 max-w-3xl mx-auto"
-        >
-          <input
-            ref={inputRef}
-            type="text"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            placeholder="Ask about any stock... (e.g., 'How is RELIANCE.NS doing?')"
-            disabled={isLoading}
-            className="flex-1 px-4 py-3 rounded-xl bg-[var(--bg)] border border-[var(--border)]
-                       text-[var(--text)] font-mono text-sm placeholder:text-[var(--text-dim)]
-                       focus:outline-none focus:border-[var(--accent)] focus:shadow-[0_0_0_3px_rgba(0,212,255,0.1)]
-                       transition-all disabled:opacity-50"
-          />
+      {/* Main Chat Area */}
+      <div className="flex-1 flex flex-col min-w-0">
+        {/* Header */}
+        <header className="h-14 border-b border-zinc-800 flex items-center px-4 bg-zinc-950/80 backdrop-blur sticky top-0 z-10 shrink-0">
           <button
-            type="submit"
-            disabled={isLoading || !input.trim()}
-            className="px-4 py-3 rounded-xl bg-[var(--accent)] text-[var(--bg)] text-sm font-bold
-                       hover:brightness-110 transition-all cursor-pointer
-                       disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-2"
+            onClick={() => setIsSidebarOpen(true)}
+            className="md:hidden p-2 -ml-2 mr-2 text-zinc-400 hover:text-white rounded-lg hover:bg-zinc-800"
           >
-            {isLoading ? (
-              <Loader2 className="w-4 h-4 animate-spin" />
-            ) : (
-              <Send className="w-4 h-4" />
-            )}
+            <Menu className="w-5 h-5" />
           </button>
-        </form>
-        <p className="text-[10px] text-[var(--text-dim)] text-center mt-2 font-mono">
-          ARTH uses Groq LLM · Data ~15s delayed · Not financial advice
-        </p>
+          <h1 className="text-sm font-medium text-zinc-300">
+            {conversations.find(c => c.id === activeConversationId)?.title || 'New Chat'}
+          </h1>
+        </header>
+
+        {/* Messages */}
+        <div className="flex-1 overflow-y-auto p-4 md:p-6 space-y-6">
+          {messages.length === 0 ? (
+            <div className="h-full flex flex-col items-center justify-center text-zinc-500 space-y-4">
+              <Bot className="w-12 h-12 text-zinc-700" />
+              <p>Start a conversation with the AI assistant</p>
+            </div>
+          ) : (
+            messages.map((msg, idx) => (
+              <motion.div
+                key={msg.id}
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                className={`flex gap-4 max-w-4xl mx-auto ${msg.role === 'user' ? 'flex-row-reverse' : ''}`}
+              >
+                <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${msg.role === 'user' ? 'bg-blue-600' : 'bg-zinc-800'}`}>
+                  {msg.role === 'user' ? <User className="w-5 h-5 text-white" /> : <Bot className="w-5 h-5 text-zinc-300" />}
+                </div>
+                <div className={`flex-1 rounded-2xl px-5 py-4 ${msg.role === 'user' ? 'bg-blue-600/20 text-blue-50 ml-12' : 'bg-zinc-900 text-zinc-200 border border-zinc-800 mr-12'}`}>
+                  {renderMarkdown(msg.content)}
+                  {msg.role === 'assistant' && msg.content === '' && isLoading && idx === messages.length - 1 && (
+                    <div className="flex gap-1 items-center h-5">
+                      <span className="w-1.5 h-1.5 bg-zinc-500 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+                      <span className="w-1.5 h-1.5 bg-zinc-500 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+                      <span className="w-1.5 h-1.5 bg-zinc-500 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+                    </div>
+                  )}
+                </div>
+              </motion.div>
+            ))
+          )}
+          <div ref={messagesEndRef} />
+        </div>
+
+        {/* Input */}
+        <div className="p-4 md:p-6 bg-zinc-950 border-t border-zinc-900 shrink-0">
+          <form onSubmit={sendMessage} className="max-w-4xl mx-auto relative flex items-end gap-2 bg-zinc-900 border border-zinc-800 rounded-xl focus-within:border-zinc-700 focus-within:ring-1 focus-within:ring-zinc-700 transition-all">
+            <textarea
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  sendMessage();
+                }
+              }}
+              placeholder="Message the assistant..."
+              className="w-full max-h-48 min-h-[56px] py-4 pl-4 pr-12 bg-transparent text-zinc-100 placeholder-zinc-500 resize-none outline-none overflow-y-auto"
+              rows={1}
+            />
+            <button
+              type="submit"
+              disabled={!input.trim() || isLoading}
+              className="absolute right-3 bottom-3 p-2 bg-zinc-800 text-zinc-300 rounded-lg hover:bg-zinc-700 hover:text-white disabled:opacity-50 disabled:hover:bg-zinc-800 disabled:hover:text-zinc-300 transition-colors"
+            >
+              {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+            </button>
+          </form>
+          <div className="text-center mt-2 text-xs text-zinc-600">
+            AI can make mistakes. Consider verifying important information.
+          </div>
+        </div>
       </div>
     </div>
   );

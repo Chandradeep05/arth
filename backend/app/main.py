@@ -256,6 +256,10 @@ def create_app() -> FastAPI:
     app.state.metrics = _metrics
 
     # ── Database Connection Middleware ──
+    # ── Dual DB Stack (intentional, tracked debt) ──
+    # SQLAlchemy AsyncSession: used by Phase 1-3 endpoints via get_db() dependency
+    # asyncpg pool: used by Phase 4 endpoints via request.state.db middleware
+    # Consolidation planned for Phase 5. Do NOT create new endpoints using both.
     # Acquires an asyncpg connection per-request, stores it on request.state.db.
     # All Phase 4 endpoints (auth, watchlists, conversations, alerts, admin, etc.)
     # use request.state.db.fetchrow() / .fetch() / .execute() for raw SQL.
@@ -316,6 +320,50 @@ def create_app() -> FastAPI:
             "service": "ARTH-api",
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
+
+    @app.get("/ready")
+    async def readiness_check():
+        """Readiness probe — verifies dependencies are usable."""
+        checks = {}
+        
+        # Check asyncpg pool
+        pool = getattr(app.state, "pg_pool", None)
+        if pool:
+            try:
+                async with pool.acquire() as conn:
+                    await conn.fetchval("SELECT 1")
+                checks["database"] = "ok"
+            except Exception as e:
+                checks["database"] = f"error: {str(e)[:100]}"
+        else:
+            checks["database"] = "not_configured"
+        
+        # Check Redis
+        redis = getattr(app.state, "redis", None)
+        if redis:
+            try:
+                await redis.ping()
+                checks["redis"] = "ok"
+            except Exception as e:
+                checks["redis"] = f"error: {str(e)[:100]}"
+        else:
+            checks["redis"] = "not_configured"
+        
+        # Check AssistantEngine
+        checks["assistant_engine"] = "ok" if getattr(app.state, "assistant_engine", None) else "not_available"
+        
+        all_ok = all(v == "ok" for v in checks.values() if v != "not_configured")
+        status_code = 200 if all_ok else 503
+        
+        from fastapi.responses import JSONResponse
+        return JSONResponse(
+            status_code=status_code,
+            content={
+                "status": "ready" if all_ok else "not_ready",
+                "checks": checks,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            },
+        )
 
     # Root info endpoint
     @app.get("/")

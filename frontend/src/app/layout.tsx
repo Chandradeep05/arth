@@ -6,6 +6,7 @@ import './globals.css';
 import Sidebar from '@/components/layout/Sidebar';
 import Header from '@/components/layout/Header';
 import StatusBar from '@/components/layout/StatusBar';
+import { AuthProvider } from '@/lib/auth/AuthProvider';
 
 const syne = Syne({
   variable: '--font-syne',
@@ -46,6 +47,7 @@ export default function RootLayout({
       className={`${syne.variable} ${dmMono.variable} ${inter.variable} dark`}
     >
       <body className="min-h-screen">
+        <AuthProvider>
         {/* App Shell: Sidebar + Main Content */}
         <div className="flex min-h-screen">
           {/* Fixed Sidebar */}
@@ -71,6 +73,7 @@ export default function RootLayout({
             <StatusBar />
           </div>
         </div>
+        </AuthProvider>
       </body>
     </html>
   );

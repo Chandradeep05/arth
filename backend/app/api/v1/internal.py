@@ -12,6 +12,7 @@ Symbols with no cached price are skipped that cycle.
 from __future__ import annotations
 
 import json
+import secrets
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Request
@@ -37,7 +38,8 @@ async def evaluate_alerts(
     now = datetime.now(timezone.utc)
 
     if redis:
-        acquired = await redis.set(ALERT_EVAL_LOCK, "1", nx=True, ex=ALERT_EVAL_LOCK_TTL)
+        lock_token = secrets.token_hex(16)
+        acquired = await redis.set(ALERT_EVAL_LOCK, lock_token, nx=True, ex=ALERT_EVAL_LOCK_TTL)
         if not acquired:
             logger.info("alert_eval_skipped_locked")
             return {"skipped": True, "reason": "Another evaluation running"}
@@ -46,7 +48,14 @@ async def evaluate_alerts(
         return await _run_eval(db, redis, now)
     finally:
         if redis:
-            await redis.delete(ALERT_EVAL_LOCK)
+            _RELEASE_LOCK_LUA = """
+            if redis.call('get', KEYS[1]) == ARGV[1] then
+                return redis.call('del', KEYS[1])
+            else
+                return 0
+            end
+            """
+            await redis.eval(_RELEASE_LOCK_LUA, 1, ALERT_EVAL_LOCK, lock_token)
 
 
 async def _run_eval(db, redis, now: datetime) -> dict:
@@ -117,3 +126,52 @@ async def _run_eval(db, redis, now: datetime) -> dict:
             )
 
     return {"evaluated": evaluated, "triggered": triggered, "skipped_no_cache": cache_miss, "at": now.isoformat()}
+
+
+@router.post("/jobs/warm-alert-symbols")
+async def warm_alert_symbols(
+    request: Request,
+    _: None = Depends(require_internal_secret),
+) -> dict:
+    """Warm up redis cache for active alert symbols without cached quotes."""
+    redis = getattr(request.app.state, "redis", None)
+    db = request.state.db
+    if not redis:
+        return {"skipped": True, "reason": "Redis not configured"}
+        
+    alerts = await db.fetch("SELECT DISTINCT symbol FROM alerts WHERE is_active = true")
+    if not alerts:
+        return {"warmed": 0, "skipped": 0}
+        
+    symbols = [row["symbol"] for row in alerts]
+    uncached = []
+    
+    for symbol in symbols:
+        price = None
+        for key in [f"quote:{symbol}", f"market:quote:{symbol}", f"tick:{symbol}"]:
+            if await redis.exists(key):
+                price = True
+                break
+        if not price:
+            uncached.append(symbol)
+            
+    # Process up to 5 uncached symbols
+    to_warm = uncached[:5]
+    warmed = 0
+    
+    from app.data.market_data_provider import market_data
+    
+    for symbol in to_warm:
+        try:
+            res = await market_data.get_quote(symbol)
+            if res.success and res.data:
+                await redis.set(
+                    f"quote:{symbol}",
+                    json.dumps(res.data),
+                    ex=300
+                )
+                warmed += 1
+        except Exception as e:
+            logger.warning("warmup_failed", symbol=symbol, error=str(e))
+            
+    return {"warmed": warmed, "skipped": len(symbols) - len(uncached), "uncached_remaining": max(0, len(uncached) - 5)}

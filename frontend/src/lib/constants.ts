@@ -80,6 +80,8 @@ export const NAV_ITEMS = [
   { href: '/risk', label: 'Risk', icon: 'ShieldAlert' },
   { href: '/watchlist', label: 'Watchlist', icon: 'Star' },
   { href: '/assistant', label: 'Assistant', icon: 'Bot' },
+  { href: '/alerts', label: 'Alerts', icon: 'Bell' },
+  { href: '/research/saved', label: 'Saved Research', icon: 'BookMarked' },
   { href: '/system', label: 'System', icon: 'Activity' },
 ] as const;
 

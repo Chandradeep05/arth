@@ -4,6 +4,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { Search, Circle, Menu } from 'lucide-react';
 import { MARKET_HOURS, DATA_DELAY_LABEL } from '@/lib/constants';
 import UserMenu from '@/components/layout/UserMenu';
+import NotificationBell from '@/components/layout/NotificationBell';
 
 function isMarketOpen(): boolean {
   const now = new Date();
@@ -119,6 +120,7 @@ export default function Header({ onMenuOpen }: HeaderProps) {
           {DATA_DELAY_LABEL}
         </span>
         <div className="w-px h-5 bg-[var(--border)] hidden sm:block" />
+        <NotificationBell />
         <UserMenu />
       </div>
     </header>

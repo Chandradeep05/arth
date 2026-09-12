@@ -195,11 +195,16 @@ async def _resolve_or_create_profile(
     from app.config import get_settings as _get_settings
     _settings = _get_settings()
     if _settings.initial_admin_email and email == _settings.initial_admin_email:
-        await db.execute(
-            "UPDATE profiles SET role = 'admin', access_status = 'active' WHERE id = $1",
-            user_id,
-        )
-        logger.info("admin_bootstrap_on_first_login", email=email)
+        # One-time bootstrap: only promote if no admin exists yet
+        admin_count = await db.fetchval("SELECT COUNT(*) FROM profiles WHERE role = 'admin'")
+        if admin_count == 0:
+            await db.execute(
+                "UPDATE profiles SET role = 'admin', access_status = 'active' WHERE id = $1",
+                user_id,
+            )
+            logger.info("admin_bootstrap_on_first_login", email=email)
+        else:
+            logger.info("admin_bootstrap_skipped", email=email, reason="admin already exists")
 
     row = await db.fetchrow(
         "SELECT access_status, role FROM profiles WHERE id = $1",
@@ -273,12 +278,9 @@ async def require_active_user(
 
 
 async def require_admin(
-    user: UserContext = Depends(get_current_user),
+    user: UserContext = Depends(require_active_user),
 ) -> UserContext:
-    """
-    FastAPI dependency: require admin role (checked from Postgres, not JWT).
-    Use on /admin/* endpoints only.
-    """
+    """Require active admin. Suspended admins are rejected by require_active_user first."""
     if user.role != "admin":
         raise HTTPException(status_code=403, detail="Admin access required.")
     return user

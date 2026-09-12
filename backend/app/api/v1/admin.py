@@ -48,6 +48,8 @@ async def update_user_status(
     admin: UserContext = Depends(require_admin),
 ) -> dict:
     db = request.state.db
+    if user_id == admin.user_id:
+        raise HTTPException(status_code=409, detail="Cannot change your own status.")
     result = await db.execute(
         "UPDATE profiles SET access_status = $1, updated_at = $2 WHERE id = $3",
         body.access_status, datetime.now(timezone.utc), user_id,
@@ -92,7 +94,7 @@ async def create_invite_code(
         "INSERT INTO invite_codes (code, created_by, expires_at) VALUES ($1, $2, $3) RETURNING id, code, used_by, used_at, expires_at",
         code, admin.user_id, body.expires_at,
     )
-    logger.info("invite_created", admin=str(admin.user_id), code=code)
+    logger.info("invite_created", admin=str(admin.user_id), code_prefix=code[:4])
     return dict(row)
 
 

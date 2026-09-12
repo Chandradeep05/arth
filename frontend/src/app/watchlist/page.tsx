@@ -1,354 +1,454 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
-import { motion } from 'framer-motion';
-import { Star, Plus, Search, RefreshCw, Wifi, WifiOff } from 'lucide-react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { useAuth } from '@/lib/auth/AuthProvider';
+import { useAuthenticatedApi } from '@/lib/auth/useAuthenticatedApi';
 import { apiClient } from '@/lib/api';
-import { useWebSocket } from '@/lib/useWebSocket';
-import Disclaimer from '@/components/shared/Disclaimer';
+import WatchlistTable, { type WatchlistItem, type SortField, type SortDir } from '@/components/watchlist/WatchlistTable';
 import LoadingSkeleton from '@/components/shared/LoadingSkeleton';
-import WatchlistTable, {
-  type WatchlistItem,
-  type SortField,
-  type SortDir,
-} from '@/components/watchlist/WatchlistTable';
+import Disclaimer from '@/components/shared/Disclaimer';
+import { useWebSocket } from '@/lib/useWebSocket';
+import { Star, Plus, Search, RefreshCw, Trash2, X } from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
 
-/* ── Constants ── */
-const LS_KEY = 'arth_watchlist';
-const DEFAULT_SYMBOLS = ['RELIANCE.NS', 'TCS.NS', 'INFY.NS'];
-const REFRESH_INTERVAL = 30_000; // 30 seconds
-
-/* ── LocalStorage helpers ── */
-function loadWatchlist(): string[] {
-  if (typeof window === 'undefined') return DEFAULT_SYMBOLS;
-  try {
-    const stored = localStorage.getItem(LS_KEY);
-    if (stored) {
-      const parsed = JSON.parse(stored);
-      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-    }
-  } catch {
-    // Ignore parse errors
-  }
-  // First visit: set defaults
-  localStorage.setItem(LS_KEY, JSON.stringify(DEFAULT_SYMBOLS));
-  return DEFAULT_SYMBOLS;
+// Types
+interface Watchlist {
+  id: string;
+  name: string;
+  is_default: boolean;
+  item_count: number;
+  created_at: string;
 }
 
-function saveWatchlist(symbols: string[]) {
-  if (typeof window !== 'undefined') {
-    localStorage.setItem(LS_KEY, JSON.stringify(symbols));
-  }
+interface WatchlistAPIItem {
+  id: string;
+  symbol: string;
+  added_at: string;
 }
 
-/* ── Sorting ── */
-function sortItems(items: WatchlistItem[], field: SortField, dir: SortDir): WatchlistItem[] {
-  return [...items].sort((a, b) => {
-    let cmp = 0;
-    switch (field) {
-      case 'symbol':
-        cmp = a.symbol.localeCompare(b.symbol);
-        break;
-      case 'name':
-        cmp = (a.name || '').localeCompare(b.name || '');
-        break;
-      case 'price':
-        cmp = (a.price ?? 0) - (b.price ?? 0);
-        break;
-      case 'change_percent':
-        cmp = (a.change_percent ?? 0) - (b.change_percent ?? 0);
-        break;
-      case 'risk_score':
-        cmp = (a.risk_score ?? 0) - (b.risk_score ?? 0);
-        break;
-      case 'sentiment': {
-        const order: Record<string, number> = { bullish: 3, neutral: 2, bearish: 1 };
-        cmp = (order[a.sentiment ?? ''] ?? 0) - (order[b.sentiment ?? ''] ?? 0);
-        break;
-      }
-    }
-    return dir === 'asc' ? cmp : -cmp;
-  });
-}
-
-/* ── Page Component ── */
 export default function WatchlistPage() {
-  const [symbols, setSymbols] = useState<string[]>([]);
-  const [items, setItems] = useState<WatchlistItem[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-
-  const [addInput, setAddInput] = useState('');
-  const [sortBy, setSortBy] = useState<SortField>('symbol');
+  const { user, isLoading: authLoading } = useAuth();
+  const api = useAuthenticatedApi();
+  
+  const [watchlists, setWatchlists] = useState<Watchlist[]>([]);
+  const [activeListId, setActiveListId] = useState<string | null>(null);
+  const [apiItems, setApiItems] = useState<WatchlistAPIItem[]>([]);
+  const [marketData, setMarketData] = useState<Record<string, any>>({});
+  
+  const [isLoading, setIsLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  
+  // UI states
+  const [showCreateModal, setShowCreateModal] = useState(false);
+  const [newListName, setNewListName] = useState('');
+  const [showAddSymbolModal, setShowAddSymbolModal] = useState(false);
+  const [newSymbol, setNewSymbol] = useState('');
+  
+  const [sortField, setSortField] = useState<SortField>('symbol');
   const [sortDir, setSortDir] = useState<SortDir>('asc');
 
-  const refreshTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  // WebSocket for real-time updates
-  const { status: wsStatus, prices, subscribe, unsubscribe } = useWebSocket();
-
-  /* ── Load watchlist on mount ── */
-  useEffect(() => {
-    const loaded = loadWatchlist();
-    setSymbols(loaded);
-  }, []);
-
-  /* ── Batch fetch data ── */
-  const fetchBatchData = useCallback(
-    async (syms: string[]) => {
-      if (syms.length === 0) {
-        setItems([]);
-        setLoading(false);
-        return;
+  // Load watchlists
+  const loadWatchlists = useCallback(async () => {
+    try {
+      setIsLoading(true);
+      const res = await api.get('/user/watchlists');
+      const lists = res.data || [];
+      setWatchlists(lists);
+      
+      if (lists.length > 0) {
+        const defaultList = lists.find((l: Watchlist) => l.is_default) || lists[0];
+        setActiveListId(defaultList.id);
+      } else {
+        setActiveListId(null);
+        setApiItems([]);
+        setMarketData({});
       }
+    } catch (err) {
+      console.error('Failed to load watchlists', err);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [api]);
 
-      try {
-        const res = await apiClient.post<{ success: boolean; data: any[] }>(
-          '/api/v1/watchlist/batch',
-          { symbols: syms }
-        );
-        // Backend returns nested { quote: { price, name, ... }, risk_score, sentiment_label }
-        // Map to flat WatchlistItem shape
-        const mapped: WatchlistItem[] = (res.data ?? []).map((item: any) => ({
-          symbol: item.symbol,
-          name: item.quote?.name || item.symbol.replace('.NS', '').replace('.BO', ''),
-          price: item.quote?.price ?? 0,
-          change_percent: item.quote?.change_percent ?? 0,
-          risk_score: item.risk_score,
-          risk_label: item.risk_label,
-          sentiment: item.sentiment_label,
+  useEffect(() => {
+    if (!authLoading && user) {
+      loadWatchlists();
+    }
+  }, [authLoading, user, loadWatchlists]);
+
+  // Load items and market data for active list
+  const loadActiveListItems = useCallback(async (isRefresh = false) => {
+    if (!activeListId) return;
+    try {
+      if (isRefresh) setIsRefreshing(true);
+      
+      const res = await api.get(`/user/watchlists/${activeListId}/items`);
+      const items: WatchlistAPIItem[] = res.data || [];
+      setApiItems(items);
+      
+      if (items.length > 0) {
+        const symbols = items.map(i => i.symbol);
+        const marketRes = await apiClient.post('/market/batch', { symbols });
+        if (marketRes.data?.quotes) {
+          setMarketData(marketRes.data.quotes);
+        }
+      } else {
+        setMarketData({});
+      }
+    } catch (err) {
+      console.error('Failed to load items', err);
+    } finally {
+      if (isRefresh) setIsRefreshing(false);
+    }
+  }, [activeListId, api]);
+
+  useEffect(() => {
+    if (activeListId) {
+      loadActiveListItems();
+    }
+  }, [activeListId, loadActiveListItems]);
+
+  // Handle WebSocket updates
+  const activeSymbols = useMemo(() => apiItems.map(i => i.symbol), [apiItems]);
+  
+  const handleWsMessage = useCallback((message: any) => {
+    if (message.type === 'market_update' && message.data) {
+      const update = message.data;
+      if (activeSymbols.includes(update.symbol)) {
+        setMarketData(prev => ({
+          ...prev,
+          [update.symbol]: {
+            ...(prev[update.symbol] || {}),
+            ...update
+          }
         }));
-        setItems(mapped);
-        setError('');
-      } catch {
-        // If batch fails, create skeleton items from symbols
-        setItems(
-          syms.map((s) => ({
-            symbol: s,
-            name: '',
-            price: 0,
-            change_percent: 0,
-          }))
-        );
-        setError('Could not fetch watchlist data. Showing symbols only.');
-      } finally {
-        setLoading(false);
       }
-    },
-    []
-  );
-
-  /* ── Fetch when symbols change ── */
-  useEffect(() => {
-    if (symbols.length > 0) {
-      setLoading(true);
-      fetchBatchData(symbols);
-    } else {
-      setItems([]);
-      setLoading(false);
     }
-  }, [symbols, fetchBatchData]);
+  }, [activeSymbols]);
 
-  /* ── Subscribe to WebSocket for price updates ── */
-  useEffect(() => {
-    if (symbols.length > 0) {
-      subscribe(symbols);
-    }
-    return () => {
-      if (symbols.length > 0) {
-        unsubscribe(symbols);
-      }
-    };
-  }, [symbols, subscribe, unsubscribe]);
+  const { isConnected } = useWebSocket({
+    onMessage: handleWsMessage,
+    subscribeOnConnect: activeSymbols.length > 0 ? { type: 'subscribe', channels: ['market_data'], symbols: activeSymbols } : undefined
+  });
 
-  /* ── Merge WS price updates into items ── */
-  useEffect(() => {
-    if (prices.size === 0) return;
-    setItems((prev) =>
-      prev.map((item) => {
-        const update = prices.get(item.symbol);
-        if (!update) return item;
-        return {
-          ...item,
-          price: update.price,
-          change_percent: update.change_percent,
-        };
-      })
-    );
-  }, [prices]);
-
-  /* ── Auto-refresh every 30s ── */
-  useEffect(() => {
-    refreshTimerRef.current = setInterval(() => {
-      if (symbols.length > 0) {
-        fetchBatchData(symbols);
-      }
-    }, REFRESH_INTERVAL);
-
-    return () => {
-      if (refreshTimerRef.current) {
-        clearInterval(refreshTimerRef.current);
-      }
-    };
-  }, [symbols, fetchBatchData]);
-
-  /* ── Add symbol ── */
-  const handleAdd = (e: React.FormEvent) => {
+  // Actions
+  const handleCreateList = async (e: React.FormEvent) => {
     e.preventDefault();
-    const sym = addInput.trim().toUpperCase();
-    if (!sym) return;
-    if (symbols.includes(sym)) {
-      setAddInput('');
-      return;
-    }
-    const updated = [...symbols, sym];
-    setSymbols(updated);
-    saveWatchlist(updated);
-    setAddInput('');
-  };
-
-  /* ── Remove symbol ── */
-  const handleRemove = (sym: string) => {
-    const updated = symbols.filter((s) => s !== sym);
-    setSymbols(updated);
-    saveWatchlist(updated);
-    setItems((prev) => prev.filter((i) => i.symbol !== sym));
-  };
-
-  /* ── Sort toggle ── */
-  const handleSort = (field: SortField) => {
-    if (sortBy === field) {
-      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
-    } else {
-      setSortBy(field);
-      setSortDir('asc');
+    if (!newListName.trim()) return;
+    
+    try {
+      const res = await api.post('/user/watchlists', { name: newListName.trim() });
+      const newList = res.data;
+      setWatchlists(prev => [...prev, newList]);
+      setActiveListId(newList.id);
+      setShowCreateModal(false);
+      setNewListName('');
+    } catch (err) {
+      console.error('Failed to create watchlist', err);
     }
   };
 
-  /* ── Manual refresh ── */
-  const handleRefresh = () => {
-    if (symbols.length > 0) {
-      setLoading(true);
-      fetchBatchData(symbols);
+  const handleDeleteList = async (id: string) => {
+    if (!window.confirm('Are you sure you want to delete this watchlist?')) return;
+    try {
+      await api.delete(`/user/watchlists/${id}`);
+      setWatchlists(prev => prev.filter(l => l.id !== id));
+      if (activeListId === id) {
+        const remaining = watchlists.filter(l => l.id !== id);
+        setActiveListId(remaining.length > 0 ? remaining[0].id : null);
+      }
+    } catch (err) {
+      console.error('Failed to delete watchlist', err);
     }
   };
 
-  const sortedItems = sortItems(items, sortBy, sortDir);
+  const handleAddSymbol = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!activeListId || !newSymbol.trim()) return;
+    
+    try {
+      const symbol = newSymbol.trim().toUpperCase();
+      await api.post(`/user/watchlists/${activeListId}/items`, { symbol });
+      setShowAddSymbolModal(false);
+      setNewSymbol('');
+      loadActiveListItems();
+    } catch (err) {
+      console.error('Failed to add symbol', err);
+    }
+  };
+
+  const handleRemoveSymbol = async (symbol: string) => {
+    if (!activeListId) return;
+    try {
+      await api.delete(`/user/watchlists/${activeListId}/items/${symbol}`);
+      setApiItems(prev => prev.filter(i => i.symbol !== symbol));
+    } catch (err) {
+      console.error('Failed to remove symbol', err);
+    }
+  };
+
+  // Prepare table data
+  const tableData: WatchlistItem[] = useMemo(() => {
+    return apiItems.map(item => {
+      const quote = marketData[item.symbol] || {};
+      return {
+        symbol: item.symbol,
+        price: quote.price || 0,
+        change: quote.change || 0,
+        changePct: quote.change_pct || 0,
+        volume: quote.volume || 0,
+        dayHigh: quote.day_high || 0,
+        dayLow: quote.day_low || 0,
+        marketCap: quote.market_cap || 0,
+        prevClose: quote.prev_close || 0,
+        timestamp: quote.timestamp || new Date().toISOString()
+      };
+    });
+  }, [apiItems, marketData]);
+
+  if (authLoading || isLoading) {
+    return (
+      <div className="min-h-screen bg-black text-white p-4 md:p-8 pt-20">
+        <LoadingSkeleton />
+      </div>
+    );
+  }
+
+  const activeList = watchlists.find(l => l.id === activeListId);
 
   return (
-    <div className="space-y-8 animate-fadeIn">
-      <Disclaimer />
-
-      {/* Header */}
-      <div className="flex items-start justify-between">
-        <div>
-          <h1 className="font-heading text-xl font-extrabold tracking-tight text-[var(--text)]">
-            Watchlist
-          </h1>
-          <p className="text-sm text-[var(--text-muted)] mt-1 font-mono">
-            Track your portfolio · Real-time updates · {symbols.length} symbol
-            {symbols.length !== 1 ? 's' : ''}
-          </p>
+    <div className="min-h-screen bg-black text-white p-4 md:p-8 pt-20">
+      <div className="max-w-7xl mx-auto space-y-6">
+        
+        {/* Header */}
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div>
+            <h1 className="text-3xl font-bold flex items-center gap-2">
+              <Star className="text-yellow-400" size={28} />
+              Your Watchlists
+            </h1>
+            <p className="text-zinc-400 mt-1">Track your favorite assets in real-time</p>
+          </div>
+          
+          <button 
+            onClick={() => setShowCreateModal(true)}
+            className="flex items-center gap-2 bg-zinc-800 hover:bg-zinc-700 px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+          >
+            <Plus size={16} />
+            New Watchlist
+          </button>
         </div>
 
-        <div className="flex items-center gap-2">
-          {/* WS status indicator */}
-          <div
-            className="flex items-center gap-1 text-[10px] font-mono"
-            title={`WebSocket: ${wsStatus}`}
-          >
-            {wsStatus === 'connected' ? (
-              <>
-                <Wifi className="w-3 h-3 text-[var(--green)]" />
-                <span className="text-[var(--green)]">LIVE</span>
-              </>
-            ) : (
-              <>
-                <WifiOff className="w-3 h-3 text-[var(--text-dim)]" />
-                <span className="text-[var(--text-dim)]">{wsStatus.toUpperCase()}</span>
-              </>
-            )}
+        {/* Tabs */}
+        {watchlists.length > 0 ? (
+          <div className="border-b border-zinc-800 flex overflow-x-auto no-scrollbar">
+            {watchlists.map(list => (
+              <div 
+                key={list.id} 
+                className={`flex items-center gap-2 px-4 py-3 cursor-pointer whitespace-nowrap transition-colors ${
+                  activeListId === list.id ? 'border-b-2 border-white text-white' : 'text-zinc-500 hover:text-zinc-300'
+                }`}
+                onClick={() => setActiveListId(list.id)}
+              >
+                <span className="font-medium">{list.name}</span>
+                <span className="text-xs bg-zinc-800 px-2 py-0.5 rounded-full">{list.item_count || 0}</span>
+              </div>
+            ))}
           </div>
+        ) : (
+          <div className="text-center py-12 bg-zinc-900/50 rounded-xl border border-zinc-800">
+            <Star className="mx-auto text-zinc-600 mb-4" size={48} />
+            <h3 className="text-xl font-medium mb-2">No watchlists found</h3>
+            <p className="text-zinc-400 mb-6">Create your first watchlist to start tracking assets.</p>
+            <button 
+              onClick={() => setShowCreateModal(true)}
+              className="bg-white text-black hover:bg-zinc-200 px-6 py-2 rounded-lg font-medium transition-colors"
+            >
+              Create Watchlist
+            </button>
+          </div>
+        )}
 
-          {/* Refresh button */}
-          <button
-            onClick={handleRefresh}
-            disabled={loading}
-            className="p-2 rounded-md hover:bg-[var(--surface-2)] text-[var(--text-muted)]
-                       hover:text-[var(--text)] transition-colors cursor-pointer disabled:opacity-50"
-            aria-label="Refresh watchlist"
-          >
-            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-          </button>
+        {/* Active List Actions & Table */}
+        {activeListId && (
+          <div className="space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-4">
+              <h2 className="text-xl font-semibold flex items-center gap-2">
+                {activeList?.name}
+                {activeList && !activeList.is_default && (
+                  <button 
+                    onClick={() => handleDeleteList(activeList.id)}
+                    className="text-zinc-500 hover:text-red-400 p-1 rounded-md transition-colors"
+                    title="Delete watchlist"
+                  >
+                    <Trash2 size={16} />
+                  </button>
+                )}
+              </h2>
+              
+              <div className="flex items-center gap-2">
+                <button 
+                  onClick={() => loadActiveListItems(true)}
+                  disabled={isRefreshing}
+                  className={`p-2 bg-zinc-900 border border-zinc-800 rounded-lg text-zinc-400 hover:text-white transition-colors ${isRefreshing ? 'opacity-50' : ''}`}
+                  title="Refresh data"
+                >
+                  <RefreshCw size={18} className={isRefreshing ? 'animate-spin' : ''} />
+                </button>
+                <button 
+                  onClick={() => setShowAddSymbolModal(true)}
+                  className="flex items-center gap-2 bg-zinc-100 text-black hover:bg-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+                >
+                  <Plus size={16} />
+                  Add Symbol
+                </button>
+              </div>
+            </div>
+
+            <div className="bg-zinc-900/50 rounded-xl border border-zinc-800 overflow-hidden min-h-[400px]">
+              {apiItems.length > 0 ? (
+                <WatchlistTable 
+                  data={tableData}
+                  sortField={sortField}
+                  sortDir={sortDir}
+                  onSort={(field) => {
+                    if (sortField === field) {
+                      setSortDir(sortDir === 'asc' ? 'desc' : 'asc');
+                    } else {
+                      setSortField(field);
+                      setSortDir('desc');
+                    }
+                  }}
+                  onRemove={handleRemoveSymbol}
+                />
+              ) : (
+                <div className="flex flex-col items-center justify-center h-[400px] text-zinc-500">
+                  <Search size={48} className="mb-4 opacity-50" />
+                  <p className="text-lg mb-2">This watchlist is empty</p>
+                  <p className="text-sm mb-4">Add symbols to track their performance</p>
+                  <button 
+                    onClick={() => setShowAddSymbolModal(true)}
+                    className="text-white bg-zinc-800 hover:bg-zinc-700 px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+                  >
+                    Add First Symbol
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+        
+        <div className="mt-8">
+          <Disclaimer />
         </div>
       </div>
 
-      {/* Quick Add Input */}
-      <form onSubmit={handleAdd} className="flex gap-3 max-w-md">
-        <div className="relative flex-1">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--text-dim)]" />
-          <input
-            type="text"
-            value={addInput}
-            onChange={(e) => setAddInput(e.target.value)}
-            placeholder="Add symbol (e.g., HDFC.NS, GOOGL)"
-            className="w-full pl-10 pr-4 py-3 rounded-lg bg-[var(--surface)] border border-[var(--border)]
-                       text-[var(--text)] font-mono text-sm placeholder:text-[var(--text-dim)]
-                       focus:outline-none focus:border-[var(--accent)] focus:shadow-[0_0_0_3px_rgba(0,212,255,0.1)]
-                       transition-all"
-          />
-        </div>
-        <button
-          type="submit"
-          className="px-4 py-3 rounded-lg bg-[var(--accent)] text-[var(--bg)] text-sm font-bold
-                     uppercase tracking-wider hover:brightness-110 transition-all cursor-pointer
-                     flex items-center gap-1.5"
-        >
-          <Plus className="w-4 h-4" /> Add
-        </button>
-      </form>
+      {/* Modals */}
+      <AnimatePresence>
+        {showCreateModal && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm"
+          >
+            <motion.div 
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-zinc-900 border border-zinc-800 rounded-xl w-full max-w-md p-6 shadow-2xl"
+            >
+              <div className="flex justify-between items-center mb-6">
+                <h3 className="text-xl font-semibold">Create Watchlist</h3>
+                <button onClick={() => setShowCreateModal(false)} className="text-zinc-400 hover:text-white">
+                  <X size={24} />
+                </button>
+              </div>
+              <form onSubmit={handleCreateList}>
+                <div className="mb-6">
+                  <label className="block text-sm font-medium text-zinc-400 mb-2">Watchlist Name</label>
+                  <input 
+                    type="text" 
+                    value={newListName}
+                    onChange={e => setNewListName(e.target.value)}
+                    placeholder="e.g. Tech Stocks, Crypto..."
+                    className="w-full bg-black border border-zinc-800 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-zinc-600"
+                    autoFocus
+                  />
+                </div>
+                <div className="flex justify-end gap-3">
+                  <button 
+                    type="button" 
+                    onClick={() => setShowCreateModal(false)}
+                    className="px-4 py-2 rounded-lg text-zinc-300 hover:bg-zinc-800 transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button 
+                    type="submit"
+                    disabled={!newListName.trim()}
+                    className="bg-white text-black px-4 py-2 rounded-lg font-medium disabled:opacity-50 transition-colors"
+                  >
+                    Create
+                  </button>
+                </div>
+              </form>
+            </motion.div>
+          </motion.div>
+        )}
 
-      {/* Error */}
-      {error && (
-        <div className="card p-4 max-w-xl border-[var(--accent-orange)]/30">
-          <p className="text-xs text-[var(--accent-orange)] font-mono">{error}</p>
-        </div>
-      )}
-
-      {/* Loading */}
-      {loading && (
-        <div className="space-y-2">
-          <LoadingSkeleton variant="table" lines={5} />
-        </div>
-      )}
-
-      {/* Watchlist Table */}
-      {!loading && sortedItems.length > 0 && (
-        <WatchlistTable
-          items={sortedItems}
-          onRemove={handleRemove}
-          sortBy={sortBy}
-          sortDir={sortDir}
-          onSort={handleSort}
-        />
-      )}
-
-      {/* Empty State */}
-      {!loading && symbols.length === 0 && (
-        <motion.div
-          initial={{ opacity: 0, y: 12 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="card p-12 text-center max-w-xl mx-auto"
-        >
-          <Star className="w-10 h-10 text-[var(--text-dim)] mx-auto mb-4" />
-          <h3 className="font-heading text-lg font-bold text-[var(--text)] mb-2">
-            Your watchlist is empty
-          </h3>
-          <p className="text-sm text-[var(--text-dim)] font-mono">
-            Search for stocks to add them to your watchlist.
-          </p>
-        </motion.div>
-      )}
+        {showAddSymbolModal && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm"
+          >
+            <motion.div 
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-zinc-900 border border-zinc-800 rounded-xl w-full max-w-md p-6 shadow-2xl"
+            >
+              <div className="flex justify-between items-center mb-6">
+                <h3 className="text-xl font-semibold">Add Symbol</h3>
+                <button onClick={() => setShowAddSymbolModal(false)} className="text-zinc-400 hover:text-white">
+                  <X size={24} />
+                </button>
+              </div>
+              <form onSubmit={handleAddSymbol}>
+                <div className="mb-6">
+                  <label className="block text-sm font-medium text-zinc-400 mb-2">Symbol or Ticker</label>
+                  <input 
+                    type="text" 
+                    value={newSymbol}
+                    onChange={e => setNewSymbol(e.target.value.toUpperCase())}
+                    placeholder="e.g. RELIANCE.NS, BTC-USD..."
+                    className="w-full bg-black border border-zinc-800 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-zinc-600 uppercase"
+                    autoFocus
+                  />
+                </div>
+                <div className="flex justify-end gap-3">
+                  <button 
+                    type="button" 
+                    onClick={() => setShowAddSymbolModal(false)}
+                    className="px-4 py-2 rounded-lg text-zinc-300 hover:bg-zinc-800 transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button 
+                    type="submit"
+                    disabled={!newSymbol.trim()}
+                    className="bg-white text-black px-4 py-2 rounded-lg font-medium disabled:opacity-50 transition-colors"
+                  >
+                    Add
+                  </button>
+                </div>
+              </form>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

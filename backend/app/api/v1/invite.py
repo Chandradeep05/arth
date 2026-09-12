@@ -23,6 +23,19 @@ logger = get_logger(__name__)
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
+@router.get("/me")
+async def get_current_profile(
+    user: UserContext = Depends(get_current_user),
+) -> dict:
+    """Return the authenticated user's profile info for the frontend."""
+    return {
+        "user_id": str(user.user_id),
+        "email": user.email,
+        "role": user.role,
+        "access_status": user.access_status,
+    }
+
+
 @router.post("/invite/redeem")
 async def redeem_invite_code(
     body: RedeemInviteRequest,
@@ -43,6 +56,10 @@ async def redeem_invite_code(
     db = request.state.db
     code = body.code
     now = datetime.now(timezone.utc)
+
+    # Only pending users can redeem invites
+    if user.access_status == 'active':
+        raise HTTPException(status_code=409, detail="Account is already active.")
 
     async with db.transaction():
         # Lock the invite code row for this transaction
