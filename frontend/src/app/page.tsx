@@ -453,6 +453,7 @@ export default function DashboardPage() {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 sm:gap-3.5">
         <MoversTable title="Top Gainers" movers={gainers} type="gainers" />
         <MoversTable title="Top Losers" movers={losers} type="losers" />
+      </div>
     </div>
   );
 }
