@@ -453,24 +453,6 @@ export default function DashboardPage() {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 sm:gap-3.5">
         <MoversTable title="Top Gainers" movers={gainers} type="gainers" />
         <MoversTable title="Top Losers" movers={losers} type="losers" />
-      </div>
-
-      {/* Latest Intelligence / News Bar (Matching Reference Panel 01 Bottom) */}
-      <div className="card px-3.5 py-2 sm:py-2.5 flex items-center justify-between gap-3 overflow-x-auto no-scrollbar">
-        <div className="flex items-center gap-2 shrink-0">
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/25 text-[10px] font-mono text-emerald-400 uppercase tracking-wider">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse-dot" />
-            Latest News
-          </span>
-        </div>
-        <div className="flex items-center gap-5 text-[11px] text-[var(--text-muted)] font-mono whitespace-nowrap overflow-hidden">
-          <span>RBI keeps repo rate unchanged at 6.50% <span className="text-[var(--text-dim)] text-[10px]">2h ago</span></span>
-          <span className="text-[var(--text-dim)]">•</span>
-          <span>TCS Q1 results beat estimates <span className="text-[var(--text-dim)] text-[10px]">3h ago</span></span>
-          <span className="text-[var(--text-dim)]">•</span>
-          <span>India manufacturing PMI rises to 58.4 <span className="text-[var(--text-dim)] text-[10px]">5h ago</span></span>
-        </div>
-      </div>
     </div>
   );
 }

@@ -376,7 +376,7 @@ class AssistantEngine:
         # Replace last user message with augmented version
         llm_messages[-1] = LLMMessage(role="user", content=augmented_message)
 
-        config = LLMConfig(max_tokens=3072, temperature=0.4)
+        config = LLMConfig(max_tokens=min(self._settings.groq_max_tokens, 2048), temperature=0.4)
 
         start = time.monotonic()
         response = await self._llm.generate(llm_messages, config)
@@ -443,7 +443,7 @@ class AssistantEngine:
                 llm_messages.append(LLMMessage(role=msg["role"], content=msg["content"]))
         llm_messages.append(LLMMessage(role="user", content=augmented_message))
 
-        config = LLMConfig(max_tokens=3072, temperature=0.4)
+        config = LLMConfig(max_tokens=min(self._settings.groq_max_tokens, 2048), temperature=0.4)
         response = await self._llm.generate(llm_messages, config)
         return response.content
 
@@ -482,7 +482,7 @@ class AssistantEngine:
             llm_messages.append(LLMMessage(role=msg["role"], content=msg["content"]))
         llm_messages[-1] = LLMMessage(role="user", content=augmented_message)
 
-        config = LLMConfig(max_tokens=3072, temperature=0.4)
+        config = LLMConfig(max_tokens=min(self._settings.groq_max_tokens, 2048), temperature=0.4)
 
         full_response = ""
         async for token in self._llm.stream(llm_messages, config):

@@ -10,6 +10,9 @@ import {
 import Disclaimer from '@/components/shared/Disclaimer';
 import CitedReport from '@/components/research/CitedReport';
 import { apiClient } from '@/lib/api';
+import { useAuth } from '@/lib/auth/AuthProvider';
+import { useAuthenticatedApi } from '@/lib/auth/useAuthenticatedApi';
+import { Save } from 'lucide-react';
 
 type ResearchMode = 'standard' | 'deep';
 
@@ -41,6 +44,32 @@ export default function ResearchPage() {
   const [deepReport, setDeepReport] = useState<DeepReportData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [sourcesInfo, setSourcesInfo] = useState<SourcesData | null>(null);
+
+  // Save state
+  const { user } = useAuth();
+  const authApi = useAuthenticatedApi();
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  const handleSaveReport = async () => {
+    if (!deepReport || !authApi.isAuthenticated) return;
+    setSaving(true);
+    try {
+      await authApi.post('/api/v1/user/research/saved', {
+        symbol: symbol.trim().toUpperCase(),
+        title: `Deep Research — ${deepReport.company_name}`,
+        report_content: { text: deepReport.report_content },
+        sources: deepReport.sources,
+        generated_at: deepReport.generated_at,
+        engine_version: 'ARTH Research v1',
+      });
+      setSaved(true);
+    } catch (err: any) {
+      setError(err.message || 'Failed to save report');
+    } finally {
+      setSaving(false);
+    }
+  };
 
   const handleStandardGenerate = (e: React.FormEvent) => {
     e.preventDefault();
@@ -95,6 +124,7 @@ export default function ResearchPage() {
     setGenerating(true);
     setError(null);
     setDeepReport(null);
+    setSaved(false);
 
     try {
       const res = await apiClient.post<{ success: boolean; data: DeepReportData; message?: string }>(
@@ -351,11 +381,35 @@ export default function ResearchPage() {
 
           {/* Deep Report Display */}
           {deepReport && (
-            <CitedReport
-              content={deepReport.report_content}
-              sources={deepReport.sources}
-              companyName={deepReport.company_name}
-            />
+            <>
+              <CitedReport
+                content={deepReport.report_content}
+                sources={deepReport.sources}
+                companyName={deepReport.company_name}
+              />
+              {/* Save Button — only when logged in */}
+              {user && (
+                <div className="flex justify-end mt-3">
+                  <button
+                    onClick={handleSaveReport}
+                    disabled={saving || saved}
+                    className={`flex items-center gap-2 px-4 py-2 rounded-full text-xs font-bold transition-all cursor-pointer ${
+                      saved
+                        ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
+                        : 'bg-[var(--green)] hover:bg-[var(--green-hover)] text-black'
+                    } disabled:opacity-60`}
+                  >
+                    {saved ? (
+                      <><CheckCircle className="w-3.5 h-3.5" /> Saved to Library</>
+                    ) : saving ? (
+                      <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Saving...</>
+                    ) : (
+                      <><Save className="w-3.5 h-3.5" /> Save Report</>
+                    )}
+                  </button>
+                </div>
+              )}
+            </>
           )}
         </>
       )}

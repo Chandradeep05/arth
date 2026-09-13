@@ -53,7 +53,7 @@ export default function AssistantPage() {
 
   const fetchConversations = async () => {
     try {
-      const data = await api.get<Conversation[]>('/user/conversations');
+      const data = await api.get<Conversation[]>('/api/v1/user/conversations');
       setConversations(data || []);
       if (data && data.length > 0 && !activeConversationId) {
         setActiveConversationId(data[0].id);
@@ -65,7 +65,7 @@ export default function AssistantPage() {
 
   const createConversation = async () => {
     try {
-      const data = await api.post<Conversation>('/user/conversations', { title: 'New Conversation' });
+      const data = await api.post<Conversation>('/api/v1/user/conversations', { title: 'New Conversation' });
       if (data) {
         setConversations([data, ...conversations]);
         setActiveConversationId(data.id);
@@ -79,7 +79,7 @@ export default function AssistantPage() {
   const deleteConversation = async (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
     try {
-      await api.delete(`/user/conversations/${id}`);
+      await api.delete(`/api/v1/user/conversations/${id}`);
       setConversations(conversations.filter(c => c.id !== id));
       if (activeConversationId === id) {
         setActiveConversationId(null);
@@ -97,7 +97,7 @@ export default function AssistantPage() {
     let convId = activeConversationId;
     if (!convId) {
       try {
-        const newConv = await api.post<Conversation>('/user/conversations', { title: input.substring(0, 30) });
+        const newConv = await api.post<Conversation>('/api/v1/user/conversations', { title: input.substring(0, 30) });
         if (newConv) {
           setConversations([newConv, ...conversations]);
           convId = newConv.id;
@@ -119,7 +119,7 @@ export default function AssistantPage() {
 
     try {
       // First save the message to DB
-      await api.post(`/user/conversations/${convId}/messages`, { content: userMsg.content });
+      await api.post(`/api/v1/user/conversations/${convId}/messages`, { content: userMsg.content });
       
       // Then start SSE stream
       const response = await fetch(`${API_URL}/api/v1/assistant/chat`, {

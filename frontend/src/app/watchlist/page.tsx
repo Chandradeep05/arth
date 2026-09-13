@@ -51,7 +51,7 @@ export default function WatchlistPage() {
   const loadWatchlists = useCallback(async () => {
     try {
       setIsLoading(true);
-      const res = await api.get<any>('/user/watchlists');
+      const res = await api.get<any>('/api/v1/user/watchlists');
       const lists: Watchlist[] = (Array.isArray(res) ? res : res?.data) || [];
       setWatchlists(lists);
       
@@ -82,7 +82,7 @@ export default function WatchlistPage() {
     try {
       if (isRefresh) setIsRefreshing(true);
       
-      const res = await api.get<any>(`/user/watchlists/${activeListId}/items`);
+      const res = await api.get<any>(`/api/v1/user/watchlists/${activeListId}/items`);
       const items: WatchlistAPIItem[] = (Array.isArray(res) ? res : res?.data) || [];
       setApiItems(items);
       
@@ -140,7 +140,7 @@ export default function WatchlistPage() {
     if (!newListName.trim()) return;
     
     try {
-      const res = await api.post<any>('/user/watchlists', { name: newListName.trim() });
+      const res = await api.post<any>('/api/v1/user/watchlists', { name: newListName.trim() });
       const newList: Watchlist = res?.data || res;
       if (newList && newList.id) {
         setWatchlists(prev => [...prev, newList]);
@@ -156,7 +156,7 @@ export default function WatchlistPage() {
   const handleDeleteList = async (id: string) => {
     if (!window.confirm('Are you sure you want to delete this watchlist?')) return;
     try {
-      await api.delete(`/user/watchlists/${id}`);
+      await api.delete(`/api/v1/user/watchlists/${id}`);
       setWatchlists(prev => prev.filter(l => l.id !== id));
       if (activeListId === id) {
         const remaining = watchlists.filter(l => l.id !== id);
@@ -173,7 +173,7 @@ export default function WatchlistPage() {
     
     try {
       const symbol = newSymbol.trim().toUpperCase();
-      await api.post(`/user/watchlists/${activeListId}/items`, { symbol });
+      await api.post(`/api/v1/user/watchlists/${activeListId}/items`, { symbol });
       setShowAddSymbolModal(false);
       setNewSymbol('');
       loadActiveListItems();
@@ -185,7 +185,7 @@ export default function WatchlistPage() {
   const handleRemoveSymbol = async (symbol: string) => {
     if (!activeListId) return;
     try {
-      await api.delete(`/user/watchlists/${activeListId}/items/${symbol}`);
+      await api.delete(`/api/v1/user/watchlists/${activeListId}/items/${symbol}`);
       setApiItems(prev => prev.filter(i => i.symbol !== symbol));
     } catch (err) {
       console.error('Failed to remove symbol', err);

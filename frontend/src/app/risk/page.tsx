@@ -135,8 +135,8 @@ export default function RiskPage() {
             <div className="space-y-4 mt-4">
               {risk.dimensions?.map((dim: any) => (
                 <RiskBar
-                  key={dim.name}
-                  label={dim.name}
+                  key={dim.dimension}
+                  label={(dim.dimension || '').replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase())}
                   score={dim.score}
                   color={getRiskColor(dim.score)}
                 />

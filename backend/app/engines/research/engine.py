@@ -109,8 +109,9 @@ class ResearchEngine:
             LLMMessage(role="user", content=user_prompt),
         ]
 
+        max_tokens = min(self._settings.groq_max_tokens, 1024 if depth == "quick" else self._settings.groq_max_tokens)
         config = LLMConfig(
-            max_tokens=2048 if depth == "quick" else 4096,
+            max_tokens=max_tokens,
             temperature=0.3,
         )
 
@@ -199,8 +200,9 @@ class ResearchEngine:
             LLMMessage(role="user", content=user_prompt),
         ]
 
+        max_tokens = min(self._settings.groq_max_tokens, 1024 if depth == "quick" else self._settings.groq_max_tokens)
         config = LLMConfig(
-            max_tokens=2048 if depth == "quick" else 4096,
+            max_tokens=max_tokens,
             temperature=0.3,
         )
 
@@ -278,7 +280,7 @@ class ResearchEngine:
             LLMMessage(role="user", content=user_prompt),
         ]
 
-        config = LLMConfig(max_tokens=4096, temperature=0.3)
+        config = LLMConfig(max_tokens=self._settings.groq_max_tokens, temperature=0.3)
         response = await self._llm.generate(messages, config)
 
         # Step 5: Build report with sources
@@ -372,7 +374,7 @@ class ResearchEngine:
             LLMMessage(role="user", content=user_prompt),
         ]
 
-        config = LLMConfig(max_tokens=4096, temperature=0.3)
+        config = LLMConfig(max_tokens=self._settings.groq_max_tokens, temperature=0.3)
 
         async for token in self._llm.stream(messages, config):
             yield token
