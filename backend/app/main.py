@@ -98,8 +98,12 @@ async def lifespan(app: FastAPI):
     pg_pool = None
     if settings.database_url:
         try:
-            # Convert SQLAlchemy URL to plain asyncpg DSN
-            dsn = settings.database_url.replace("postgresql+asyncpg://", "postgresql://")
+            # Convert any SQLAlchemy URL to plain asyncpg DSN
+            import re as _re
+            dsn = _re.sub(r'^postgresql\+\w+://', 'postgresql://', settings.database_url)
+            # Supabase requires SSL for external connections
+            if 'supabase.co' in dsn and 'sslmode' not in dsn:
+                dsn += ('&' if '?' in dsn else '?') + 'sslmode=require'
             pg_pool = await asyncpg.create_pool(dsn, min_size=2, max_size=10)
             logger.info("asyncpg_pool_created", dsn_host=dsn.split("@")[-1][:40] if "@" in dsn else "localhost")
         except Exception as e:

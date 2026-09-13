@@ -34,7 +34,9 @@ async def evaluate_alerts(
 ) -> dict:
     """Evaluate active price alerts against cached Redis quotes."""
     redis = getattr(request.app.state, "redis", None)
-    db = request.state.db
+    db = getattr(request.state, "db", None)
+    if db is None:
+        return {"skipped": True, "reason": "Database pool unavailable — check asyncpg connection"}
     now = datetime.now(timezone.utc)
 
     if redis:
@@ -141,9 +143,11 @@ async def warm_alert_symbols(
 ) -> dict:
     """Warm up redis cache for active alert symbols without cached quotes."""
     redis = getattr(request.app.state, "redis", None)
-    db = request.state.db
+    db = getattr(request.state, "db", None)
     if not redis:
         return {"skipped": True, "reason": "Redis not configured"}
+    if db is None:
+        return {"skipped": True, "reason": "Database pool unavailable"}
         
     alerts = await db.fetch("SELECT DISTINCT symbol FROM alerts WHERE is_active = true")
     if not alerts:

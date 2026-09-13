@@ -7,11 +7,11 @@
 // The @supabase/ssr browser client handles both cases automatically
 // and stores the session in cookies (shared with middleware).
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabase/client";
 
-export default function AuthCallbackPage() {
+function CallbackHandler() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [error, setError] = useState<string | null>(null);
@@ -78,5 +78,24 @@ export default function AuthCallbackPage() {
         <p className="text-sm font-mono text-[var(--text-muted)]">Signing you in...</p>
       </div>
     </div>
+  );
+}
+
+// Next.js 16 requires useSearchParams() to be inside a Suspense boundary
+// otherwise the page cannot be statically pre-rendered during build.
+export default function AuthCallbackPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-screen flex items-center justify-center bg-[var(--bg)]">
+          <div className="flex flex-col items-center gap-4">
+            <span className="animate-spin h-10 w-10 border-4 border-[var(--border)] border-t-[var(--accent)] rounded-full" />
+            <p className="text-sm font-mono text-[var(--text-muted)]">Loading...</p>
+          </div>
+        </div>
+      }
+    >
+      <CallbackHandler />
+    </Suspense>
   );
 }
