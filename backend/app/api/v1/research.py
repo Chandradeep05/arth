@@ -41,6 +41,10 @@ async def generate_research(
     Streams the response via Server-Sent Events for progressive rendering.
     depth=deep uses RAG for cited reports (requires indexing first).
     """
+    # TODO: Add quota enforcement when user auth is added:
+    # from app.core.quotas import check_user_quota
+    # await check_user_quota(request, user.user_id, 'research_gen')
+    
     engine = ResearchEngine(settings)
 
     if stream:

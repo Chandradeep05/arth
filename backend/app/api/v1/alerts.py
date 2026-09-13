@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Query
 from pydantic import BaseModel, field_validator
 
 from app.core.auth import UserContext, require_active_user
@@ -65,14 +65,6 @@ async def list_alerts(request: Request, user: UserContext = Depends(require_acti
 async def create_alert(body: CreateAlertRequest, request: Request, user: UserContext = Depends(require_active_user)) -> dict:
     db = request.state.db
     
-    # Duplicate prevention
-    existing = await db.fetchval(
-        "SELECT id FROM alerts WHERE user_id = $1 AND symbol = $2 AND alert_type = $3 AND threshold = $4 AND is_active = true",
-        user.user_id, body.symbol, body.alert_type, body.threshold
-    )
-    if existing:
-        raise HTTPException(status_code=409, detail="Identical active alert already exists.")
-        
     count = await db.fetchval("SELECT COUNT(*) FROM alerts WHERE user_id = $1 AND is_active = true", user.user_id)
     if count >= 50:
         raise HTTPException(status_code=429, detail="Max 50 active alerts reached.")
@@ -100,9 +92,13 @@ async def create_alert(body: CreateAlertRequest, request: Request, user: UserCon
                     continue
 
     row = await db.fetchrow(
-        "INSERT INTO alerts (user_id, symbol, alert_type, threshold, trigger_state) VALUES ($1, $2, $3, $4, $5) RETURNING id, symbol, alert_type, threshold, is_active, trigger_state, created_at",
+        "INSERT INTO alerts (user_id, symbol, alert_type, threshold, trigger_state) VALUES ($1, $2, $3, $4, $5) "
+        "ON CONFLICT DO NOTHING "
+        "RETURNING id, symbol, alert_type, threshold, is_active, trigger_state, created_at",
         user.user_id, body.symbol, body.alert_type, body.threshold, initial_state,
     )
+    if not row:
+        raise HTTPException(status_code=409, detail="Duplicate active alert")
     return dict(row)
 
 
@@ -128,13 +124,25 @@ async def toggle_alert(alert_id: UUID, body: ToggleAlertRequest, request: Reques
 
 
 @notifications_router.get("")
-async def list_notifications(request: Request, limit: int = 50, user: UserContext = Depends(require_active_user)) -> list:
+async def list_notifications(request: Request, limit: int = Query(default=20, le=100), cursor: Optional[UUID] = None, user: UserContext = Depends(require_active_user)) -> dict:
     db = request.state.db
-    rows = await db.fetch(
-        "SELECT id, alert_id, title, body, is_read, created_at FROM notifications WHERE user_id = $1 ORDER BY is_read ASC, created_at DESC LIMIT $2",
-        user.user_id, limit,
-    )
-    return [dict(row) for row in rows]
+    if cursor:
+        rows = await db.fetch(
+            "SELECT id, alert_id, title, body, is_read, created_at FROM notifications "
+            "WHERE user_id = $1 AND created_at < (SELECT created_at FROM notifications WHERE id = $2) "
+            "ORDER BY created_at DESC LIMIT $3",
+            user.user_id, cursor, limit,
+        )
+    else:
+        rows = await db.fetch(
+            "SELECT id, alert_id, title, body, is_read, created_at FROM notifications "
+            "WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2",
+            user.user_id, limit,
+        )
+    
+    items = [dict(row) for row in rows]
+    next_cursor = items[-1]["id"] if items and len(items) == limit else None
+    return {"items": items, "next_cursor": next_cursor}
 
 
 @notifications_router.get("/unread-count")

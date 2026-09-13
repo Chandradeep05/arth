@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Query
 from pydantic import BaseModel
 
 from app.core.auth import UserContext, require_active_user
@@ -34,6 +34,7 @@ class ConversationRename(BaseModel):
 class SendMessageRequest(BaseModel):
     content: str
     symbol_context: Optional[str] = None
+    idempotency_key: Optional[str] = None
 
 
 @router.get("")
@@ -57,7 +58,13 @@ async def create_conversation(body: ConversationCreate, request: Request, user: 
 
 
 @router.get("/{conversation_id}")
-async def get_conversation(conversation_id: UUID, request: Request, user: UserContext = Depends(require_active_user)) -> dict:
+async def get_conversation(
+    conversation_id: UUID,
+    request: Request,
+    limit: int = Query(default=20, le=100),
+    cursor: Optional[UUID] = None,
+    user: UserContext = Depends(require_active_user)
+) -> dict:
     db = request.state.db
     conv = await db.fetchrow(
         "SELECT id, title, message_count, created_at, updated_at FROM conversations WHERE id = $1 AND user_id = $2",
@@ -65,11 +72,23 @@ async def get_conversation(conversation_id: UUID, request: Request, user: UserCo
     )
     if not conv:
         raise HTTPException(status_code=404, detail="Conversation not found or not yours")
-    messages = await db.fetch(
-        "SELECT id, role, content, created_at FROM messages WHERE conversation_id = $1 ORDER BY created_at ASC",
-        conversation_id,
-    )
-    return {**dict(conv), "messages": [dict(m) for m in messages]}
+    
+    if cursor:
+        messages = await db.fetch(
+            "SELECT id, role, content, created_at FROM messages "
+            "WHERE conversation_id = $1 AND created_at > (SELECT created_at FROM messages WHERE id = $2) "
+            "ORDER BY created_at ASC LIMIT $3",
+            conversation_id, cursor, limit,
+        )
+    else:
+        messages = await db.fetch(
+            "SELECT id, role, content, created_at FROM messages WHERE conversation_id = $1 ORDER BY created_at ASC LIMIT $2",
+            conversation_id, limit,
+        )
+        
+    items = [dict(m) for m in messages]
+    next_cursor = items[-1]["id"] if items and len(items) == limit else None
+    return {**dict(conv), "messages": items, "next_cursor": next_cursor}
 
 
 @router.put("/{conversation_id}")
@@ -141,10 +160,24 @@ async def send_message(
 
     now = datetime.now(timezone.utc)
     async with db.transaction():
-        await db.execute(
-            "INSERT INTO messages (conversation_id, role, content, created_at) VALUES ($1, $2, $3, $4)",
-            conversation_id, "user", body.content, now,
-        )
+        if body.idempotency_key:
+            user_msg = await db.fetchrow(
+                "INSERT INTO messages (conversation_id, role, content, created_at, idempotency_key) VALUES ($1, $2, $3, $4, $5) "
+                "ON CONFLICT (conversation_id, idempotency_key) DO NOTHING RETURNING id",
+                conversation_id, "user", body.content, now, body.idempotency_key
+            )
+            if not user_msg:
+                existing = await db.fetchrow(
+                    "SELECT id, role, content, created_at FROM messages WHERE conversation_id = $1 AND idempotency_key = $2",
+                    conversation_id, body.idempotency_key
+                )
+                return dict(existing)
+        else:
+            await db.execute(
+                "INSERT INTO messages (conversation_id, role, content, created_at) VALUES ($1, $2, $3, $4)",
+                conversation_id, "user", body.content, now,
+            )
+
         await db.execute(
             "INSERT INTO messages (conversation_id, role, content, created_at) VALUES ($1, $2, $3, $4)",
             conversation_id, "assistant", ai_response, now,

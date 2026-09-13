@@ -190,13 +190,15 @@ async def _resolve_or_create_profile(
     from app.config import get_settings as _get_settings
     _settings = _get_settings()
     if _settings.initial_admin_email and email == _settings.initial_admin_email:
-        # One-time bootstrap: only promote if no admin exists yet
-        admin_count = await db.fetchval("SELECT COUNT(*) FROM profiles WHERE role = 'admin'")
-        if admin_count == 0:
-            await db.execute(
-                "UPDATE profiles SET role = 'admin', access_status = 'active' WHERE id = $1",
-                user_id,
-            )
+        # One-time bootstrap: atomic UPDATE that only promotes if no admin exists.
+        # The NOT EXISTS subquery prevents the race where two concurrent first
+        # logins both see zero admins and both promote.
+        result = await db.execute(
+            "UPDATE profiles SET role = 'admin', access_status = 'active' "
+            "WHERE id = $1 AND NOT EXISTS (SELECT 1 FROM profiles WHERE role = 'admin')",
+            user_id,
+        )
+        if result and result != 'UPDATE 0':
             logger.info("admin_bootstrap_on_first_login", email=email)
         else:
             logger.info("admin_bootstrap_skipped", email=email, reason="admin already exists")
