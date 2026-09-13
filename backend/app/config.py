@@ -95,6 +95,7 @@ class Settings(BaseSettings):
     groq_api_key: str = ""
     groq_model: str = "qwen/qwen3.6-27b"  # Reasoning model — emits <think> tags, stripped client-side
     groq_max_tokens: int = 4096
+    groq_fallback_models: str = "openai/gpt-oss-120b,openai/gpt-oss-20b"  # Comma-separated fallback chain
 
     # Ollama (Local dev fallback)
     ollama_base_url: str = "http://localhost:11434"

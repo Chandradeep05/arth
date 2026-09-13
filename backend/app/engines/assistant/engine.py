@@ -115,9 +115,11 @@ class AssistantEngine:
         api_key = self._settings.groq_api_key or ""
         if api_key and not api_key.startswith("your_"):
             try:
+                fallbacks = [m.strip() for m in self._settings.groq_fallback_models.split(",") if m.strip()]
                 self._llm = GroqClient(
                     api_key=api_key,
                     default_model=self._settings.groq_model,
+                    fallback_models=fallbacks,
                 )
             except Exception as e:
                 logger.warning("assistant_llm_init_failed", error=str(e))

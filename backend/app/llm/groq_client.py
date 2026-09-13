@@ -1,12 +1,20 @@
 """
-Groq LLM client — Primary provider for Phase 1.
+Groq LLM client — Primary provider with automatic model fallback chain.
 
 Groq provides extremely fast inference (free tier: 14,400 req/day).
-Note on Qwen reasoning models (e.g., qwen/qwen3.6-27b): These models emit
-<think>...</think> blocks natively. We must strip them on the client side
-instead of relying on reasoning_format='hidden' to ensure no tags leak.
-This is the production LLM for Phase 1, solving both the RAM constraint
-(no local GPU required) and the deployment problem (works identically in dev and prod).
+
+Fallback chain: if the primary model fails (429, decommissioned, quota exceeded,
+any error), the client automatically tries each fallback model in order.
+- generate(): tries each model in the chain, returns first success
+- stream(): only swaps models if nothing has been yielded yet — once tokens
+  are streaming, a late failure just ends with an error message rather than
+  producing a garbled, restarted-mid-sentence response.
+
+Default chain: qwen/qwen3.6-27b → openai/gpt-oss-120b → openai/gpt-oss-20b
+Configurable via GROQ_FALLBACK_MODELS env var without touching code.
+
+Note on <think> tag stripping: _strip_thinking() runs unconditionally regardless
+of model — safe as a no-op on non-reasoning models, so mixed model fallback works.
 """
 
 from __future__ import annotations
@@ -23,9 +31,6 @@ from app.llm.base import BaseLLMClient, LLMConfig, LLMMessage, LLMResponse
 logger = get_logger(__name__)
 
 # Regex to catch complete <think> blocks
-# We strip <think> blocks client-side because certain reasoning models
-# (like Qwen) may still leak tags or hit max_tokens mid-thought, making
-# reasoning_format='hidden' unreliable as a sole defense.
 _THINK_BLOCK_RE = re.compile(r'<think>.*?</think>', re.DOTALL | re.IGNORECASE)
 
 def _strip_thinking(content: str) -> str:
@@ -51,184 +56,228 @@ def _strip_thinking(content: str) -> str:
 
 
 class GroqClient(BaseLLMClient):
-    """Groq API client for fast LLM inference."""
+    """Groq API client with automatic model fallback chain."""
 
     provider_name = "groq"
 
-    def __init__(self, api_key: str, default_model: str = "qwen-2.5-32b"):
+    def __init__(
+        self,
+        api_key: str,
+        default_model: str = "qwen-2.5-32b",
+        fallback_models: Optional[List[str]] = None,
+    ):
         self._client = AsyncGroq(api_key=api_key)
         self._default_model = default_model
+        self._fallback_models = fallback_models or []
+
+    def _model_chain(self, config_model: Optional[str] = None) -> List[str]:
+        """Build ordered model chain: config override / primary → fallbacks."""
+        primary = config_model or self._default_model
+        chain = [primary]
+        for m in self._fallback_models:
+            if m != primary and m not in chain:
+                chain.append(m)
+        return chain
 
     async def generate(
         self,
         messages: List[LLMMessage],
         config: Optional[LLMConfig] = None,
     ) -> LLMResponse:
-        """Generate a complete response."""
+        """Generate a complete response, falling through the model chain on failure."""
         cfg = config or LLMConfig()
-        model = cfg.model or self._default_model
-
-        # Apply ARTH constraints to system prompt
+        chain = self._model_chain(cfg.model)
         processed_messages = self._process_messages(messages)
 
-        start_time = time.monotonic()
-        try:
-            response = await self._client.chat.completions.create(
-                model=model,
-                messages=[
-                    {"role": m.role, "content": m.content}
-                    for m in processed_messages
-                ],
-                max_tokens=cfg.max_tokens,
-                temperature=cfg.temperature,
-                top_p=cfg.top_p,
-                stop=cfg.stop_sequences or None,
-            )
-            latency = (time.monotonic() - start_time) * 1000
+        last_error = None
+        for depth, model in enumerate(chain):
+            start_time = time.monotonic()
+            try:
+                response = await self._client.chat.completions.create(
+                    model=model,
+                    messages=[
+                        {"role": m.role, "content": m.content}
+                        for m in processed_messages
+                    ],
+                    max_tokens=cfg.max_tokens,
+                    temperature=cfg.temperature,
+                    top_p=cfg.top_p,
+                    stop=cfg.stop_sequences or None,
+                )
+                latency = (time.monotonic() - start_time) * 1000
 
-            content = _strip_thinking(response.choices[0].message.content or '')
-            tokens = response.usage.total_tokens if response.usage else 0
+                content = _strip_thinking(response.choices[0].message.content or '')
+                tokens = response.usage.total_tokens if response.usage else 0
 
-            logger.info(
-                "groq_generation_complete",
-                model=model,
-                tokens=tokens,
-                latency_ms=round(latency, 2),
-            )
+                logger.info(
+                    "groq_generation_complete",
+                    model=model,
+                    tokens=tokens,
+                    latency_ms=round(latency, 2),
+                    fallback_depth=depth,
+                )
 
-            return LLMResponse(
-                content=content,
-                model=model,
-                provider=self.provider_name,
-                tokens_used=tokens,
-                finish_reason=response.choices[0].finish_reason or "stop",
-                latency_ms=latency,
-            )
-
-        except Exception as e:
-            latency = (time.monotonic() - start_time) * 1000
-            error_str = str(e)
-            logger.error(
-                "groq_generation_failed",
-                model=model,
-                error=error_str,
-                latency_ms=round(latency, 2),
-            )
-            # Return a clean error for rate-limit/quota issues instead of
-            # re-raising the raw vendor exception (which renders as JSON in reports).
-            if "429" in error_str or "rate_limit" in error_str.lower() or "quota" in error_str.lower():
                 return LLMResponse(
-                    content="⚠ AI analysis is temporarily unavailable due to rate limiting. Please try again in a minute.",
+                    content=content,
                     model=model,
                     provider=self.provider_name,
-                    tokens_used=0,
-                    finish_reason="rate_limited",
+                    tokens_used=tokens,
+                    finish_reason=response.choices[0].finish_reason or "stop",
                     latency_ms=latency,
                 )
-            raise
+
+            except Exception as e:
+                latency = (time.monotonic() - start_time) * 1000
+                error_str = str(e)
+                last_error = error_str
+                remaining = len(chain) - depth - 1
+                logger.warning(
+                    "groq_model_failed",
+                    model=model,
+                    error=error_str,
+                    latency_ms=round(latency, 2),
+                    fallback_depth=depth,
+                    fallbacks_remaining=remaining,
+                )
+                # Continue to next model in chain
+                continue
+
+        # All models exhausted — return clean error
+        logger.error(
+            "groq_all_models_exhausted",
+            chain=chain,
+            last_error=last_error,
+        )
+        return LLMResponse(
+            content="⚠ AI analysis is temporarily unavailable. All models are at capacity — please try again in a minute.",
+            model=chain[-1],
+            provider=self.provider_name,
+            tokens_used=0,
+            finish_reason="all_models_exhausted",
+            latency_ms=0,
+        )
 
     async def stream(
         self,
         messages: List[LLMMessage],
         config: Optional[LLMConfig] = None,
     ) -> AsyncGenerator[str, None]:
-        """Stream response tokens for progressive rendering."""
+        """Stream response tokens, falling through models only if nothing yielded yet."""
         cfg = config or LLMConfig()
-        model = cfg.model or self._default_model
-
+        chain = self._model_chain(cfg.model)
         processed_messages = self._process_messages(messages)
 
-        try:
-            stream = await self._client.chat.completions.create(
-                model=model,
-                messages=[
-                    {"role": m.role, "content": m.content}
-                    for m in processed_messages
-                ],
-                max_tokens=cfg.max_tokens,
-                temperature=cfg.temperature,
-                top_p=cfg.top_p,
-                stream=True,
-            )
+        for depth, model in enumerate(chain):
+            has_yielded = False
+            try:
+                stream = await self._client.chat.completions.create(
+                    model=model,
+                    messages=[
+                        {"role": m.role, "content": m.content}
+                        for m in processed_messages
+                    ],
+                    max_tokens=cfg.max_tokens,
+                    temperature=cfg.temperature,
+                    top_p=cfg.top_p,
+                    stream=True,
+                )
 
-            buffer = ""
-            in_thinking_block = False
-            past_thinking = False
+                buffer = ""
+                in_thinking_block = False
+                past_thinking = False
 
-            async for chunk in stream:
-                if chunk.choices and chunk.choices[0].delta.content:
-                    token = chunk.choices[0].delta.content
-                    
-                    if past_thinking:
-                        # Once past thinking, yield chunks directly (no latency penalty)
-                        yield token
-                        continue
+                async for chunk in stream:
+                    if chunk.choices and chunk.choices[0].delta.content:
+                        token = chunk.choices[0].delta.content
                         
-                    buffer += token
-                    
-                    if in_thinking_block:
-                        end_tag = "</think>"
-                        end_idx = buffer.lower().find(end_tag)
-                        if end_idx != -1:
-                            in_thinking_block = False
-                            past_thinking = True
-                            # Yield content after </think>
-                            remaining = buffer[end_idx + len(end_tag):]
-                            if remaining.lstrip():
-                                yield remaining.lstrip()
-                            buffer = ""
-                        elif len(buffer) > 20: 
-                            # Keep a small buffer for sliding window in case of chunked tags
+                        if past_thinking:
+                            has_yielded = True
+                            yield token
+                            continue
+                            
+                        buffer += token
+                        
+                        if in_thinking_block:
+                            end_tag = "</think>"
+                            end_idx = buffer.lower().find(end_tag)
+                            if end_idx != -1:
+                                in_thinking_block = False
+                                past_thinking = True
+                                remaining = buffer[end_idx + len(end_tag):]
+                                if remaining.lstrip():
+                                    has_yielded = True
+                                    yield remaining.lstrip()
+                                buffer = ""
+                            elif len(buffer) > 20: 
+                                buffer = buffer[-7:]
+                            continue
+                            
+                        start_tag = "<think>"
+                        start_idx = buffer.lower().find(start_tag)
+                        
+                        if start_idx != -1:
+                            if start_idx > 0:
+                                has_yielded = True
+                                yield buffer[:start_idx]
+                            in_thinking_block = True
+                            buffer = buffer[start_idx + len(start_tag):]
+                            continue
+                            
+                        if len(buffer) >= 8:
+                            has_yielded = True
+                            yield buffer[:-7]
                             buffer = buffer[-7:]
-                        continue
-                        
-                    # Not currently in thinking block, looking for <think>
-                    start_tag = "<think>"
-                    start_idx = buffer.lower().find(start_tag)
-                    
-                    if start_idx != -1:
-                        if start_idx > 0:
-                            yield buffer[:start_idx]
-                        in_thinking_block = True
-                        buffer = buffer[start_idx + len(start_tag):]
-                        continue
-                        
-                    # Tag not found yet. 
-                    # If no <think> appears after 8+ characters of buffer, flush the buffer
-                    if len(buffer) >= 8:
-                        yield buffer[:-7]
-                        buffer = buffer[-7:]
 
-            # At end of stream, flush any remaining non-thinking buffer
-            if buffer and not in_thinking_block and not past_thinking:
-                yield buffer
-            elif in_thinking_block and not past_thinking:
-                # Model burned its whole token budget inside <think> and never
-                # closed it — without this the generator yields nothing at all
-                # and the user gets a permanently empty response.
-                logger.warning("groq_stream_unterminated_think_block", model=model)
-                yield "I need a bit more room to think through that — could you ask again, maybe a little more specifically?"
+                # End of stream — flush remaining buffer
+                if buffer and not in_thinking_block and not past_thinking:
+                    yield buffer
+                elif in_thinking_block and not past_thinking:
+                    logger.warning("groq_stream_unterminated_think_block", model=model)
+                    yield "I need a bit more room to think through that — could you ask again, maybe a little more specifically?"
 
-        except Exception as e:
-            error_str = str(e)
-            logger.error("groq_stream_failed", model=model, error=error_str)
-            if "429" in error_str or "rate_limit" in error_str.lower() or "quota" in error_str.lower():
-                yield "\n\n⚠ AI analysis is temporarily unavailable due to rate limiting. Please try again in a minute."
-            else:
-                yield f"\n\n[Error: AI generation failed. Please try again.]"
+                if depth > 0:
+                    logger.info("groq_stream_fallback_success", model=model, fallback_depth=depth)
+                # Success — exit the chain loop
+                return
+
+            except Exception as e:
+                error_str = str(e)
+                remaining = len(chain) - depth - 1
+                logger.warning(
+                    "groq_stream_model_failed",
+                    model=model,
+                    error=error_str,
+                    fallback_depth=depth,
+                    fallbacks_remaining=remaining,
+                    has_yielded=has_yielded,
+                )
+
+                if has_yielded:
+                    # Already sent tokens — can't switch models mid-response.
+                    # Yield clean error and stop.
+                    yield "\n\n[Error: AI generation interrupted. Please try again.]"
+                    return
+
+                # Nothing yielded yet — try next model
+                continue
+
+        # All models exhausted, nothing was yielded
+        yield "⚠ AI analysis is temporarily unavailable. All models are at capacity — please try again in a minute."
 
     async def health_check(self) -> bool:
-        """Check if Groq API is reachable."""
-        try:
-            response = await self._client.chat.completions.create(
-                model=self._default_model,
-                messages=[{"role": "user", "content": "ping"}],
-                max_tokens=5,
-            )
-            return True
-        except Exception as e:
-            logger.warning("groq_health_check_failed", error=str(e))
-            return False
+        """Check if Groq API is reachable with any model in the chain."""
+        for model in self._model_chain():
+            try:
+                await self._client.chat.completions.create(
+                    model=model,
+                    messages=[{"role": "user", "content": "ping"}],
+                    max_tokens=5,
+                )
+                return True
+            except Exception as e:
+                logger.warning("groq_health_check_failed", model=model, error=str(e))
+                continue
+        return False
 
     def _process_messages(self, messages: List[LLMMessage]) -> List[LLMMessage]:
         """Apply ARTH constraints to system prompts."""
