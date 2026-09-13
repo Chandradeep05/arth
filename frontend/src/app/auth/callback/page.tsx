@@ -1,27 +1,75 @@
-﻿"use client";
+"use client";
 
 // Supabase OAuth Callback Handler
-// After Google sign-in, Supabase redirects here with auth tokens in URL fragment.
-// The Supabase client auto-detects the session from the URL via detectSessionInUrl:true.
+// After Google sign-in, Supabase redirects here with either:
+//   - PKCE flow: ?code=xxx in the URL (exchanged by the client automatically)
+//   - Implicit flow: #access_token=xxx in the hash fragment
+// The @supabase/ssr browser client handles both cases automatically
+// and stores the session in cookies (shared with middleware).
 
-import { useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabase/client";
 
 export default function AuthCallbackPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    // Listen for auth state change (triggered when Supabase processes the callback URL)
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
-      if (event === "SIGNED_IN" && session) {
-        // Redirect to dashboard on successful sign-in
-        router.replace("/");
-      }
-    });
+    const code = searchParams.get("code");
 
-    return () => subscription.unsubscribe();
-  }, [router]);
+    async function handleCallback() {
+      if (code) {
+        // PKCE flow: exchange the code for a session
+        const { error } = await supabase.auth.exchangeCodeForSession(code);
+        if (error) {
+          setError(error.message);
+          return;
+        }
+      }
+
+      // Check if we have a session (works for both PKCE and implicit flow)
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session) {
+        router.replace("/");
+      } else if (!code) {
+        // No code and no session — listen for auth state change (implicit flow)
+        const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+          if (event === "SIGNED_IN" && session) {
+            router.replace("/");
+          }
+        });
+        // Timeout: if no session after 5 seconds, redirect to login
+        const timeout = setTimeout(() => {
+          subscription.unsubscribe();
+          setError("Authentication timed out. Please try again.");
+        }, 5000);
+        return () => {
+          clearTimeout(timeout);
+          subscription.unsubscribe();
+        };
+      }
+    }
+
+    handleCallback();
+  }, [router, searchParams]);
+
+  if (error) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[var(--bg)]">
+        <div className="flex flex-col items-center gap-4 max-w-md text-center">
+          <p className="text-sm text-red-400">{error}</p>
+          <button
+            onClick={() => router.replace("/login")}
+            className="px-4 py-2 text-sm bg-[var(--accent)] text-black rounded-lg hover:opacity-90"
+          >
+            Back to Login
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-[var(--bg)]">

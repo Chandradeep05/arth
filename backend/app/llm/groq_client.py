@@ -107,12 +107,24 @@ class GroqClient(BaseLLMClient):
 
         except Exception as e:
             latency = (time.monotonic() - start_time) * 1000
+            error_str = str(e)
             logger.error(
                 "groq_generation_failed",
                 model=model,
-                error=str(e),
+                error=error_str,
                 latency_ms=round(latency, 2),
             )
+            # Return a clean error for rate-limit/quota issues instead of
+            # re-raising the raw vendor exception (which renders as JSON in reports).
+            if "429" in error_str or "rate_limit" in error_str.lower() or "quota" in error_str.lower():
+                return LLMResponse(
+                    content="⚠ AI analysis is temporarily unavailable due to rate limiting. Please try again in a minute.",
+                    model=model,
+                    provider=self.provider_name,
+                    tokens_used=0,
+                    finish_reason="rate_limited",
+                    latency_ms=latency,
+                )
             raise
 
     async def stream(
@@ -198,8 +210,12 @@ class GroqClient(BaseLLMClient):
                 yield "I need a bit more room to think through that — could you ask again, maybe a little more specifically?"
 
         except Exception as e:
-            logger.error("groq_stream_failed", model=model, error=str(e))
-            yield f"\n\n[Error: AI generation failed — {str(e)}]"
+            error_str = str(e)
+            logger.error("groq_stream_failed", model=model, error=error_str)
+            if "429" in error_str or "rate_limit" in error_str.lower() or "quota" in error_str.lower():
+                yield "\n\n⚠ AI analysis is temporarily unavailable due to rate limiting. Please try again in a minute."
+            else:
+                yield f"\n\n[Error: AI generation failed. Please try again.]"
 
     async def health_check(self) -> bool:
         """Check if Groq API is reachable."""
