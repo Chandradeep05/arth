@@ -118,19 +118,26 @@ export default function AssistantPage() {
     setMessages(prev => [...prev, { id: assistantMsgId, role: 'assistant', content: '' }]);
 
     try {
-      // First save the message to DB
-      await api.post(`/api/v1/user/conversations/${convId}/messages`, { content: userMsg.content });
-      
-      // Then start SSE stream
+      // Stream via /assistant/chat — backend owns persistence (no separate POST needed)
       const response = await fetch(`${API_URL}/api/v1/assistant/chat`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${session?.access_token}`
         },
-        body: JSON.stringify({ message: userMsg.content, session_id: convId, stream: true })
+        body: JSON.stringify({
+          message: userMsg.content,
+          session_id: convId,
+          conversation_id: convId,
+          stream: true
+        })
       });
 
+      if (response.status === 401) {
+        setMessages(prev => prev.map(m => m.id === assistantMsgId ? { ...m, content: 'Sign in to use the AI assistant.' } : m));
+        setIsLoading(false);
+        return;
+      }
       if (!response.ok) throw new Error('Stream failed');
       
       const reader = response.body?.getReader();
@@ -149,8 +156,8 @@ export default function AssistantPage() {
             if (line.startsWith('data: ') && line !== 'data: [DONE]') {
               try {
                 const data = JSON.parse(line.slice(6));
-                if (data.delta) {
-                  aiContent += data.delta;
+                if (data.type === 'token' && data.content) {
+                  aiContent += data.content;
                   setMessages(prev => prev.map(m => m.id === assistantMsgId ? { ...m, content: aiContent } : m));
                 }
               } catch (e) {

@@ -174,7 +174,7 @@ async def warm_alert_symbols(
     for symbol in to_warm:
         try:
             res = await market_data.get_quote(symbol)
-            if res.success and res.data:
+            if res.available and res.data:
                 await redis.set(
                     f"quote:{symbol}",
                     json.dumps(res.data),

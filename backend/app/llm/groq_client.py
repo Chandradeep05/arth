@@ -63,7 +63,7 @@ class GroqClient(BaseLLMClient):
     def __init__(
         self,
         api_key: str,
-        default_model: str = "qwen-2.5-32b",
+        default_model: str,
         fallback_models: Optional[List[str]] = None,
     ):
         self._client = AsyncGroq(api_key=api_key)

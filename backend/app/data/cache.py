@@ -39,7 +39,33 @@ _last_cleanup = [0.0]
 # ── Thundering Herd Protection ────────────────────────────────────────
 # Prevents N concurrent cache misses for the same key from making N
 # Yahoo calls. Only the first miss fetches; others wait and read cache.
-_fetch_locks: Dict[str, asyncio.Lock] = {}
+from dataclasses import dataclass, field as dc_field
+
+@dataclass
+class _LockEntry:
+    lock: asyncio.Lock = dc_field(default_factory=asyncio.Lock)
+    ref_count: int = 0
+
+_fetch_locks: dict[str, _LockEntry] = {}
+
+class _FetchLock:
+    """Reference-counted async lock. Only removed when no coroutine holds or waits on it."""
+    def __init__(self, key: str):
+        self._key = key
+        if key not in _fetch_locks:
+            _fetch_locks[key] = _LockEntry()
+        self._entry = _fetch_locks[key]
+        self._entry.ref_count += 1
+
+    async def __aenter__(self):
+        await self._entry.lock.acquire()
+        return self
+
+    async def __aexit__(self, *_):
+        self._entry.lock.release()
+        self._entry.ref_count -= 1
+        if self._entry.ref_count == 0:
+            _fetch_locks.pop(self._key, None)
 
 
 def _memory_get(key: str) -> Optional[dict]:
@@ -198,10 +224,7 @@ class CacheManager:
             return cached
 
         # Acquire per-key lock to prevent duplicate fetches
-        if key not in _fetch_locks:
-            _fetch_locks[key] = asyncio.Lock()
-
-        async with _fetch_locks[key]:
+        async with _FetchLock(key):
             # Re-check cache — another coroutine may have populated it
             cached = await self.get(key)
             if cached is not None:

@@ -49,7 +49,7 @@ class ResearchEngine:
                 fallbacks = [m.strip() for m in self._settings.groq_fallback_models.split(",") if m.strip()]
                 self._llm = GroqClient(
                     api_key=api_key,
-                    default_model=self._settings.groq_model,
+                    default_model=self._settings.groq_model_research,
                     fallback_models=fallbacks,
                 )
             except Exception as e:
@@ -123,7 +123,7 @@ class ResearchEngine:
             "company_name": company_info.get("name", symbol),
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "report_content": response.content,
-            "confidence_score": 65.0,  # Base confidence — Phase 2 will compute this dynamically
+            "evidence_strength": 65,  # Data coverage score (0-100). Not a statistical confidence interval.
             "data_sources": [self._data.get_source_label(symbol)],
             "llm_provider": response.provider,
             "llm_model": response.model,
@@ -290,7 +290,7 @@ class ResearchEngine:
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "report_content": response.content,
             "report_type": "deep",
-            "confidence_score": 75.0,  # Higher confidence with RAG
+            "evidence_strength": 75,  # Higher with RAG. Data coverage score (0-100), not a CI.
             "data_sources": [self._data.get_source_label(symbol)] + [
                 s["source"] for s in rag_result["sources"]
             ],

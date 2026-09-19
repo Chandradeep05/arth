@@ -70,7 +70,15 @@ async def get_saved(research_id: UUID, request: Request, user: UserContext = Dep
     )
     if not row:
         raise HTTPException(status_code=404, detail="Research not found or not yours")
-    return dict(row)
+    result = dict(row)
+    # Backward-compat: handle legacy double-encoded jsonb rows
+    for field in ('report_content', 'sources'):
+        if isinstance(result.get(field), str):
+            try:
+                result[field] = json.loads(result[field])
+            except (json.JSONDecodeError, TypeError):
+                pass
+    return result
 
 
 @router.delete("/saved/{research_id}")

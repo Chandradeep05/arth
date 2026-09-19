@@ -12,10 +12,13 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, Query
+import json
+
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import StreamingResponse
 
 from app.config import Settings, get_settings
+from app.core.auth import UserContext, require_active_user
 from app.core.exceptions import SymbolNotFoundError
 from app.core.logging import get_logger
 from app.data.cache import CacheManager
@@ -30,8 +33,10 @@ router = APIRouter(prefix="/research", tags=["research"])
 @router.post("/generate/{symbol}")
 async def generate_research(
     symbol: str,
+    request: Request,
     depth: str = Query(default="standard", description="quick, standard, or deep"),
     stream: bool = Query(default=True, description="Stream response via SSE"),
+    user: UserContext = Depends(require_active_user),
     redis=Depends(get_redis),
     settings: Settings = Depends(get_settings),
 ):
@@ -41,24 +46,18 @@ async def generate_research(
     Streams the response via Server-Sent Events for progressive rendering.
     depth=deep uses RAG for cited reports (requires indexing first).
     """
-    # TODO: Add quota enforcement when user auth is added:
-    # from app.core.quotas import check_user_quota
-    # await check_user_quota(request, user.user_id, 'research_gen')
-    
     engine = ResearchEngine(settings)
 
     if stream:
         async def event_stream():
-            yield f"data: {{\"type\": \"start\", \"symbol\": \"{symbol.upper()}\"}}\n\n"
+            yield f"data: {json.dumps({'type': 'start', 'symbol': symbol.upper()})}\n\n"
             if depth == "deep":
                 gen = engine.stream_deep_research(symbol)
             else:
                 gen = engine.stream_report(symbol, depth)
             async for token in gen:
-                # Escape for SSE
-                escaped = token.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
-                yield f"data: {{\"type\": \"token\", \"content\": \"{escaped}\"}}\n\n"
-            yield f"data: {{\"type\": \"done\"}}\n\n"
+                yield f"data: {json.dumps({'type': 'token', 'content': token})}\n\n"
+            yield f"data: {json.dumps({'type': 'done'})}\n\n"
 
         return StreamingResponse(
             event_stream(),
@@ -134,7 +133,11 @@ async def get_cached_report(
 # ── RAG Endpoints (Phase 2) ─────────────────────────────────────
 
 @router.post("/index/{symbol}")
-async def index_company(symbol: str):
+async def index_company(
+    symbol: str,
+    request: Request,
+    user: UserContext = Depends(require_active_user),
+):
     """Trigger document ingestion for RAG-powered deep research.
 
     Fetches company info, financials, and news from Yahoo Finance,

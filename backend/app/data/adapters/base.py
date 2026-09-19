@@ -61,16 +61,19 @@ class CircuitBreaker:
             return True
 
         if self.state == CircuitState.OPEN:
-            # Check if recovery timeout has elapsed
             if time.monotonic() - self.last_failure_time >= self.recovery_timeout:
                 self.state = CircuitState.HALF_OPEN
                 self.half_open_calls = 0
                 logger.info("circuit_breaker_half_open")
+                self.half_open_calls += 1  # Claim the first probe
                 return True
             return False
 
         if self.state == CircuitState.HALF_OPEN:
-            return self.half_open_calls < self.half_open_max_calls
+            if self.half_open_calls < self.half_open_max_calls:
+                self.half_open_calls += 1  # Claim a probe slot
+                return True
+            return False
 
         return False
 

@@ -152,7 +152,7 @@ class Backtester:
             }
 
             # Save to disk for historical tracking
-            self._save_result(symbol, result)
+            self._save_result(symbol, result, lookback_days)
 
             return result
 
@@ -164,9 +164,9 @@ class Backtester:
                 "message": f"Backtest failed: {str(e)}",
             }
 
-    def get_cached_accuracy(self, symbol: str) -> Optional[Dict[str, Any]]:
+    def get_cached_accuracy(self, symbol: str, lookback_days: int = 90) -> Optional[Dict[str, Any]]:
         """Get last cached backtest result for a symbol."""
-        filepath = _ACCURACY_DIR / f"{symbol.upper().replace('.', '_')}_accuracy.json"
+        filepath = _ACCURACY_DIR / f"{symbol.upper().replace('.', '_')}_{lookback_days}d_accuracy.json"
         if filepath.exists():
             try:
                 return json.loads(filepath.read_text())
@@ -174,10 +174,10 @@ class Backtester:
                 return None
         return None
 
-    def _save_result(self, symbol: str, result: Dict[str, Any]) -> None:
+    def _save_result(self, symbol: str, result: Dict[str, Any], lookback_days: int) -> None:
         """Persist backtest result to disk."""
         try:
-            filepath = _ACCURACY_DIR / f"{symbol.upper().replace('.', '_')}_accuracy.json"
+            filepath = _ACCURACY_DIR / f"{symbol.upper().replace('.', '_')}_{lookback_days}d_accuracy.json"
             filepath.write_text(json.dumps(result, indent=2))
         except Exception as e:
             logger.warning("accuracy_save_failed", symbol=symbol, error=str(e))

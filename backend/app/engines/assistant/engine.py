@@ -118,7 +118,7 @@ class AssistantEngine:
                 fallbacks = [m.strip() for m in self._settings.groq_fallback_models.split(",") if m.strip()]
                 self._llm = GroqClient(
                     api_key=api_key,
-                    default_model=self._settings.groq_model,
+                    default_model=self._settings.groq_model_chat,
                     fallback_models=fallbacks,
                 )
             except Exception as e:

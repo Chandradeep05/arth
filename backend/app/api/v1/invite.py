@@ -64,8 +64,8 @@ async def redeem_invite_code(
     now = datetime.now(timezone.utc)
 
     # Only pending users can redeem invites
-    if user.access_status == 'active':
-        raise HTTPException(status_code=409, detail="Account is already active.")
+    if user.access_status != 'pending':
+        raise HTTPException(status_code=403, detail="Only pending accounts can redeem invite codes.")
 
     async with db.transaction():
         # Lock the invite code row for this transaction

@@ -14,6 +14,7 @@ import {
   Zap,
 } from 'lucide-react';
 import { apiClient } from '@/lib/api';
+import { useAuthenticatedApi } from '@/lib/auth/useAuthenticatedApi';
 
 interface SHAPFactor {
   name: string;
@@ -53,18 +54,28 @@ export default function PredictionPanel({ symbol }: { symbol: string }) {
   const [data, setData] = useState<PredictionData | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const authApi = useAuthenticatedApi();
 
   const generateForecast = async () => {
     setLoading(true);
     setError(null);
     try {
-      const res = await apiClient.post<PredictionData>(
+      if (!authApi.isAuthenticated) {
+        setError('Sign in to generate predictions.');
+        setLoading(false);
+        return;
+      }
+      const res = await authApi.post<PredictionData>(
         `/api/v1/prediction/${encodeURIComponent(symbol)}/forecast`,
         {}
       );
       setData(res);
     } catch (err: any) {
-      setError(err?.message || 'Failed to generate prediction');
+      if (err?.status === 401) {
+        setError('Sign in to generate predictions.');
+      } else {
+        setError(err?.message || 'Failed to generate prediction');
+      }
     } finally {
       setLoading(false);
     }

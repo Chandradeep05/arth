@@ -68,17 +68,22 @@ async def update_user_role(
     admin: UserContext = Depends(require_admin),
 ) -> dict:
     db = request.state.db
-    if body.role == "user":
-        admin_count = await db.fetchval("SELECT COUNT(*) FROM profiles WHERE role = $1", "admin")
+    async with db.transaction():
+        # Advisory lock serializes ALL admin role changes system-wide
+        await db.execute("SELECT pg_advisory_xact_lock(42)")
+        
         target_role = await db.fetchval("SELECT role FROM profiles WHERE id = $1", user_id)
-        if target_role == "admin" and admin_count <= 1:
-            raise HTTPException(status_code=409, detail="Cannot demote the last admin.")
-    result = await db.execute(
-        "UPDATE profiles SET role = $1, updated_at = $2 WHERE id = $3",
-        body.role, datetime.now(timezone.utc), user_id,
-    )
-    if result == "UPDATE 0":
-        raise HTTPException(status_code=404, detail="User not found")
+        if target_role == "admin" and body.role != "admin":
+            admin_count = await db.fetchval("SELECT COUNT(*) FROM profiles WHERE role = 'admin'")
+            if admin_count <= 1:
+                raise HTTPException(status_code=409, detail="Cannot demote the last admin.")
+        
+        result = await db.execute(
+            "UPDATE profiles SET role = $1, updated_at = $2 WHERE id = $3",
+            body.role, datetime.now(timezone.utc), user_id,
+        )
+        if result == "UPDATE 0":
+            raise HTTPException(status_code=404, detail="User not found")
     return {"success": True, "user_id": str(user_id), "role": body.role}
 
 

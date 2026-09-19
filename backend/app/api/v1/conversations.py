@@ -76,8 +76,9 @@ async def get_conversation(
     if cursor:
         messages = await db.fetch(
             "SELECT id, role, content, created_at FROM messages "
-            "WHERE conversation_id = $1 AND created_at > (SELECT created_at FROM messages WHERE id = $2) "
-            "ORDER BY created_at ASC LIMIT $3",
+            "WHERE conversation_id = $1 "
+            "AND (created_at, id) > ((SELECT created_at FROM messages WHERE id = $2), $2) "
+            "ORDER BY created_at ASC, id ASC LIMIT $3",
             conversation_id, cursor, limit,
         )
     else:
@@ -119,7 +120,13 @@ async def send_message(
     request: Request,
     user: UserContext = Depends(require_active_user),
 ) -> dict:
-    """Send message, load history from DB (replaces _sessions), persist response."""
+    """Save a message pair to the conversation. Does NOT call the LLM.
+
+    LLM generation + streaming happens via POST /assistant/chat.
+    This endpoint is for persisting user + assistant messages that were
+    already generated through the streaming path, or for saving messages
+    from non-streaming interactions.
+    """
     db = request.state.db
     conv = await db.fetchrow(
         "SELECT id FROM conversations WHERE id = $1 AND user_id = $2",
@@ -128,37 +135,10 @@ async def send_message(
     if not conv:
         raise HTTPException(status_code=404, detail="Conversation not found or not yours")
 
-    # Load recent history (token-budget aware: newest N messages, then reverse for chronological order)
-    history_rows = await db.fetch(
-        "SELECT role, content FROM messages WHERE conversation_id = $1 ORDER BY created_at DESC LIMIT $2",
-        conversation_id, MAX_HISTORY_MESSAGES,
-    )
-    history = [{"role": r["role"], "content": r["content"]} for r in reversed(history_rows)]
-
-    engine = request.app.state.assistant_engine
-    if not engine:
-        raise HTTPException(status_code=503, detail="AI engine not available")
-
-    # Per-user chat quota enforcement (Missing #3 from audit)
-    redis = getattr(request.app.state, "redis", None)
-    if redis:
-        from app.core.quotas import check_user_quota
-        await check_user_quota(user.user_id, "chat", redis)
-
-    try:
-        # chat_stateless() returns a string (not a dict)
-        ai_response = await engine.chat_stateless(
-            user_message=body.content,
-            history=history,
-            symbol_context=body.symbol_context,
-        )
-    except HTTPException:
-        raise  # Re-raise quota 429 errors
-    except Exception as e:
-        logger.error("chat_failed", error=str(e), conversation_id=str(conversation_id))
-        raise HTTPException(status_code=500, detail="AI response failed. Try again.")
-
     now = datetime.now(timezone.utc)
+    from datetime import timedelta
+    assistant_ts = now + timedelta(microseconds=1)  # Guarantee ordering
+
     async with db.transaction():
         if body.idempotency_key:
             user_msg = await db.fetchrow(
@@ -167,11 +147,17 @@ async def send_message(
                 conversation_id, "user", body.content, now, body.idempotency_key
             )
             if not user_msg:
+                # Duplicate — return existing assistant response (not user message)
                 existing = await db.fetchrow(
-                    "SELECT id, role, content, created_at FROM messages WHERE conversation_id = $1 AND idempotency_key = $2",
+                    "SELECT m.id, m.role, m.content, m.created_at FROM messages m "
+                    "WHERE m.conversation_id = $1 AND m.role = 'assistant' "
+                    "AND m.created_at >= (SELECT created_at FROM messages WHERE conversation_id = $1 AND idempotency_key = $2) "
+                    "ORDER BY m.created_at ASC LIMIT 1",
                     conversation_id, body.idempotency_key
                 )
-                return dict(existing)
+                if existing:
+                    return {"role": "assistant", "content": existing["content"], "conversation_id": str(conversation_id)}
+                return {"role": "user", "content": body.content, "conversation_id": str(conversation_id), "duplicate": True}
         else:
             await db.execute(
                 "INSERT INTO messages (conversation_id, role, content, created_at) VALUES ($1, $2, $3, $4)",
@@ -179,12 +165,9 @@ async def send_message(
             )
 
         await db.execute(
-            "INSERT INTO messages (conversation_id, role, content, created_at) VALUES ($1, $2, $3, $4)",
-            conversation_id, "assistant", ai_response, now,
-        )
-        await db.execute(
-            "UPDATE conversations SET message_count = message_count + 2, updated_at = $1 WHERE id = $2",
+            "UPDATE conversations SET message_count = message_count + 1, updated_at = $1 WHERE id = $2",
             now, conversation_id,
         )
 
-    return {"role": "assistant", "content": ai_response, "conversation_id": str(conversation_id)}
+    return {"role": "user", "content": body.content, "conversation_id": str(conversation_id)}
+

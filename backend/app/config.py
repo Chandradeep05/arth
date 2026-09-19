@@ -12,7 +12,7 @@ from enum import Enum
 from functools import lru_cache
 from typing import List
 
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -91,11 +91,13 @@ class Settings(BaseSettings):
     # ── LLM Configuration ──
     llm_tier: LLMTier = LLMTier.CLOUD
 
-    # Groq (Primary — using Qwen reasoning model. <think> tags stripped in groq_client.py)
+    # Groq (Primary — Production-tier models only. No Preview-tier models in any chain.)
     groq_api_key: str = ""
-    groq_model: str = "qwen/qwen3.6-27b"  # Reasoning model — emits <think> tags, stripped client-side
+    groq_model_research: str = "openai/gpt-oss-120b"   # Production-tier, large context for deep reports
+    groq_model_chat: str = "openai/gpt-oss-20b"         # Production-tier, faster/cheaper for chat
+    groq_model: str = ""  # DEPRECATED — use groq_model_research or groq_model_chat
     groq_max_tokens: int = 1000  # Default to 1000 to respect Groq free tier output-tokens-per-minute (OTPM) ceiling
-    groq_fallback_models: str = "openai/gpt-oss-120b,openai/gpt-oss-20b"  # Comma-separated fallback chain
+    groq_fallback_models: str = "openai/gpt-oss-20b,openai/gpt-oss-120b"  # Cross-fallback chain
 
     # Ollama (Local dev fallback)
     ollama_base_url: str = "http://localhost:11434"
@@ -175,6 +177,16 @@ class Settings(BaseSettings):
     data_freshness_threshold_live: int = 60        # seconds
     data_freshness_threshold_fundamentals: int = 86400  # seconds
     price_anomaly_threshold_pct: float = 20.0
+
+    @model_validator(mode="after")
+    def _migrate_groq_model(self):
+        """Backward compat: if only GROQ_MODEL is set (non-Preview), use it for both."""
+        if self.groq_model and not self.groq_model.startswith("qwen"):
+            if self.groq_model_research == "openai/gpt-oss-120b":  # still default
+                self.groq_model_research = self.groq_model
+            if self.groq_model_chat == "openai/gpt-oss-20b":  # still default
+                self.groq_model_chat = self.groq_model
+        return self
 
     @property
     def is_production(self) -> bool:

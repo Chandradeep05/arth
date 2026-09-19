@@ -65,10 +65,6 @@ async def list_alerts(request: Request, user: UserContext = Depends(require_acti
 async def create_alert(body: CreateAlertRequest, request: Request, user: UserContext = Depends(require_active_user)) -> dict:
     db = request.state.db
     
-    count = await db.fetchval("SELECT COUNT(*) FROM alerts WHERE user_id = $1 AND is_active = true", user.user_id)
-    if count >= 50:
-        raise HTTPException(status_code=429, detail="Max 50 active alerts reached.")
-        
     # Check redis cache to determine initial trigger_state
     redis = getattr(request.app.state, "redis", None)
     initial_state = "armed"
@@ -91,12 +87,20 @@ async def create_alert(body: CreateAlertRequest, request: Request, user: UserCon
                 except Exception:
                     continue
 
-    row = await db.fetchrow(
-        "INSERT INTO alerts (user_id, symbol, alert_type, threshold, trigger_state) VALUES ($1, $2, $3, $4, $5) "
-        "ON CONFLICT DO NOTHING "
-        "RETURNING id, symbol, alert_type, threshold, is_active, trigger_state, created_at",
-        user.user_id, body.symbol, body.alert_type, body.threshold, initial_state,
-    )
+    # Serialized within transaction: lock user's profile row, then count, then insert.
+    # This prevents concurrent requests from exceeding the 50-cap.
+    async with db.transaction():
+        await db.fetchrow("SELECT id FROM profiles WHERE id = $1 FOR UPDATE", user.user_id)
+        count = await db.fetchval("SELECT COUNT(*) FROM alerts WHERE user_id = $1 AND is_active = true", user.user_id)
+        if count >= 50:
+            raise HTTPException(status_code=429, detail="Max 50 active alerts reached.")
+        
+        row = await db.fetchrow(
+            "INSERT INTO alerts (user_id, symbol, alert_type, threshold, trigger_state) VALUES ($1, $2, $3, $4, $5) "
+            "ON CONFLICT DO NOTHING "
+            "RETURNING id, symbol, alert_type, threshold, is_active, trigger_state, created_at",
+            user.user_id, body.symbol, body.alert_type, body.threshold, initial_state,
+        )
     if not row:
         raise HTTPException(status_code=409, detail="Duplicate active alert")
     return dict(row)

@@ -17,6 +17,7 @@ NOT accuracy percentage (which would be misleading for regression).
 
 from __future__ import annotations
 
+import asyncio
 import gc
 import hashlib
 import json
@@ -76,7 +77,6 @@ class PredictionModel:
             }
         """
         import xgboost as xgb
-        from sklearn.model_selection import TimeSeriesSplit
         from sklearn.metrics import r2_score, mean_absolute_error
 
         try:
@@ -91,7 +91,7 @@ class PredictionModel:
                 features=len(X.columns),
             )
 
-            # Walk-forward split: train on first 80%, validate on last 20%
+            # Chronological 80/20 split (NOT walk-forward — that's deferred architecture work)
             split_idx = int(len(X) * 0.8)
             X_train, X_val = X.iloc[:split_idx], X.iloc[split_idx:]
             y_train, y_val = y.iloc[:split_idx], y.iloc[split_idx:]
@@ -110,14 +110,15 @@ class PredictionModel:
                 tree_method="hist",  # Memory-efficient
             )
 
-            model.fit(
+            await asyncio.to_thread(
+                model.fit,
                 X_train, y_train,
                 eval_set=[(X_val, y_val)],
                 verbose=False,
             )
 
             # Validation metrics
-            y_pred_val = model.predict(X_val)
+            y_pred_val = await asyncio.to_thread(model.predict, X_val)
             r2 = float(r2_score(y_val, y_pred_val))
             mae = float(mean_absolute_error(y_val, y_pred_val))
 
@@ -126,7 +127,8 @@ class PredictionModel:
             live_df = live_df[X.columns]  # Ensure column order matches
             # Sanitize: replace inf with NaN, then NaN with 0
             live_df = live_df.replace([np.inf, -np.inf], np.nan).fillna(0)
-            predicted_return = float(model.predict(live_df)[0])
+            live_pred = await asyncio.to_thread(model.predict, live_df)
+            predicted_return = float(live_pred[0])
 
             # SHAP explanations
             factors = self._compute_shap(model, live_df, X.columns.tolist())

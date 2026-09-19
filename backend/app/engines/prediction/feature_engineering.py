@@ -96,18 +96,15 @@ class FeatureEngineer:
         df["volume_ratio_20d"] = df["Volume"] / vol_sma20.replace(0, np.nan)
         df["volume_trend_5d"] = df["Volume"].pct_change(5)
 
-        # ── Fundamental features (static, broadcast) ──
-        pe = _safe(info.get('pe_ratio'), np.nan)
-        # pb_ratio: Neither TwelveData nor NSE free tier provides Price-to-Book ratio.
-        # book_value (per-share dollar amount) is NOT the same as priceToBook (valuation ratio).
-        # Using book_value here would silently corrupt feature scale. Use NaN honestly.
-        pb = np.nan  # P/B ratio unavailable from current providers
-        mc = _safe(info.get('market_cap'), 0)
-        mc_log = math.log10(mc) if mc > 0 else np.nan
-
-        df["pe_ratio"] = pe
-        df["pb_ratio"] = pb
-        df["market_cap_log"] = mc_log
+        # ── Fundamental features ──
+        # IMPORTANT: Historical fundamentals are NOT available from current providers.
+        # Broadcasting today's P/E, P/B, or market cap across 2 years of historical rows
+        # is look-ahead leakage — the model sees future-state data during training.
+        # XGBoost handles NaN natively (splits learn to route missing values optimally),
+        # so NaN is both safe and honest.
+        df["pe_ratio"] = np.nan
+        df["pb_ratio"] = np.nan
+        df["market_cap_log"] = np.nan
 
         # ── Calendar features ──
         df["day_of_week"] = df.index.dayofweek

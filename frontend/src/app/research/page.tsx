@@ -21,7 +21,7 @@ interface DeepReportData {
   company_name: string;
   sources: { id: number; title: string; source: string; date: string; type: string; url?: string; relevance?: number }[];
   chunks_retrieved: number;
-  confidence_score: number;
+  evidence_strength: number;
   generated_at: string;
 }
 
@@ -100,7 +100,12 @@ export default function ResearchPage() {
     setError(null);
 
     try {
-      const res = await apiClient.post<{ success: boolean; data: { documents_indexed: number; sources: any[] }; message?: string }>(
+      if (!authApi.isAuthenticated) {
+        setError('Sign in to use deep research indexing.');
+        setIndexing(false);
+        return;
+      }
+      const res = await authApi.post<{ success: boolean; data: { documents_indexed: number; sources: any[] }; message?: string }>(
         `/api/v1/research/index/${encodeURIComponent(sym)}`,
         {}
       );
@@ -112,7 +117,11 @@ export default function ResearchPage() {
         setError(res.message || 'Indexing failed');
       }
     } catch (err: any) {
-      setError(err.message || 'Indexing failed');
+      if (err.status === 401) {
+        setError('Sign in to use deep research indexing.');
+      } else {
+        setError(err.message || 'Indexing failed');
+      }
     } finally {
       setIndexing(false);
     }
@@ -127,7 +136,12 @@ export default function ResearchPage() {
     setSaved(false);
 
     try {
-      const res = await apiClient.post<{ success: boolean; data: DeepReportData; message?: string }>(
+      if (!authApi.isAuthenticated) {
+        setError('Sign in to generate research reports.');
+        setGenerating(false);
+        return;
+      }
+      const res = await authApi.post<{ success: boolean; data: DeepReportData; message?: string }>(
         `/api/v1/research/generate/${encodeURIComponent(sym)}?depth=deep&stream=false`,
         {}
       );
@@ -137,7 +151,11 @@ export default function ResearchPage() {
         setError(res.message || 'Generation failed');
       }
     } catch (err: any) {
-      setError(err.message || 'Generation failed');
+      if (err.status === 401) {
+        setError('Sign in to generate research reports.');
+      } else {
+        setError(err.message || 'Generation failed');
+      }
     } finally {
       setGenerating(false);
     }

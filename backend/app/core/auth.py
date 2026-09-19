@@ -27,6 +27,7 @@ from dataclasses import dataclass
 from typing import Optional
 from uuid import UUID
 
+import hmac
 import jwt
 from fastapi import Depends, HTTPException, Request
 from jwt import PyJWKClient
@@ -298,5 +299,5 @@ def require_internal_secret(
     secret = request.headers.get("X-Internal-Secret", "")
     if not settings.internal_job_secret:
         raise HTTPException(status_code=500, detail="INTERNAL_JOB_SECRET not configured")
-    if secret != settings.internal_job_secret:
+    if not hmac.compare_digest(secret, settings.internal_job_secret):
         raise HTTPException(status_code=403, detail="Invalid internal job secret")

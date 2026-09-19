@@ -9,10 +9,11 @@ Provides:
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query, Request
 from pydantic import BaseModel, Field
 from typing import Any, Dict, List, Optional
 
+from app.core.auth import UserContext, require_active_user
 from app.core.logging import get_logger
 from app.engines.prediction.model import prediction_model
 from app.engines.prediction.backtester import backtester
@@ -103,7 +104,11 @@ class AccuracyResponse(BaseModel):
         "⚠ This is a statistical model, NOT financial advice."
     ),
 )
-async def generate_forecast(symbol: str):
+async def generate_forecast(
+    symbol: str,
+    request: Request,
+    user: UserContext = Depends(require_active_user),
+):
     """Generate prediction for a stock and record for outcome tracking."""
     logger.info("prediction_requested", symbol=symbol)
     result = await prediction_model.forecast(symbol)
@@ -111,6 +116,7 @@ async def generate_forecast(symbol: str):
     # Phase 3: Store prediction in Outcome Tracker for credibility verification
     try:
         from app.engines.prediction.outcome_tracker import outcome_tracker
+        from app.data.market_data_provider import market_data
         pred = result.get("prediction")
         regime = result.get("regime")
         model_info = result.get("model_info")
@@ -122,6 +128,15 @@ async def generate_forecast(symbol: str):
             regime_curr = regime.get("current") if isinstance(regime, dict) else getattr(regime, "current", "unknown")
             r2 = model_info.get("r2_score") if isinstance(model_info, dict) else getattr(model_info, "r2_score", None)
 
+            # Fetch reference price at prediction time (required for outcome evaluation)
+            ref_price = None
+            try:
+                quote_result = await market_data.get_quote(symbol)
+                if quote_result.available and quote_result.data:
+                    ref_price = quote_result.data.get("price")
+            except Exception as qe:
+                logger.warning("reference_price_fetch_failed", symbol=symbol, error=str(qe))
+
             await outcome_tracker.store_prediction(
                 symbol=symbol,
                 predicted_return_pct=pred_return,
@@ -130,6 +145,7 @@ async def generate_forecast(symbol: str):
                 regime=regime_curr or "unknown",
                 horizon_days=5,
                 model_r2=r2,
+                reference_price=ref_price,
             )
     except Exception as e:
         logger.warning("prediction_tracking_record_failed", symbol=symbol, error=str(e))
