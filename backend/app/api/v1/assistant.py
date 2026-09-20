@@ -31,6 +31,7 @@ from pydantic import BaseModel
 from app.config import Settings, get_settings
 from app.core.auth import UserContext, require_active_user
 from app.core.logging import get_logger
+from app.core.quotas import check_user_quota
 from app.engines.assistant.engine import AssistantEngine
 
 logger = get_logger(__name__)
@@ -89,6 +90,11 @@ async def chat(
                 return StreamingResponse(replay_stream(), media_type="text/event-stream")
             else:
                 return {"success": True, "data": {"response": existing["content"], "duplicate": True}}
+
+    # ── Quota check BEFORE LLM generation ──
+    # After idempotency (duplicates don't consume quota), before expensive work
+    redis_instance = getattr(http_request.app.state, "redis", None)
+    await check_user_quota(user.user_id, "chat", redis_instance)
 
     if request.stream:
         # Pass user_id to session management for tenant isolation
@@ -149,7 +155,7 @@ async def chat(
         )
     else:
         # Non-stream path
-        result = await engine.chat(request.message, request.session_id)
+        result = await engine.chat(request.message, request.session_id, user_id=str(user.user_id))
 
         if result.get("error"):
             return {"success": False, "message": result.get("message")}

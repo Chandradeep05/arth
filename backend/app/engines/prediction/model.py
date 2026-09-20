@@ -125,8 +125,13 @@ class PredictionModel:
             # Predict live
             live_df = pd.DataFrame([live_features])
             live_df = live_df[X.columns]  # Ensure column order matches
-            # Sanitize: replace inf with NaN, then NaN with 0
-            live_df = live_df.replace([np.inf, -np.inf], np.nan).fillna(0)
+            # Sanitize infinities → NaN. Preserve NaN for fundamental columns
+            # (pe_ratio, pb_ratio, market_cap_log) — XGBoost handles NaN natively.
+            # Fill other NaNs with 0 to avoid errors in non-fundamental features.
+            _NAN_PRESERVE = {"pe_ratio", "pb_ratio", "market_cap_log"}
+            live_df = live_df.replace([np.inf, -np.inf], np.nan)
+            fill_cols = [c for c in live_df.columns if c not in _NAN_PRESERVE]
+            live_df[fill_cols] = live_df[fill_cols].fillna(0)
             live_pred = await asyncio.to_thread(model.predict, live_df)
             predicted_return = float(live_pred[0])
 

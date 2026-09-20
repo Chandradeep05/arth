@@ -149,8 +149,8 @@ class AssistantEngine:
             session = self._sessions[session_id]
             # Tenant isolation: verify ownership
             if user_id and session.owner_user_id and session.owner_user_id != user_id:
-                # Not this user's session — create a new one
-                pass
+                # Not this user's session — generate a FRESH ID to avoid overwriting
+                session_id = None  # Force new unique ID
             else:
                 return session
 

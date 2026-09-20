@@ -1,0 +1,30 @@
+name: Prediction Evaluator
+
+on:
+  schedule:
+    - cron: '0 */6 * * 1-5'   # Every 6 hours on weekdays (market days)
+  workflow_dispatch:
+
+jobs:
+  evaluate-predictions:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Evaluate matured predictions
+        run: |
+          response=$(curl -s -o /dev/null -w "%{http_code}" \
+            -X POST \
+            -H "X-Internal-Secret: ${{ secrets.INTERNAL_JOB_SECRET }}" \
+            -H "Content-Type: application/json" \
+            "${{ secrets.BACKEND_URL }}/api/v1/internal/jobs/evaluate-predictions" \
+            || echo "000")
+          echo "Response: $response"
+          if [ "$response" = "000" ]; then
+            echo "Network error -- backend unreachable"
+            exit 1
+          fi
+          if [ "$response" != "200" ]; then
+            echo "Unexpected status $response"
+            exit 1
+          fi
+          echo "Prediction evaluation completed."

@@ -229,12 +229,12 @@ class OutcomeTracker:
         Returns:
             Number of predictions newly evaluated.
         """
-        records = await self._get_records_bounded(status_filter="pending")
+        records = await self._get_records_by_status("pending")
         now = datetime.now(timezone.utc)
         count = 0
 
         # Also reclaim stale 'evaluating' records
-        stale_records = await self._get_records_bounded(status_filter="evaluating")
+        stale_records = await self._get_records_by_status("evaluating")
         for key, record in stale_records.items():
             if record.evaluating_at:
                 claimed_at = datetime.fromisoformat(record.evaluating_at)
@@ -245,7 +245,7 @@ class OutcomeTracker:
                     logger.info("evaluation_claim_reclaimed", key=key)
 
         # Re-fetch pending after reclaim
-        records = await self._get_records_bounded(status_filter="pending")
+        records = await self._get_records_by_status("pending")
 
         for key, record in records.items():
             # Skip if reference_price is missing
@@ -318,7 +318,7 @@ class OutcomeTracker:
         symbol: str | None = None,
     ) -> AccuracyStats:
         """Get accuracy statistics, optionally filtered by symbol. READ-ONLY."""
-        records = await self._get_all_records_pruned()
+        records = await self._get_all_records()
 
         # Filter by symbol if specified
         if symbol:
@@ -388,7 +388,7 @@ class OutcomeTracker:
         limit: int = 50,
     ) -> list[PredictionRecord]:
         """Get prediction history for a symbol, newest first. READ-ONLY."""
-        records = await self._get_all_records_pruned()
+        records = await self._get_newest_records(limit=500)
         symbol_upper = symbol.upper()
 
         matching = [
@@ -402,19 +402,16 @@ class OutcomeTracker:
 
     # ── Private storage methods ──
 
-    async def _get_records_bounded(self, status_filter: str | None = None) -> dict[str, PredictionRecord]:
-        """Get records in bounded batches, optionally filtered by status."""
-        records = await self._get_all_records_pruned()
-        if status_filter:
-            records = {k: v for k, v in records.items() if v.evaluation_status == status_filter}
-        return records
+    async def _get_records_by_status(self, status_filter: str) -> dict[str, PredictionRecord]:
+        """Get records filtered by status, iterating ALL index entries in batches."""
+        all_records = await self._get_all_records()
+        return {k: v for k, v in all_records.items() if v.evaluation_status == status_filter}
 
-    async def _get_all_records_pruned(self) -> dict[str, PredictionRecord]:
-        """Get all records from Redis or memory. Prunes dead index entries in bounded batches."""
+    async def _get_newest_records(self, limit: int = 500) -> dict[str, PredictionRecord]:
+        """Get the newest N records from Redis (newest-first via ZREVRANGE)."""
         if self._redis:
             try:
-                # Get keys from sorted index — bounded batch
-                keys = await self._redis.zrange(self._INDEX_KEY, 0, INDEX_PRUNE_BATCH - 1)
+                keys = await self._redis.zrevrange(self._INDEX_KEY, 0, limit - 1)
                 if not keys:
                     return {}
 
@@ -427,9 +424,54 @@ class OutcomeTracker:
                     else:
                         dead_keys.append(key)
 
-                # Prune dead keys from index
                 if dead_keys:
                     await self._redis.zrem(self._INDEX_KEY, *dead_keys)
+                    logger.info("index_pruned", dead_keys=len(dead_keys))
+
+                return records
+            except Exception as e:
+                logger.warning("prediction_read_redis_failed", error=str(e))
+
+        return dict(self._memory_store)
+
+    async def _get_all_records(self) -> dict[str, PredictionRecord]:
+        """Get ALL records by paginating through the sorted index in batches.
+
+        Prunes dead keys (expired TTL) from the index during iteration.
+        """
+        if self._redis:
+            try:
+                records = {}
+                dead_keys = []
+                cursor = 0
+
+                while True:
+                    # Read INDEX_PRUNE_BATCH keys at a time
+                    end = cursor + INDEX_PRUNE_BATCH - 1
+                    keys = await self._redis.zrange(self._INDEX_KEY, cursor, end)
+                    if not keys:
+                        break
+
+                    for key in keys:
+                        data = await self._redis.get(key)
+                        if data:
+                            records[key] = PredictionRecord.model_validate_json(data)
+                        else:
+                            dead_keys.append(key)
+
+                    cursor += INDEX_PRUNE_BATCH
+
+                    # Safety cap: don't iterate infinitely
+                    if cursor > 50000:
+                        logger.warning("index_scan_capped", cursor=cursor)
+                        break
+
+                # Prune dead keys from index
+                if dead_keys:
+                    # Batch the ZREM calls to avoid huge single commands
+                    for i in range(0, len(dead_keys), INDEX_PRUNE_BATCH):
+                        batch = dead_keys[i:i + INDEX_PRUNE_BATCH]
+                        await self._redis.zrem(self._INDEX_KEY, *batch)
                     logger.info("index_pruned", dead_keys=len(dead_keys))
 
                 return records

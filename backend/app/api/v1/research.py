@@ -21,6 +21,7 @@ from app.config import Settings, get_settings
 from app.core.auth import UserContext, require_active_user
 from app.core.exceptions import SymbolNotFoundError
 from app.core.logging import get_logger
+from app.core.quotas import check_user_quota
 from app.data.cache import CacheManager
 from app.dependencies import get_redis
 from app.engines.research.engine import ResearchEngine
@@ -37,7 +38,7 @@ async def generate_research(
     depth: str = Query(default="standard", description="quick, standard, or deep"),
     stream: bool = Query(default=True, description="Stream response via SSE"),
     user: UserContext = Depends(require_active_user),
-    redis=Depends(get_redis),
+    redis_conn=Depends(get_redis),
     settings: Settings = Depends(get_settings),
 ):
     """
@@ -47,6 +48,9 @@ async def generate_research(
     depth=deep uses RAG for cited reports (requires indexing first).
     """
     engine = ResearchEngine(settings)
+    
+    redis_instance = getattr(request.app.state, "redis", None)
+    await check_user_quota(user.user_id, "research_gen", redis_instance)
 
     if stream:
         async def event_stream():

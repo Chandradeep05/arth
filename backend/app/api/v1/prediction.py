@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Optional
 
 from app.core.auth import UserContext, require_active_user
 from app.core.logging import get_logger
+from app.core.quotas import check_user_quota
 from app.engines.prediction.model import prediction_model
 from app.engines.prediction.backtester import backtester
 
@@ -111,6 +112,11 @@ async def generate_forecast(
 ):
     """Generate prediction for a stock and record for outcome tracking."""
     logger.info("prediction_requested", symbol=symbol)
+    
+    # Quota enforcement
+    redis_instance = getattr(request.app.state, "redis", None)
+    await check_user_quota(user.user_id, "prediction", redis_instance)
+
     result = await prediction_model.forecast(symbol)
 
     # Phase 3: Store prediction in Outcome Tracker for credibility verification
