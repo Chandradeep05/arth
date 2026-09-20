@@ -128,14 +128,23 @@ async def generate_forecast(
             regime_curr = regime.get("current") if isinstance(regime, dict) else getattr(regime, "current", "unknown")
             r2 = model_info.get("r2_score") if isinstance(model_info, dict) else getattr(model_info, "r2_score", None)
 
-            # Fetch reference price at prediction time (required for outcome evaluation)
+            # Reference price: prefer model's own latest_close (same data universe)
+            # Fallback to quote API if model didn't provide it
             ref_price = None
-            try:
-                quote_result = await market_data.get_quote(symbol)
-                if quote_result.available and quote_result.data:
-                    ref_price = quote_result.data.get("price")
-            except Exception as qe:
-                logger.warning("reference_price_fetch_failed", symbol=symbol, error=str(qe))
+            ref_timestamp = None
+            ref_source = None
+            if model_info and isinstance(model_info, dict):
+                ref_price = model_info.get("latest_close")
+                ref_timestamp = model_info.get("latest_close_timestamp")
+                ref_source = "training_data"
+            if ref_price is None:
+                try:
+                    quote_result = await market_data.get_quote(symbol)
+                    if quote_result.available and quote_result.data:
+                        ref_price = quote_result.data.get("price")
+                        ref_source = "quote_api"
+                except Exception as qe:
+                    logger.warning("reference_price_fetch_failed", symbol=symbol, error=str(qe))
 
             await outcome_tracker.store_prediction(
                 symbol=symbol,
@@ -146,6 +155,8 @@ async def generate_forecast(
                 horizon_days=5,
                 model_r2=r2,
                 reference_price=ref_price,
+                reference_timestamp=ref_timestamp,
+                reference_source=ref_source,
             )
     except Exception as e:
         logger.warning("prediction_tracking_record_failed", symbol=symbol, error=str(e))
@@ -165,10 +176,12 @@ async def generate_forecast(
 async def get_accuracy(
     symbol: str,
     lookback_days: int = Query(default=90, ge=30, le=365),
+    request: Request = None,
+    user: UserContext = Depends(require_active_user),
 ):
     """Get prediction accuracy metrics."""
     # Try cached result first
-    cached = backtester.get_cached_accuracy(symbol)
+    cached = backtester.get_cached_accuracy(symbol, lookback_days)
     if cached and not cached.get("error"):
         return AccuracyResponse(**cached)
 
@@ -189,6 +202,8 @@ async def get_accuracy(
 async def get_prediction_history(
     symbol: str,
     limit: int = Query(default=50, ge=1, le=200),
+    request: Request = None,
+    user: UserContext = Depends(require_active_user),
 ):
     """Get live tracked predictions and evaluation metrics."""
     from app.engines.prediction.outcome_tracker import outcome_tracker
@@ -211,7 +226,11 @@ async def get_prediction_history(
         "ranging (sideways, low volatility), or reverting (mean-reverting after extremes)."
     ),
 )
-async def get_regime(symbol: str):
+async def get_regime(
+    symbol: str,
+    request: Request = None,
+    user: UserContext = Depends(require_active_user),
+):
     """Get current market regime."""
     try:
         from app.engines.prediction.feature_engineering import FeatureEngineer

@@ -40,9 +40,25 @@ export default function AssistantPage() {
   
   useEffect(() => {
     if (activeConversationId) {
-      // In a real app we'd fetch messages for this conversation here.
-      // Assuming a GET /user/conversations/{id}/messages endpoint or similar.
-      // For now, we'll just clear messages on switch if we can't fetch them.
+      const loadHistory = async () => {
+        try {
+          const data = await api.get<any>(`/api/v1/user/conversations/${activeConversationId}?limit=50`);
+          if (data?.messages) {
+            setMessages(data.messages.map((m: any) => ({
+              id: m.id || crypto.randomUUID(),
+              role: m.role as 'user' | 'assistant',
+              content: m.content,
+            })));
+          } else {
+            setMessages([]);
+          }
+        } catch (err) {
+          console.error('Failed to load conversation history:', err);
+          setMessages([]);
+        }
+      };
+      loadHistory();
+    } else {
       setMessages([]);
     }
   }, [activeConversationId]);
@@ -129,7 +145,8 @@ export default function AssistantPage() {
           message: userMsg.content,
           session_id: convId,
           conversation_id: convId,
-          stream: true
+          idempotency_key: crypto.randomUUID(),  // Prevent double-burn on retries
+          stream: true,
         })
       });
 
@@ -145,14 +162,44 @@ export default function AssistantPage() {
       
       if (reader) {
         let aiContent = '';
+        let sseBuffer = '';  // Accumulate across TCP chunks
+        
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
           
-          const chunk = decoder.decode(value, { stream: true });
-          const lines = chunk.split('\n');
+          sseBuffer += decoder.decode(value, { stream: true });
           
-          for (const line of lines) {
+          // Process only complete SSE events (terminated by double newline)
+          let eventEnd: number;
+          while ((eventEnd = sseBuffer.indexOf('\n\n')) !== -1) {
+            const event = sseBuffer.slice(0, eventEnd);
+            sseBuffer = sseBuffer.slice(eventEnd + 2);
+            
+            for (const line of event.split('\n')) {
+              if (line.startsWith('data: ') && line !== 'data: [DONE]') {
+                try {
+                  const data = JSON.parse(line.slice(6));
+                  if (data.type === 'token' && data.content) {
+                    aiContent += data.content;
+                    setMessages(prev => prev.map(m => m.id === assistantMsgId ? { ...m, content: aiContent } : m));
+                  } else if (data.type === 'done') {
+                    // Stream complete — entities available if needed
+                  } else if (data.type === 'error') {
+                    console.error(data.message || 'Stream error'); // Changed setError to console.error to avoid ReferenceError
+                  }
+                } catch (e) {
+                  // Incomplete JSON — should not happen with proper buffering
+                  console.error('SSE parse error:', e);
+                }
+              }
+            }
+          }
+        }
+        
+        // Flush any remaining buffer content
+        if (sseBuffer.trim()) {
+          for (const line of sseBuffer.split('\n')) {
             if (line.startsWith('data: ') && line !== 'data: [DONE]') {
               try {
                 const data = JSON.parse(line.slice(6));
@@ -161,7 +208,7 @@ export default function AssistantPage() {
                   setMessages(prev => prev.map(m => m.id === assistantMsgId ? { ...m, content: aiContent } : m));
                 }
               } catch (e) {
-                console.error('SSE parse error:', e);
+                // Partial final event — acceptable to lose
               }
             }
           }

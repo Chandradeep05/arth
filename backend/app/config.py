@@ -96,7 +96,7 @@ class Settings(BaseSettings):
     groq_model_research: str = "openai/gpt-oss-120b"   # Production-tier, large context for deep reports
     groq_model_chat: str = "openai/gpt-oss-20b"         # Production-tier, faster/cheaper for chat
     groq_model: str = ""  # DEPRECATED — use groq_model_research or groq_model_chat
-    groq_max_tokens: int = 1000  # Default to 1000 to respect Groq free tier output-tokens-per-minute (OTPM) ceiling
+    groq_max_tokens: int = 1000  # ARTH cost/latency budget cap — not a Groq-imposed limit
     groq_fallback_models: str = "openai/gpt-oss-20b,openai/gpt-oss-120b"  # Cross-fallback chain
 
     # Ollama (Local dev fallback)

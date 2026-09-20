@@ -10,7 +10,9 @@ any error), the client automatically tries each fallback model in order.
   are streaming, a late failure just ends with an error message rather than
   producing a garbled, restarted-mid-sentence response.
 
-Default chain: qwen/qwen3.6-27b → openai/gpt-oss-120b → openai/gpt-oss-20b
+# Default chains (configured in config.py):
+# - Chat: openai/gpt-oss-20b → openai/gpt-oss-120b
+# - Research: openai/gpt-oss-120b → openai/gpt-oss-20b
 Configurable via GROQ_FALLBACK_MODELS env var without touching code.
 
 Note on <think> tag stripping: _strip_thinking() runs unconditionally regardless
@@ -79,6 +81,26 @@ class GroqClient(BaseLLMClient):
                 chain.append(m)
         return chain
 
+    @staticmethod
+    def _is_retryable_error(error: Exception) -> bool:
+        """Determine if an error warrants trying the next model in the chain.
+        
+        Retryable: 429 (rate limit), 500/502/503/504 (server errors), timeouts.
+        Non-retryable: 400 (bad request), 401/403 (auth), other client errors.
+        """
+        error_str = str(error).lower()
+        # Groq SDK wraps HTTP errors with status codes in the message
+        # Check for retryable status codes
+        for code in ('429', '500', '502', '503', '504', 'timeout', 'timed out', 'rate_limit', 'overloaded', 'service_unavailable'):
+            if code in error_str:
+                return True
+        # Check for explicitly non-retryable errors (don't retry auth/validation failures)
+        for code in ('400', '401', '403', 'invalid_api_key', 'invalid_request'):
+            if code in error_str:
+                return False
+        # Default: retry (model might be decommissioned, unavailable, etc.)
+        return True
+
     async def generate(
         self,
         messages: List[LLMMessage],
@@ -131,6 +153,15 @@ class GroqClient(BaseLLMClient):
                 error_str = str(e)
                 last_error = error_str
                 remaining = len(chain) - depth - 1
+                
+                if not self._is_retryable_error(e):
+                    logger.error(
+                        "groq_non_retryable_error",
+                        model=model,
+                        error=error_str,
+                    )
+                    raise  # Don't try other models for auth/validation failures
+                
                 logger.warning(
                     "groq_model_failed",
                     model=model,
@@ -243,6 +274,15 @@ class GroqClient(BaseLLMClient):
             except Exception as e:
                 error_str = str(e)
                 remaining = len(chain) - depth - 1
+                
+                if not self._is_retryable_error(e):
+                    logger.error(
+                        "groq_non_retryable_error",
+                        model=model,
+                        error=error_str,
+                    )
+                    raise  # Don't try other models for auth/validation failures
+
                 logger.warning(
                     "groq_stream_model_failed",
                     model=model,

@@ -1,8 +1,11 @@
 """
-Walk-Forward Backtester for Prediction Accuracy Tracking.
+Expanding-Window Backtester with Purge Gap for Prediction Accuracy Tracking.
 
 Replays predictions against actual 5-day outcomes to measure model accuracy.
 Stores results in a JSON file (no DB needed).
+
+V3.2: Added purge gap of `horizon_days` between training and test sets to prevent
+overlapping-target label leakage. Previous accuracy numbers were optimistically biased.
 
 Tracks:
 - Directional accuracy by confidence band (high/medium/low)
@@ -32,7 +35,7 @@ _ACCURACY_DIR.mkdir(parents=True, exist_ok=True)
 
 
 class Backtester:
-    """Walk-forward backtester for prediction quality measurement."""
+    """Expanding-window backtester with purge gap for prediction quality measurement."""
 
     def __init__(self):
         self._feature_engineer = FeatureEngineer()
@@ -62,8 +65,9 @@ class Backtester:
                     "message": f"Insufficient data: {len(X)} rows, need 100+",
                 }
 
-            # Walk-forward: train on expanding window, predict next 5 days
-            test_start = max(60, len(X) - lookback_days)
+            # Expanding window with purge gap to prevent label leakage
+            horizon = 5  # 5-day forward return target
+            test_start = max(60 + horizon, len(X) - lookback_days)
             results = []
 
             model = xgb.XGBRegressor(
@@ -78,8 +82,10 @@ class Backtester:
             )
 
             for i in range(test_start, len(X)):
-                X_train = X.iloc[:i]
-                y_train = y.iloc[:i]
+                # Purge gap: skip the last `horizon` rows to prevent
+                # overlapping target leakage (y[i-1] shares future prices with y[i])
+                X_train = X.iloc[:i - horizon]
+                y_train = y.iloc[:i - horizon]
 
                 model.fit(X_train, y_train, verbose=False)
 

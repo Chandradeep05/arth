@@ -69,8 +69,9 @@ CRITICAL RULES:
 class AssistantSession:
     """Ephemeral in-memory session for a conversation."""
 
-    def __init__(self, session_id: str | None = None):
+    def __init__(self, session_id: str | None = None, owner_user_id: str | None = None):
         self.session_id = session_id or str(uuid.uuid4())[:8]
+        self.owner_user_id = owner_user_id
         self.messages: List[Dict[str, str]] = []
         self.entities: List[str] = []  # Tracked stock symbols
         self.created_at = datetime.now(timezone.utc)
@@ -140,12 +141,18 @@ class AssistantEngine:
         if stale:
             logger.info("sessions_evicted", count=len(stale), remaining=len(self._sessions))
 
-    def get_or_create_session(self, session_id: str | None = None) -> AssistantSession:
+    def get_or_create_session(self, session_id: str | None = None, user_id: str | None = None) -> AssistantSession:
         # Sweep stale sessions on every creation
         self._evict_stale_sessions()
 
         if session_id and session_id in self._sessions:
-            return self._sessions[session_id]
+            session = self._sessions[session_id]
+            # Tenant isolation: verify ownership
+            if user_id and session.owner_user_id and session.owner_user_id != user_id:
+                # Not this user's session — create a new one
+                pass
+            else:
+                return session
 
         # Cap total sessions to prevent OOM
         if len(self._sessions) >= self.MAX_SESSIONS:
@@ -154,17 +161,27 @@ class AssistantEngine:
             del self._sessions[oldest_id]
             logger.warning("session_cap_eviction", evicted=oldest_id, cap=self.MAX_SESSIONS)
 
-        session = AssistantSession(session_id)
+        session = AssistantSession(session_id, owner_user_id=user_id)
         self._sessions[session.session_id] = session
         return session
 
-    def get_session(self, session_id: str) -> AssistantSession | None:
-        return self._sessions.get(session_id)
+    def get_session(self, session_id: str, user_id: str | None = None) -> AssistantSession | None:
+        session = self._sessions.get(session_id)
+        if session and user_id and session.owner_user_id and session.owner_user_id != user_id:
+            return None  # Not this user's session
+        return session
 
-    def list_sessions(self) -> List[Dict[str, Any]]:
+    def list_sessions(self, user_id: str | None = None) -> List[Dict[str, Any]]:
+        if user_id:
+            return [s.to_dict() for s in self._sessions.values() if s.owner_user_id == user_id]
         return [s.to_dict() for s in self._sessions.values()]
 
-    def delete_session(self, session_id: str) -> bool:
+    def delete_session(self, session_id: str, user_id: str | None = None) -> bool:
+        session = self._sessions.get(session_id)
+        if not session:
+            return False
+        if user_id and session.owner_user_id and session.owner_user_id != user_id:
+            return False  # Not this user's session
         return self._sessions.pop(session_id, None) is not None
 
     # ── Tool routing ────────────────────────────────────────────
@@ -336,6 +353,7 @@ class AssistantEngine:
         self,
         message: str,
         session_id: str | None = None,
+        user_id: str | None = None,
     ) -> Dict[str, Any]:
         """Process a chat message and return a complete response."""
         if not self._llm:
@@ -344,7 +362,7 @@ class AssistantEngine:
                 "message": "LLM not configured. Set GROQ_API_KEY.",
             }
 
-        session = self.get_or_create_session(session_id)
+        session = self.get_or_create_session(session_id, user_id=user_id)
 
         # Extract and track symbols
         symbols = self._extract_symbols(message)
@@ -451,13 +469,14 @@ class AssistantEngine:
         self,
         message: str,
         session_id: str | None = None,
+        user_id: str | None = None,
     ) -> AsyncGenerator[str, None]:
         """Stream a chat response token-by-token."""
         if not self._llm:
             yield "Error: LLM not configured. Set GROQ_API_KEY."
             return
 
-        session = self.get_or_create_session(session_id)
+        session = self.get_or_create_session(session_id, user_id=user_id)
 
         # Extract symbols and fetch data
         symbols = self._extract_symbols(message)

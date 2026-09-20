@@ -63,11 +63,18 @@ async def redeem_invite_code(
     code = body.code
     now = datetime.now(timezone.utc)
 
-    # Only pending users can redeem invites
-    if user.access_status != 'pending':
-        raise HTTPException(status_code=403, detail="Only pending accounts can redeem invite codes.")
+    # Status check moved inside transaction for atomicity (see below)
 
     async with db.transaction():
+        # Re-read user status atomically to prevent TOCTOU race
+        # (JWT snapshot could be stale if admin suspended the user concurrently)
+        current_status = await db.fetchval(
+            "SELECT access_status FROM profiles WHERE id = $1 FOR UPDATE",
+            user.user_id,
+        )
+        if current_status != 'pending':
+            raise HTTPException(status_code=403, detail="Only pending accounts can redeem invite codes.")
+
         # Lock the invite code row for this transaction
         invite = await db.fetchrow(
             """

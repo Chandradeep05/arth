@@ -162,7 +162,10 @@ async def index_company(
 
 
 @router.get("/sources/{symbol}")
-async def list_sources(symbol: str):
+async def list_sources(
+    symbol: str,
+    user: UserContext = Depends(require_active_user),
+):
     """List indexed documents for a company."""
     from app.engines.rag.vector_store import vector_store
 

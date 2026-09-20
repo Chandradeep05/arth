@@ -120,12 +120,10 @@ async def send_message(
     request: Request,
     user: UserContext = Depends(require_active_user),
 ) -> dict:
-    """Save a message pair to the conversation. Does NOT call the LLM.
+    """Save a user message to the conversation. Does NOT call the LLM.
 
-    LLM generation + streaming happens via POST /assistant/chat.
-    This endpoint is for persisting user + assistant messages that were
-    already generated through the streaming path, or for saving messages
-    from non-streaming interactions.
+    LLM generation + streaming + assistant persistence happens via POST /assistant/chat.
+    This endpoint saves only the user message for direct DB interaction.
     """
     db = request.state.db
     conv = await db.fetchrow(
@@ -143,7 +141,7 @@ async def send_message(
         if body.idempotency_key:
             user_msg = await db.fetchrow(
                 "INSERT INTO messages (conversation_id, role, content, created_at, idempotency_key) VALUES ($1, $2, $3, $4, $5) "
-                "ON CONFLICT (conversation_id, idempotency_key) DO NOTHING RETURNING id",
+                "ON CONFLICT (conversation_id, idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING RETURNING id",
                 conversation_id, "user", body.content, now, body.idempotency_key
             )
             if not user_msg:

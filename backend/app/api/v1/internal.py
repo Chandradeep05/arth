@@ -185,3 +185,38 @@ async def warm_alert_symbols(
             logger.warning("warmup_failed", symbol=symbol, error=str(e))
             
     return {"warmed": warmed, "skipped": len(symbols) - len(uncached), "uncached_remaining": max(0, len(uncached) - 5)}
+
+
+@router.post("/jobs/evaluate-predictions")
+async def evaluate_predictions(
+    request: Request,
+    _: None = Depends(require_internal_secret),
+) -> dict:
+    """Evaluate matured prediction outcomes against actual market prices.
+
+    Called by cron (recommended: every 6 hours during market days).
+    Uses atomic Redis SET NX claims — safe for concurrent invocations.
+
+    This is the ONLY path that calls evaluate_pending().
+    User-facing GET /history and /accuracy are READ-ONLY.
+    """
+    from app.engines.prediction.outcome_tracker import outcome_tracker
+    from app.data.market_data_provider import market_data
+
+    async def _fetch_price(symbol: str) -> float | None:
+        """Fetch current price for evaluation."""
+        try:
+            result = await market_data.get_quote(symbol)
+            if result.available and result.data:
+                return result.data.get("price")
+        except Exception as e:
+            logger.warning("eval_price_fetch_failed", symbol=symbol, error=str(e))
+        return None
+
+    try:
+        count = await outcome_tracker.evaluate_pending(fetch_price_func=_fetch_price)
+        return {"evaluated": count, "status": "ok"}
+    except Exception as e:
+        logger.error("evaluate_predictions_failed", error=str(e))
+        return {"evaluated": 0, "status": "error", "error": str(e)}
+

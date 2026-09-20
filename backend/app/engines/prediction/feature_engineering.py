@@ -143,8 +143,9 @@ class FeatureEngineer:
             raise ValueError(f'Historical data unavailable for {symbol}: {reason}')
         hist = history_result.data
 
-        fund_result = await market_data.get_fundamentals(symbol)
-        info = fund_result.data if fund_result.available else {}
+        # Fundamentals not used for model input (NaN for consistency).
+        # Kept as comment for documentation.
+        # fund_result = await market_data.get_fundamentals(symbol)
 
         if hist is None or hist.empty or len(hist) < 25:
             raise ValueError(f"Insufficient recent data for {symbol}")
@@ -166,21 +167,25 @@ class FeatureEngineer:
         df["volume_ratio_20d"] = df["Volume"] / vol_sma20.replace(0, np.nan)
         df["volume_trend_5d"] = df["Volume"].pct_change(5)
 
-        pe = _safe(info.get('pe_ratio'), np.nan)
-        # pb_ratio: Not available from current providers (see build_features comment)
-        pb = np.nan
-        mc = _safe(info.get('market_cap'), 0)
-
-        df["pe_ratio"] = pe
-        df["pb_ratio"] = pb
-        df["market_cap_log"] = math.log10(mc) if mc > 0 else np.nan
+        # ── Fundamental features — match training behavior ──
+        # Training uses NaN for all fundamentals (no historical data available).
+        # Live must also use NaN for model consistency — XGBoost handles NaN natively.
+        df["pe_ratio"] = np.nan
+        df["pb_ratio"] = np.nan
+        df["market_cap_log"] = np.nan
         df["day_of_week"] = df.index.dayofweek
         df["month"] = df.index.month
 
         last = df.iloc[-1]
         features = {}
+        # Columns where NaN must be preserved for model consistency
+        _NAN_PRESERVE_COLS = {"pe_ratio", "pb_ratio", "market_cap_log"}
         for col in self.FEATURE_NAMES:
-            features[col] = _safe(last.get(col), 0.0)
+            val = last.get(col)
+            if col in _NAN_PRESERVE_COLS:
+                features[col] = np.nan  # Always NaN — match training
+            else:
+                features[col] = _safe(val, 0.0)
 
         return features
 

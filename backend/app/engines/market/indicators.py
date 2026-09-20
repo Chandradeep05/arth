@@ -103,9 +103,12 @@ def _compute_rsi(closes: pd.Series, period: int = 14) -> Optional[float]:
     avg_loss = loss.rolling(window=period, min_periods=period).mean()
     last_gain = avg_gain.iloc[-1]
     last_loss = avg_loss.iloc[-1]
-    # Edge case: all gains, no losses → RSI = 100 by definition
+    # Edge case: all gains, no losses → RSI = 100
+    # Edge case: no gains, no losses → RSI = 50
     if pd.isna(last_loss) or last_loss == 0:
-        return 100.0 if (last_gain and not pd.isna(last_gain) and last_gain > 0) else None
+        if last_gain and not pd.isna(last_gain) and last_gain > 0:
+            return 100.0
+        return 50.0
     rs = last_gain / last_loss
     rsi = 100 - (100 / (1 + rs))
     return float(rsi) if not pd.isna(rsi) else None

@@ -5,7 +5,7 @@ Trains a lightweight XGBoost regressor for 5-day forward return prediction.
 Memory-conscious: models are trained on-demand and cached to disk.
 
 Key design decisions:
-- Walk-forward training: always uses data up to prediction date
+- Chronological 80/20 split: train on first 80% of available data, validate on rest
 - SHAP TreeExplainer: shows top contributing factors per prediction
 - Regime detection: classifies market as trending/ranging/reverting
 - Disk caching: trained models saved as JSON (~1MB), loaded on repeat calls
@@ -158,6 +158,16 @@ class PredictionModel:
             del model, X_train, X_val, y_train, y_val
             gc.collect()
 
+            # Fetch latest close price using market_data
+            from app.data.market_data_provider import market_data
+            quote_result = await market_data.get_quote(symbol)
+            if quote_result.available and quote_result.data:
+                latest_close = quote_result.data.get("price")
+                latest_close_ts = datetime.now(timezone.utc).isoformat()
+            else:
+                latest_close = None
+                latest_close_ts = None
+
             return {
                 "symbol": symbol.upper(),
                 "prediction": {
@@ -175,6 +185,8 @@ class PredictionModel:
                     "validation_samples": len(y_pred_val),
                     "r2_score": round(r2, 4),
                     "mae": round(mae, 6),
+                    "latest_close": latest_close,
+                    "latest_close_timestamp": latest_close_ts,
                 },
                 "disclaimer": (
                     "⚠ This is a statistical model prediction, NOT financial advice. "

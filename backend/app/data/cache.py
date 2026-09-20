@@ -58,7 +58,14 @@ class _FetchLock:
         self._entry.ref_count += 1
 
     async def __aenter__(self):
-        await self._entry.lock.acquire()
+        try:
+            await self._entry.lock.acquire()
+        except (asyncio.CancelledError, Exception):
+            # If cancelled while waiting for the lock, decrement ref count
+            self._entry.ref_count -= 1
+            if self._entry.ref_count == 0:
+                _fetch_locks.pop(self._key, None)
+            raise
         return self
 
     async def __aexit__(self, *_):
