@@ -104,7 +104,7 @@ async def lifespan(app: FastAPI):
             # Supabase requires SSL for external connections
             if 'supabase.co' in dsn and 'sslmode' not in dsn:
                 dsn += ('&' if '?' in dsn else '?') + 'sslmode=require'
-            pg_pool = await asyncpg.create_pool(dsn, min_size=2, max_size=10)
+            pg_pool = await asyncpg.create_pool(dsn, min_size=1, max_size=5)
             logger.info("asyncpg_pool_created", dsn_host=dsn.split("@")[-1][:40] if "@" in dsn else "localhost")
         except Exception as e:
             logger.error("asyncpg_pool_failed", error=str(e))
@@ -267,19 +267,20 @@ def create_app() -> FastAPI:
     # Acquires an asyncpg connection per-request, stores it on request.state.db.
     # All Phase 4 endpoints (auth, watchlists, conversations, alerts, admin, etc.)
     # use request.state.db.fetchrow() / .fetch() / .execute() for raw SQL.
+    _NO_DB_PREFIXES = (
+        "/health", "/ready", "/docs", "/redoc", "/openapi",
+        "/api/v1/market", "/api/v1/financials", "/api/v1/risk",
+        "/api/v1/sentiment", "/api/v1/system", "/api/v1/watchlist",
+    )
+
     @app.middleware("http")
     async def db_connection_middleware(request: Request, call_next):
         pool = getattr(app.state, "pg_pool", None)
-        if pool:
+        if pool and not request.url.path.startswith(_NO_DB_PREFIXES):
             async with pool.acquire() as conn:
                 request.state.db = conn
-                response = await call_next(request)
-            return response
-        else:
-            # No pool (local dev without DATABASE_URL) — endpoints will get AttributeError
-            # which is preferable to silently returning None
-            response = await call_next(request)
-            return response
+                return await call_next(request)
+        return await call_next(request)
 
     # ── Exception Handlers ──
     register_exception_handlers(app)

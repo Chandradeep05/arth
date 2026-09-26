@@ -355,6 +355,22 @@ class StatementParser:
         ratios_data = await self.get_ratios(symbol)
         ratios = ratios_data.get("ratios", {})
 
+        # If no financial data is available, return unavailable instead of a fake score
+        all_ratios_missing = all(
+            ratios.get(k) is None
+            for k in ('profit_margin', 'return_on_equity', 'return_on_assets',
+                      'debt_to_equity', 'current_ratio', 'operating_margin',
+                      'free_cash_flow_per_share', 'revenue_growth')
+        )
+        if all_ratios_missing:
+            return {
+                'available': False,
+                'total_score': None,
+                'label': 'Insufficient data',
+                'reason': f'No financial ratio data available for this symbol.',
+                'categories': [],
+            }
+
         profitability = self._score_profitability(ratios)
         solvency = self._score_solvency(ratios)
         efficiency = self._score_efficiency(ratios)
@@ -368,6 +384,7 @@ class StatementParser:
         )
 
         return {
+            "available": True,
             "symbol": symbol.upper(),
             "total_score": round(total, 1),
             "label": self._health_label(total),

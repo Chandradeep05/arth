@@ -27,7 +27,6 @@ from app.engines.research.prompts import (
     build_research_prompt,
     build_deep_research_prompt,
 )
-from app.engines.rag.retriever import RAGRetriever
 from app.llm.base import LLMConfig, LLMMessage
 from app.llm.groq_client import GroqClient
 
@@ -228,6 +227,7 @@ class ResearchEngine:
             }
 
         # Check vector store
+        from app.engines.rag.retriever import RAGRetriever
         retriever = RAGRetriever()
         from app.engines.rag.vector_store import vector_store
 
@@ -329,6 +329,7 @@ class ResearchEngine:
             yield "Error: LLM not configured. Set GROQ_API_KEY in environment."
             return
 
+        from app.engines.rag.retriever import RAGRetriever
         retriever = RAGRetriever()
         from app.engines.rag.vector_store import vector_store
 

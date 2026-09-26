@@ -24,7 +24,7 @@ interface InviteCode {
 
 export default function AdminPage() {
   const api = useAuthenticatedApi();
-  const { user } = useAuth();
+  const { user, isAdmin, loading: authLoading } = useAuth();
   
   const [users, setUsers] = useState<User[]>([]);
   const [inviteCodes, setInviteCodes] = useState<InviteCode[]>([]);
@@ -35,12 +35,13 @@ export default function AdminPage() {
   const [copiedCode, setCopiedCode] = useState<string | null>(null);
 
   useEffect(() => {
-    if (user?.role === 'admin') {
+    if (authLoading) return;
+    if (isAdmin) {
       fetchData();
     } else {
       setLoading(false);
     }
-  }, [user]);
+  }, [isAdmin, authLoading]);
 
   const fetchData = async () => {
     try {
@@ -96,9 +97,9 @@ export default function AdminPage() {
     setTimeout(() => setCopiedCode(null), 2000);
   };
 
-  if (loading) return <div className="p-8 text-zinc-400">Loading admin dashboard...</div>;
+  if (authLoading || loading) return <div className="p-8 text-zinc-400">Loading admin dashboard...</div>;
 
-  if (user?.role !== 'admin') {
+  if (!isAdmin) {
     return (
       <div className="min-h-screen bg-zinc-950 text-zinc-100 flex flex-col items-center justify-center p-4">
         <ShieldX className="w-16 h-16 text-red-500 mb-4" />

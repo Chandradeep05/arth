@@ -42,7 +42,7 @@ interface SidebarProps {
 export default function Sidebar({ isMobileOpen = false, onMobileClose }: SidebarProps) {
   const [collapsed, setCollapsed] = useState(false);
   const pathname = usePathname();
-  const { user } = useAuth();
+  const { user, isAdmin } = useAuth();
 
   const userName = user?.user_metadata?.full_name || (user?.email ? user.email.split('@')[0] : 'Chandradeep');
   const userAvatar = user?.user_metadata?.avatar_url;
@@ -158,6 +158,50 @@ export default function Sidebar({ isMobileOpen = false, onMobileClose }: Sidebar
               </Link>
             );
           })}
+          {isAdmin && (
+            <Link
+              href="/admin"
+              onClick={onMobileClose}
+              className={`
+                group relative flex items-center gap-3 rounded-xl
+                h-10 transition-all duration-150
+                ${collapsed ? 'justify-center px-2' : 'px-3'}
+                ${
+                  pathname.startsWith('/admin')
+                    ? 'bg-emerald-500/10 text-white border border-emerald-500/25 shadow-[0_0_15px_rgba(16,185,129,0.06)]'
+                    : 'text-[var(--text-muted)] hover:bg-white/[0.035] hover:text-white border border-transparent'
+                }
+              `}
+              title={collapsed ? 'Admin' : undefined}
+            >
+              {pathname.startsWith('/admin') && (
+                <motion.div
+                  layoutId="sidebar-active"
+                  className="absolute left-1 top-2 bottom-2 w-1 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)]"
+                  transition={{ type: 'spring', stiffness: 350, damping: 30 }}
+                />
+              )}
+              <ShieldAlert
+                className={`h-4.5 w-4.5 shrink-0 transition-colors ${
+                  pathname.startsWith('/admin') ? 'text-emerald-400' : 'text-[var(--text-dim)] group-hover:text-white'
+                }`}
+              />
+              <AnimatePresence>
+                {!collapsed && (
+                  <motion.span
+                    initial={{ opacity: 0, width: 0 }}
+                    animate={{ opacity: 1, width: 'auto' }}
+                    exit={{ opacity: 0, width: 0 }}
+                    className={`text-[13px] font-medium whitespace-nowrap overflow-hidden ${
+                      pathname.startsWith('/admin') ? 'text-white font-semibold' : 'text-[var(--text-muted)]'
+                    }`}
+                  >
+                    Admin
+                  </motion.span>
+                )}
+              </AnimatePresence>
+            </Link>
+          )}
         </nav>
 
         {/* Bottom User Card (Reference Layout with subtle amber finishing) */}

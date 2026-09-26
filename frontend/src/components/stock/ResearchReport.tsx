@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { motion } from 'framer-motion';
 import { FileText, Loader2, AlertTriangle } from 'lucide-react';
 import { STREAMING_API_URL } from '@/lib/constants';
+import { useAuth } from '@/lib/auth/AuthProvider';
 
 interface ResearchReportProps {
   symbol: string;
@@ -14,6 +15,7 @@ export default function ResearchReport({ symbol }: ResearchReportProps) {
   const [status, setStatus] = useState<'idle' | 'loading' | 'streaming' | 'done' | 'error'>('idle');
   const [error, setError] = useState<string | null>(null);
   const contentRef = useRef<HTMLDivElement>(null);
+  const { session } = useAuth();
 
   const generateReport = useCallback(async () => {
     setContent('');
@@ -25,7 +27,10 @@ export default function ResearchReport({ symbol }: ResearchReportProps) {
         `${STREAMING_API_URL}/api/v1/research/generate/${encodeURIComponent(symbol)}?stream=true&depth=standard`,
         {
           method: 'POST',
-          headers: { 'Accept': 'text/event-stream' },
+          headers: { 
+            'Accept': 'text/event-stream',
+            'Authorization': `Bearer ${session?.access_token || ''}`
+          },
         }
       );
 

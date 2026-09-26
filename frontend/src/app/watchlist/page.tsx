@@ -88,11 +88,15 @@ export default function WatchlistPage() {
       
       if (items.length > 0) {
         const symbols = items.map(i => i.symbol);
-        const marketRes = await apiClient.post<any>('/market/batch', { symbols });
-        const quotes = marketRes?.data?.quotes || marketRes?.quotes;
-        if (quotes) {
-          setMarketData(quotes);
+        const marketRes = await api.post<any>('/api/v1/market/batch-quotes', { symbols });
+        const quotesArray = marketRes?.data || marketRes || [];
+        const quotesMap: Record<string, any> = {};
+        if (Array.isArray(quotesArray)) {
+          quotesArray.forEach((q: any) => {
+            if (q.symbol) quotesMap[q.symbol] = q;
+          });
         }
+        setMarketData(quotesMap);
       } else {
         setMarketData({});
       }
@@ -198,14 +202,14 @@ export default function WatchlistPage() {
       const quote = marketData[item.symbol] || {};
       return {
         symbol: item.symbol,
-        price: quote.price || 0,
-        change: quote.change || 0,
-        changePct: quote.change_pct || 0,
-        volume: quote.volume || 0,
-        dayHigh: quote.day_high || 0,
-        dayLow: quote.day_low || 0,
-        marketCap: quote.market_cap || 0,
-        prevClose: quote.prev_close || 0,
+        price: quote.price ?? 0,
+        change: quote.change ?? '-',
+        changePct: quote.change_pct ?? '-',
+        volume: quote.volume ?? '-',
+        dayHigh: quote.day_high ?? '-',
+        dayLow: quote.day_low ?? '-',
+        marketCap: quote.market_cap ?? '-',
+        prevClose: quote.prev_close ?? '-',
         timestamp: quote.timestamp || new Date().toISOString()
       };
     });

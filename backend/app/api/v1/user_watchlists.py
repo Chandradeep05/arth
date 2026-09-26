@@ -5,6 +5,7 @@ Ownership enforced in every query via WHERE user_id = $1.
 """
 from __future__ import annotations
 
+import re
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -16,6 +17,7 @@ from app.core.logging import get_logger
 logger = get_logger(__name__)
 router = APIRouter(prefix="/user/watchlists", tags=["watchlists"])
 
+_SYMBOL_RE = re.compile(r"^[A-Z0-9^][A-Z0-9.\-=^]{0,14}$")
 
 class WatchlistCreate(BaseModel):
     name: str = "My Watchlist"
@@ -102,6 +104,22 @@ async def add_item(watchlist_id: UUID, body: WatchlistItemAdd, request: Request,
     owned = await db.fetchval("SELECT id FROM watchlists WHERE id = $1 AND user_id = $2", watchlist_id, user.user_id)
     if not owned:
         raise HTTPException(status_code=404, detail="Watchlist not found or not yours")
+    # Validate symbol format
+    sym = body.symbol
+    if not _SYMBOL_RE.match(sym):
+        raise HTTPException(status_code=422, detail=f"'{sym}' is not a valid ticker format.")
+    # Verify symbol exists via market data
+    from app.data.market_data_provider import market_data
+    try:
+        quote = await market_data.get_quote(sym)
+        if not quote or not getattr(quote, 'available', True) == True:
+            if not (quote and getattr(quote, 'price', None)):
+                raise HTTPException(status_code=422, detail=f"No market data found for '{sym}'. Check the ticker symbol.")
+    except HTTPException:
+        raise
+    except Exception:
+        # If quote lookup itself fails, allow the add (provider might be down)
+        pass
     row = await db.fetchrow(
         """INSERT INTO watchlist_items (watchlist_id, symbol, notes) VALUES ($1, $2, $3)
            ON CONFLICT (watchlist_id, symbol) DO UPDATE SET notes = EXCLUDED.notes

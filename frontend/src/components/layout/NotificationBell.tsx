@@ -8,7 +8,9 @@ import { useAuthenticatedApi } from '@/lib/auth/useAuthenticatedApi';
 interface Notification {
   id: string;
   alert_id: string;
-  message: string;
+  title?: string;
+  body?: string;
+  message?: string;
   is_read: boolean;
   created_at: string;
 }
@@ -26,8 +28,8 @@ export default function NotificationBell() {
   const fetchUnreadCount = useCallback(async () => {
     if (!api.isAuthenticated) return;
     try {
-      const data = await api.get<{ unread_count: number }>('/api/v1/user/notifications/unread-count');
-      setUnreadCount(data.unread_count);
+      const data = await api.get<any>('/api/v1/user/notifications/unread-count');
+      setUnreadCount(data.unread ?? (data as any).unread_count ?? 0);
     } catch {
       // Silent — non-fatal
     }
@@ -46,8 +48,8 @@ export default function NotificationBell() {
     if (!api.isAuthenticated) return;
     setLoading(true);
     try {
-      const data = await api.get<Notification[]>('/api/v1/user/notifications?limit=10');
-      setNotifications(Array.isArray(data) ? data : []);
+      const data = await api.get<any>('/api/v1/user/notifications?limit=10');
+      setNotifications(Array.isArray(data) ? data : (data?.items || []));
     } catch {
       // Silent
     } finally {
@@ -126,7 +128,7 @@ export default function NotificationBell() {
                     n.is_read ? 'opacity-50' : ''
                   }`}
                 >
-                  <p className="text-xs text-[var(--text)]">{n.message}</p>
+                  <p className="text-xs text-[var(--text)]">{n.body || n.title || n.message || 'Alert triggered'}</p>
                   <p className="text-[10px] text-[var(--text-dim)] font-mono mt-1">
                     {new Date(n.created_at).toLocaleString()}
                   </p>

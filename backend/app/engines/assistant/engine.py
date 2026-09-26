@@ -61,6 +61,9 @@ CRITICAL RULES:
 3. NEVER say: "buy", "sell", "guaranteed", "will go up/down"
 4. Always include: "This is not financial advice"
 5. If data is missing, say so honestly
+6. NEVER fabricate statistics, probabilities, or percentages not present in [MARKET DATA]. Do not say "60% chance" or "10-day average volume is X" unless the exact figure appears in the injected data.
+7. If asked whether a stock will rise or fall, respond that price direction cannot be predicted from data alone.
+8. FORMAT: Write short plain-text lines. Use `- ` bullet points for lists. Do NOT use markdown headings (#, ##), tables, or blockquotes. Keep paragraphs to 2-3 sentences max.
 
 ⚠ DISCLAIMER: All analysis is AI-generated and for informational purposes only.
 """
@@ -366,6 +369,8 @@ class AssistantEngine:
 
         # Extract and track symbols
         symbols = self._extract_symbols(message)
+        if not symbols and hasattr(session, 'entities') and session.entities:
+            symbols = [list(session.entities)[-1]]
         tools_used = []
 
         # Build context with real market data
@@ -480,6 +485,8 @@ class AssistantEngine:
 
         # Extract symbols and fetch data
         symbols = self._extract_symbols(message)
+        if not symbols and hasattr(session, 'entities') and session.entities:
+            symbols = [list(session.entities)[-1]]
         data_context = ""
         for sym in symbols:
             data_str = await self._fetch_market_data(sym)

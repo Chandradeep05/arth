@@ -19,11 +19,28 @@ import LoadingSkeleton from '@/components/shared/LoadingSkeleton';
 import type { MarketIndex } from '@/types/market';
 import { useStockAtmosphere } from '@/lib/atmosphere';
 
-/* ── Stocks to scan for gainers/losers (US market — reliable via Twelve Data) ── */
-/* 8 stocks = exactly 8 credits/min on free tier (one batch call) */
+/* ── Tracked stocks for movers section ── */
+/* 25 cross-sector stocks (US market via Twelve Data). */
+/* Batched in chunks of 8 by the backend to stay within free-tier credits. */
 const MARKET_STOCKS = [
-  'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META',
-  'NVDA', 'TSLA', 'JPM',
+  // Tech
+  'AAPL', 'MSFT', 'GOOGL', 'META', 'NVDA', 'AMD', 'CRM',
+  // E-Commerce / Consumer
+  'AMZN', 'WMT', 'COST',
+  // Auto / EV
+  'TSLA',
+  // Finance
+  'JPM', 'GS', 'V', 'MA',
+  // Healthcare
+  'JNJ', 'UNH', 'PFE',
+  // Energy
+  'XOM', 'CVX',
+  // Industrial / Aerospace
+  'BA', 'CAT',
+  // Telecom / Media
+  'DIS', 'NFLX',
+  // Semiconductors
+  'AVGO',
 ];
 
 interface StockMover {
@@ -104,12 +121,33 @@ function formatVolume(v: number): string {
   return v.toString();
 }
 
+/* ── Market session status (NYSE hours: Mon-Fri 9:30-16:00 ET) ── */
+function getMarketSessionLabel(): string {
+  const now = new Date();
+  // Convert to ET (Eastern Time)
+  const et = new Date(now.toLocaleString('en-US', { timeZone: 'America/New_York' }));
+  const day = et.getDay(); // 0=Sun, 6=Sat
+  const hour = et.getHours();
+  const min = et.getMinutes();
+  const time = hour * 60 + min; // minutes since midnight
+
+  if (day === 0 || day === 6) return 'US Market: Closed (Weekend)';
+  if (time >= 570 && time < 960) return 'US Market: Open'; // 9:30-16:00
+  if (time >= 240 && time < 570) return 'US Market: Pre-Market';
+  if (time >= 960 && time < 1200) return 'US Market: After-Hours';
+  return 'US Market: Closed';
+}
+
 /* ── Sector heatmap: US sectors mapped to tracked stocks ── */
 const SECTOR_MAP: Record<string, string[]> = {
-  Tech: ['AAPL', 'MSFT', 'GOOGL', 'META', 'NVDA'],
-  'E-Commerce': ['AMZN'],
-  Auto: ['TSLA'],
-  Finance: ['JPM'],
+  Tech: ['AAPL', 'MSFT', 'GOOGL', 'META', 'CRM'],
+  Semis: ['NVDA', 'AMD', 'AVGO'],
+  Consumer: ['AMZN', 'WMT', 'COST'],
+  Finance: ['JPM', 'GS', 'V', 'MA'],
+  Health: ['JNJ', 'UNH', 'PFE'],
+  Energy: ['XOM', 'CVX'],
+  Industrial: ['BA', 'CAT', 'TSLA'],
+  Media: ['DIS', 'NFLX'],
 };
 
 /* ── Index Card Component ── */
@@ -245,6 +283,8 @@ function MoversTable({
               movers.map((stock) => {
                 const isPositive = (stock.change ?? 0) >= 0;
                 const cleanSymbol = stock.symbol.replace('.NS', '').replace('.BO', '');
+                const isINR = stock.symbol.endsWith('.NS') || stock.symbol.endsWith('.BO');
+                const currency = isINR ? '₹' : '$';
                 return (
                   <tr key={stock.symbol} className="cursor-pointer group">
                     <td>
@@ -263,7 +303,7 @@ function MoversTable({
                       </Link>
                     </td>
                     <td className="text-right font-mono text-xs text-white">
-                      ${formatNumber(stock.price ?? 0)}
+                      {currency}{formatNumber(stock.price ?? 0)}
                     </td>
                     <td className="text-right">
                       <span className={`inline-block font-mono text-[11px] font-medium px-1.5 py-0.5 rounded-md ${
@@ -381,7 +421,7 @@ export default function DashboardPage() {
           </div>
 
           <div className="relative z-10 mt-2.5 pt-2 sm:mt-3 sm:pt-2.5 border-t border-white/[0.06] flex items-center justify-between text-[10px] sm:text-[11px] font-mono text-[var(--text-dim)]">
-            <span>Market Session: Open</span>
+            <span>{getMarketSessionLabel()}</span>
             <span>Real-time Quote Pipeline</span>
           </div>
         </div>
@@ -449,10 +489,10 @@ export default function DashboardPage() {
       {/* Sector Performance */}
       {sectors.length > 0 && <SectorHeatmap sectors={sectors} />}
 
-      {/* Top Gainers & Losers Tables */}
+      {/* Tracked Stock Movers */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 sm:gap-3.5">
-        <MoversTable title="Top Gainers" movers={gainers} type="gainers" />
-        <MoversTable title="Top Losers" movers={losers} type="losers" />
+        <MoversTable title="Movers Up · Tracked Stocks" movers={gainers} type="gainers" />
+        <MoversTable title="Movers Down · Tracked Stocks" movers={losers} type="losers" />
       </div>
     </div>
   );

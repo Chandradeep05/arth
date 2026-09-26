@@ -7,7 +7,7 @@
 // The @supabase/ssr browser client handles both cases automatically
 // and stores the session in cookies (shared with middleware).
 
-import { Suspense, useEffect, useState } from "react";
+import { Suspense, useEffect, useState, useRef } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabase/client";
 
@@ -15,15 +15,25 @@ function CallbackHandler() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [error, setError] = useState<string | null>(null);
+  const exchangedRef = useRef(false);
 
   useEffect(() => {
     const code = searchParams.get("code");
 
     async function handleCallback() {
       if (code) {
-        // PKCE flow: exchange the code for a session
+        // Guard against double-exchange in React 18 StrictMode
+        if (exchangedRef.current) return;
+        exchangedRef.current = true;
+
         const { error } = await supabase.auth.exchangeCodeForSession(code);
         if (error) {
+          // Check if session was already established (auto-exchange succeeded)
+          const { data: { session } } = await supabase.auth.getSession();
+          if (session) {
+            router.replace("/");
+            return;
+          }
           setError(error.message);
           return;
         }

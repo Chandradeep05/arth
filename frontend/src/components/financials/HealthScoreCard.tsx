@@ -15,6 +15,8 @@ export interface HealthScoreData {
   categories: HealthCategory[];
   symbol?: string;
   summary?: string;
+  available?: boolean;
+  reason?: string;
 }
 
 export interface HealthScoreCardProps {
@@ -77,6 +79,31 @@ function CategoryBar({ category, index }: { category: HealthCategory; index: num
 
 /* ── Component ── */
 export default function HealthScoreCard({ data, className = '' }: HealthScoreCardProps) {
+  // Handle unavailable data (no financial ratios found)
+  if (data?.available === false || data?.overall_score == null) {
+    return (
+      <motion.div
+        initial={{ opacity: 0, y: 12 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.3 }}
+        className={`card p-6 ${className}`}
+      >
+        <div className="flex items-center gap-2 mb-5">
+          <HeartPulse className="w-5 h-5 text-[var(--text-dim)]" />
+          <h3 className="font-heading text-sm font-bold text-[var(--text)]">
+            Financial Health Score
+          </h3>
+        </div>
+        <div className="text-center py-8">
+          <div className="font-heading text-2xl font-bold text-[var(--text-dim)] mb-2">N/A</div>
+          <div className="text-xs font-mono text-[var(--text-dim)]">
+            {(data as any)?.reason || 'Insufficient financial data for this symbol'}
+          </div>
+        </div>
+      </motion.div>
+    );
+  }
+
   const overallColor = getOverallColor(data.overall_score);
   const overallLabel = getOverallLabel(data.overall_score);
 

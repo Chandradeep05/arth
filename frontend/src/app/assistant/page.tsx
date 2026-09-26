@@ -22,7 +22,7 @@ interface Message {
 }
 
 export default function AssistantPage() {
-  const { session } = useAuth();
+  const { session, user, loading: authLoading } = useAuth();
   const api = useAuthenticatedApi();
   
   const [conversations, setConversations] = useState<Conversation[]>([]);
@@ -35,8 +35,10 @@ export default function AssistantPage() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   
   useEffect(() => {
-    fetchConversations();
-  }, []);
+    if (!authLoading && session) {
+      fetchConversations();
+    }
+  }, [authLoading, session]);
   
   useEffect(() => {
     if (activeConversationId) {
@@ -223,7 +225,6 @@ export default function AssistantPage() {
   };
 
   const renderMarkdown = (content: string) => {
-    // Simple markdown renderer for code blocks and basic text
     const parts = content.split('```');
     return parts.map((part, index) => {
       if (index % 2 === 1) {
@@ -240,9 +241,71 @@ export default function AssistantPage() {
           </div>
         );
       }
-      // Text
-      return <div key={index} className="whitespace-pre-wrap">{part}</div>;
+      // Process text with inline markdown
+      const lines = part.split('\n');
+      return (
+        <div key={index}>
+          {lines.map((line, li) => {
+            // Bullet points
+            const bulletMatch = line.match(/^\s*[-*]\s+(.+)/);
+            if (bulletMatch) {
+              return (
+                <div key={li} className="flex gap-2 ml-2 my-0.5">
+                  <span className="text-[var(--text-dim)] shrink-0">•</span>
+                  <span>{renderInline(bulletMatch[1])}</span>
+                </div>
+              );
+            }
+            // Numbered lists
+            const numMatch = line.match(/^\s*(\d+)\.\s+(.+)/);
+            if (numMatch) {
+              return (
+                <div key={li} className="flex gap-2 ml-2 my-0.5">
+                  <span className="text-[var(--text-dim)] shrink-0 font-mono text-xs">{numMatch[1]}.</span>
+                  <span>{renderInline(numMatch[2])}</span>
+                </div>
+              );
+            }
+            // Empty lines = paragraph break
+            if (!line.trim()) return <div key={li} className="h-2" />
+            // Regular text
+            return <div key={li} className="whitespace-pre-wrap">{renderInline(line)}</div>;
+          })}
+        </div>
+      );
     });
+  };
+
+  // Inline formatting: **bold** and `code`
+  const renderInline = (text: string): React.ReactNode => {
+    const parts: React.ReactNode[] = [];
+    let remaining = text;
+    let key = 0;
+    while (remaining) {
+      // Bold
+      const boldMatch = remaining.match(/\*\*(.+?)\*\*/);
+      // Inline code
+      const codeMatch = remaining.match(/`([^`]+)`/);
+      
+      const boldIdx = boldMatch?.index ?? Infinity;
+      const codeIdx = codeMatch?.index ?? Infinity;
+      
+      if (boldIdx === Infinity && codeIdx === Infinity) {
+        parts.push(remaining);
+        break;
+      }
+      
+      if (boldIdx <= codeIdx && boldMatch) {
+        if (boldMatch.index! > 0) parts.push(remaining.slice(0, boldMatch.index!));
+        parts.push(<strong key={key++} className="font-semibold text-white">{boldMatch[1]}</strong>);
+        remaining = remaining.slice(boldMatch.index! + boldMatch[0].length);
+      } else if (codeMatch) {
+        if (codeMatch.index! > 0) parts.push(remaining.slice(0, codeMatch.index!));
+        parts.push(<code key={key++} className="px-1 py-0.5 rounded bg-zinc-800 text-emerald-400 text-xs font-mono">{codeMatch[1]}</code>);
+        remaining = remaining.slice(codeMatch.index! + codeMatch[0].length);
+      }
+    }
+    return parts.length === 1 ? parts[0] : <>{parts}</>;
   };
 
   return (

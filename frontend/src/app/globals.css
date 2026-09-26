@@ -20,6 +20,7 @@
   --color-accent: #10b981;
   --color-accent-subtle: rgba(16, 185, 129, 0.12);
   --color-gold: #f59e0b;
+  --color-accent-orange: #f97316;
 
   /* Typography Neutrals */
   --color-text: #f0f4f2;
@@ -51,6 +52,7 @@
   --accent: #10b981;
   --accent-subtle: rgba(16, 185, 129, 0.12);
   --gold: #f59e0b;
+  --accent-orange: #f97316;
 
   --text: #f0f4f2;
   --text-muted: #889791;

@@ -164,6 +164,9 @@ class FMPAdapter(BaseDataAdapter):
 
     async def get_financial_statements(self, symbol: str) -> Optional[Dict[str, Any]]:
         """Fetch income statement, balance sheet, and cash flow for symbol."""
+        # FMP doesn't cover Indian exchanges — .NS/.BO would resolve to wrong US ticker
+        if symbol.upper().endswith(('.NS', '.BO')):
+            return None
         clean_symbol = symbol.split(".")[0].upper()
 
         inc = await self._throttled_get("income-statement", {"symbol": clean_symbol, "limit": 4})
@@ -182,6 +185,9 @@ class FMPAdapter(BaseDataAdapter):
 
     async def get_ratios(self, symbol: str) -> Optional[Dict[str, Any]]:
         """Fetch financial ratios for symbol."""
+        # FMP doesn't cover Indian exchanges — .NS/.BO would resolve to wrong US ticker
+        if symbol.upper().endswith(('.NS', '.BO')):
+            return None
         clean_symbol = symbol.split(".")[0].upper()
         raw = await self._throttled_get("ratios", {"symbol": clean_symbol, "limit": 1})
         if not raw or not isinstance(raw, list) or len(raw) == 0:
@@ -196,6 +202,9 @@ class FMPAdapter(BaseDataAdapter):
         return None
 
     async def get_company_info(self, symbol: str) -> Optional[Dict[str, Any]]:
+        # FMP doesn't cover Indian exchanges — .NS/.BO would resolve to wrong US ticker
+        if symbol.upper().endswith(('.NS', '.BO')):
+            return None
         clean_symbol = symbol.split(".")[0].upper()
         raw = await self._throttled_get("profile", {"symbol": clean_symbol})
         if not raw or not isinstance(raw, list) or len(raw) == 0:

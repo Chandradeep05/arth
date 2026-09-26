@@ -147,9 +147,10 @@ class RiskEngine:
         sector = company.get("sector") if company else None
 
         # ── Volatility Risk ──
-        vol_score, vol_factors = self._compute_volatility_risk(ohlcv)
+        vol_score, vol_factors, vol_avail = self._compute_volatility_risk(ohlcv)
         dimensions.append({
             "dimension": "volatility",
+            "available": vol_avail,
             "score": vol_score,
             "label": self._risk_label(vol_score),
             "factors": vol_factors,
@@ -157,9 +158,10 @@ class RiskEngine:
         factors_all.extend(vol_factors)
 
         # ── Liquidity Risk ──
-        liq_score, liq_factors = self._compute_liquidity_risk(ohlcv)
+        liq_score, liq_factors, liq_avail = self._compute_liquidity_risk(ohlcv)
         dimensions.append({
             "dimension": "liquidity",
+            "available": liq_avail,
             "score": liq_score,
             "label": self._risk_label(liq_score),
             "factors": liq_factors,
@@ -167,14 +169,17 @@ class RiskEngine:
         factors_all.extend(liq_factors)
 
         # ── Financial Health Risk (sector-aware) ──
-        fin_score, fin_factors = self._compute_financial_risk(metrics, sector)
+        fin_score, fin_factors, fin_avail = self._compute_financial_risk(metrics, sector)
         dimensions.append({
             "dimension": "financial_health",
+            "available": fin_avail,
             "score": fin_score,
             "label": self._risk_label(fin_score),
             "factors": fin_factors,
         })
         factors_all.extend(fin_factors)
+
+        all_unavail = not (vol_avail or liq_avail or fin_avail)
 
         # ── Composite Score (weighted average) ──
         weights = {"volatility": 0.35, "liquidity": 0.25, "financial_health": 0.40}
@@ -184,12 +189,13 @@ class RiskEngine:
         )
 
         return {
+            "available": not all_unavail,
             "symbol": symbol.upper(),
-            "composite_score": round(composite, 1),
-            "composite_label": self._risk_label(composite),
+            "composite_score": round(composite, 1) if not all_unavail else None,
+            "composite_label": self._risk_label(composite) if not all_unavail else "Insufficient data",
             "dimensions": dimensions,
             "sector": sector,
-            "confidence": 60.0,  # Base confidence for Phase 1
+            "confidence": 60.0 if not all_unavail else 0.0,  # Base confidence for Phase 1
             "computed_at": datetime.now(timezone.utc).isoformat(),
             "disclaimer": (
                 "⚠ Risk scores are probabilistic assessments, not guarantees. "
@@ -199,12 +205,12 @@ class RiskEngine:
 
     def _compute_volatility_risk(
         self, ohlcv: Optional[List[Dict[str, Any]]]
-    ) -> tuple[float, List[str]]:
+    ) -> tuple[float, List[str], bool]:
         """Volatility risk from 30-day price standard deviation."""
         factors = []
 
         if ohlcv is None or (hasattr(ohlcv, "empty") and ohlcv.empty) or len(ohlcv) < 20:
-            return 50.0, ["Insufficient data for volatility calculation"]
+            return 50.0, ["Insufficient data for volatility calculation"], False
 
         if isinstance(ohlcv, pd.DataFrame):
             closes = ohlcv["Close"].tail(30).values
@@ -235,16 +241,16 @@ class RiskEngine:
             score = min(score + 10, 100)
             factors.append(f"Large single-day move: {max_daily:.1f}%")
 
-        return round(score, 1), factors
+        return round(score, 1), factors, True
 
     def _compute_liquidity_risk(
         self, ohlcv: Optional[List[Dict[str, Any]]]
-    ) -> tuple[float, List[str]]:
+    ) -> tuple[float, List[str], bool]:
         """Liquidity risk from average trading volume."""
         factors = []
 
         if ohlcv is None or (hasattr(ohlcv, "empty") and ohlcv.empty) or len(ohlcv) < 10:
-            return 50.0, ["Insufficient data for liquidity analysis"]
+            return 50.0, ["Insufficient data for liquidity analysis"], False
 
         if isinstance(ohlcv, pd.DataFrame):
             volumes = ohlcv["Volume"].tail(20).values
@@ -272,11 +278,11 @@ class RiskEngine:
             score = min(score + 15, 100)
             factors.append("Volume declining — potential liquidity concern")
 
-        return round(score, 1), factors
+        return round(score, 1), factors, True
 
     def _compute_financial_risk(
         self, metrics: Dict[str, Any], sector: Optional[str] = None
-    ) -> tuple[float, List[str]]:
+    ) -> tuple[float, List[str], bool]:
         """
         Financial health risk from fundamentals.
 
@@ -358,8 +364,9 @@ class RiskEngine:
 
         if not factors:
             factors.append("Limited fundamental data available")
+            return round(max(0, min(100, score)), 1), factors, False
 
-        return round(max(0, min(100, score)), 1), factors
+        return round(max(0, min(100, score)), 1), factors, True
 
     @staticmethod
     def _risk_label(score: float) -> str:

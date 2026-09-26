@@ -80,10 +80,10 @@ export default function ResearchPage() {
 
   const checkSources = async (sym: string) => {
     try {
-      const res = await apiClient.get<{ success: boolean; data: SourcesData }>(
+      const res = await authApi.get<{ success: boolean; data: SourcesData }>(
         `/api/v1/research/sources/${encodeURIComponent(sym)}`
       );
-      if (res.success && res.data.has_documents) {
+      if (res?.success && res.data?.has_documents) {
         setSourcesInfo(res.data);
         setIndexed(true);
         setIndexedCount(res.data.document_count);
@@ -178,7 +178,7 @@ export default function ResearchPage() {
           AI Research Lab
         </h1>
         <p className="text-sm text-[var(--text-muted)] mt-1 font-mono">
-          Generate institutional-grade AI research reports powered by Groq LLM
+          Generate institutional-grade AI research reports powered by ARTH AI
         </p>
       </div>
 
@@ -246,7 +246,7 @@ export default function ResearchPage() {
                 </button>
               </form>
               <p className="text-[11px] text-[var(--text-dim)] mt-3 font-mono">
-                Powered by Groq LLM · Sourced from institutional filings & real-time feeds
+                Powered by ARTH AI · Sourced from institutional filings & real-time feeds
               </p>
             </div>
           </motion.div>

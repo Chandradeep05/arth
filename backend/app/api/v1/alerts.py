@@ -17,6 +17,13 @@ from pydantic import BaseModel, field_validator
 from app.core.auth import UserContext, require_active_user
 from app.core.logging import get_logger
 
+def _currency_for_symbol(symbol: str) -> str:
+    """Derive display currency from symbol suffix."""
+    s = symbol.upper()
+    if s.endswith('.NS') or s.endswith('.BO'):
+        return '₹'
+    return '$'
+
 logger = get_logger(__name__)
 router = APIRouter(prefix="/user/alerts", tags=["alerts"])
 notifications_router = APIRouter(prefix="/user/notifications", tags=["notifications"])
@@ -103,7 +110,9 @@ async def create_alert(body: CreateAlertRequest, request: Request, user: UserCon
         )
     if not row:
         raise HTTPException(status_code=409, detail="Duplicate active alert")
-    return dict(row)
+    result = dict(row)
+    result['currency'] = _currency_for_symbol(result.get('symbol', ''))
+    return result
 
 
 @router.delete("/{alert_id}")
@@ -153,7 +162,7 @@ async def list_notifications(request: Request, limit: int = Query(default=20, le
 async def unread_count(request: Request, user: UserContext = Depends(require_active_user)) -> dict:
     db = request.state.db
     count = await db.fetchval("SELECT COUNT(*) FROM notifications WHERE user_id = $1 AND is_read = false", user.user_id)
-    return {"unread": count}
+    return {"unread": count, "unread_count": count}
 
 
 @notifications_router.post("/{notification_id}/read")

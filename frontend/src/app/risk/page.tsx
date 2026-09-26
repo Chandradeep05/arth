@@ -134,12 +134,24 @@ export default function RiskPage() {
             {/* Dimensions */}
             <div className="space-y-4 mt-4">
               {risk.dimensions?.map((dim: any) => (
-                <RiskBar
-                  key={dim.dimension}
-                  label={(dim.dimension || '').replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase())}
-                  score={dim.score}
-                  color={getRiskColor(dim.score)}
-                />
+                dim.available === false ? (
+                  <div key={dim.dimension} className="space-y-1.5">
+                    <div className="flex justify-between text-xs font-mono">
+                      <span className="text-[var(--text-muted)]">
+                        {(dim.dimension || '').replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase())}
+                      </span>
+                      <span className="text-[var(--text-dim)]">N/A</span>
+                    </div>
+                    <div className="h-2 rounded-full bg-[var(--surface-2)] overflow-hidden" />
+                  </div>
+                ) : (
+                  <RiskBar
+                    key={dim.dimension}
+                    label={(dim.dimension || '').replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase())}
+                    score={dim.score}
+                    color={getRiskColor(dim.score)}
+                  />
+                )
               ))}
             </div>
           </div>

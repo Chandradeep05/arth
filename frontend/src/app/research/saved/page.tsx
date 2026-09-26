@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
+import { useAuth } from '@/lib/auth/AuthProvider';
 import { useAuthenticatedApi } from '@/lib/auth/useAuthenticatedApi';
 import { Trash2, FileText, ChevronDown, ChevronUp, Calendar, Loader2 } from 'lucide-react';
 
@@ -21,6 +22,7 @@ interface SavedReportDetail extends SavedReportSummary {
 
 export default function SavedResearchPage() {
   const api = useAuthenticatedApi();
+  const { loading: authLoading } = useAuth();
   const [reports, setReports] = useState<SavedReportSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -28,8 +30,12 @@ export default function SavedResearchPage() {
   const [detailLoading, setDetailLoading] = useState(false);
 
   useEffect(() => {
-    fetchReports();
-  }, []);
+    if (!authLoading && api.isAuthenticated) {
+      fetchReports();
+    } else if (!authLoading) {
+      setLoading(false);
+    }
+  }, [authLoading, api.isAuthenticated]);
 
   const fetchReports = async () => {
     try {

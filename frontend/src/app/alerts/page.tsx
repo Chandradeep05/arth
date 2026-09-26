@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { useAuthenticatedApi } from '@/lib/auth/useAuthenticatedApi';
+import { useAuth } from '@/lib/auth/AuthProvider';
 import { Trash2, Bell, Check, Plus, AlertCircle, Clock } from 'lucide-react';
 
 interface Alert {
@@ -18,12 +19,15 @@ interface Alert {
 interface Notification {
   id: string;
   alert_id: string;
-  message: string;
+  title?: string;
+  body?: string;
+  message?: string;
   is_read: boolean;
   created_at: string;
 }
 
 export default function AlertsPage() {
+  const { user, loading: authLoading } = useAuth();
   const api = useAuthenticatedApi();
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [notifications, setNotifications] = useState<Notification[]>([]);
@@ -34,12 +38,13 @@ export default function AlertsPage() {
 
   const fetchAlertsAndNotifications = async () => {
     try {
-      const [alertsRes, notifsRes] = await Promise.all([
+      const [alertsRes, notifsRaw] = await Promise.all([
         api.get<Alert[]>('/api/v1/user/alerts'),
-        api.get<Notification[]>('/api/v1/user/notifications')
+        api.get<any>('/api/v1/user/notifications')
       ]);
       if (alertsRes) setAlerts(alertsRes);
-      if (notifsRes) setNotifications(notifsRes);
+      const notifsItems = Array.isArray(notifsRaw) ? notifsRaw : (notifsRaw?.items || []);
+      if (notifsItems) setNotifications(notifsItems);
     } catch (error) {
       console.error('Failed to fetch alerts & notifications', error);
     } finally {
@@ -48,8 +53,10 @@ export default function AlertsPage() {
   };
 
   useEffect(() => {
-    fetchAlertsAndNotifications();
-  }, []);
+    if (!authLoading && user) {
+      fetchAlertsAndNotifications();
+    }
+  }, [authLoading, user]);
 
   const handleCreateAlert = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -79,7 +86,7 @@ export default function AlertsPage() {
 
   const handleMarkRead = async (id: string) => {
     try {
-      await api.patch(`/api/v1/user/notifications/${id}/read`, {});
+      await api.post(`/api/v1/user/notifications/${id}/read`, {});
       setNotifications(notifications.map(n => n.id === id ? { ...n, is_read: true } : n));
     } catch (error) {
       console.error('Failed to mark read', error);
@@ -237,7 +244,7 @@ export default function AlertsPage() {
                 <div className="flex items-start gap-3">
                   <AlertCircle className={`w-4 h-4 mt-0.5 shrink-0 ${notif.is_read ? 'text-[var(--text-dim)]' : 'text-[var(--green)]'}`} />
                   <div>
-                    <p className={`text-xs ${notif.is_read ? 'text-[var(--text-muted)]' : 'text-white font-medium'}`}>{notif.message}</p>
+                    <p className={`text-xs ${notif.is_read ? 'text-[var(--text-muted)]' : 'text-white font-medium'}`}>{notif.body || notif.title || notif.message || 'Alert triggered'}</p>
                     <div className="flex items-center gap-1 mt-1 text-[10px] font-mono text-[var(--text-dim)]">
                       <Clock className="w-3 h-3" />
                       {new Date(notif.created_at).toLocaleString()}

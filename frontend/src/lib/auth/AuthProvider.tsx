@@ -57,11 +57,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
 
     // Get initial session
-    supabase.auth.getSession().then(({ data: { session: s } }) => {
+    supabase.auth.getSession().then(async ({ data: { session: s } }) => {
       setSession(s);
       setUser(s?.user ?? null);
       if (s?.access_token) {
-        fetchProfile(s.access_token);
+        await fetchProfile(s.access_token);
       }
       setLoading(false);
     });

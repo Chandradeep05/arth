@@ -74,7 +74,7 @@ async def generate_research(
         )
     else:
         # Non-streaming: return complete report
-        cache = CacheManager(redis)
+        cache = CacheManager(redis_conn)
         try:
             if depth == "deep":
                 report = await engine.generate_deep_research(symbol, cache)

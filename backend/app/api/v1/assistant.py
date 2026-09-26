@@ -102,6 +102,7 @@ async def chat(
 
         async def event_stream():
             yield f"data: {json.dumps({'type': 'session', 'session_id': session.session_id})}\n\n"
+            pool = getattr(http_request.app.state, "pg_pool", None)
 
             # Extract symbols and send tool usage events
             symbols = engine._extract_symbols(request.message)
@@ -119,28 +120,29 @@ async def chat(
 
             except asyncio.CancelledError:
                 # Client disconnected — persist partial content
-                if accumulated and request.conversation_id and db:
+                if accumulated and request.conversation_id and pool:
                     try:
-                        await asyncio.shield(
-                            _persist_turn(
-                                db, request.conversation_id, user.user_id,
-                                request.message, accumulated,
-                                idempotency_key=request.idempotency_key,
+                        async with pool.acquire() as persist_conn:
+                            await asyncio.shield(
+                                _persist_turn(
+                                    persist_conn, request.conversation_id, user.user_id,
+                                    request.message, accumulated,
+                                    idempotency_key=request.idempotency_key,
+                                )
                             )
-                        )
-                        persist_needed = False
                     except Exception as e:
                         logger.warning("persist_on_disconnect_failed", error=str(e))
                 raise
 
             # Normal completion: persist full response
-            if persist_needed and accumulated and request.conversation_id and db:
+            if persist_needed and accumulated and request.conversation_id and pool:
                 try:
-                    await _persist_turn(
-                        db, request.conversation_id, user.user_id,
-                        request.message, accumulated,
-                        idempotency_key=request.idempotency_key,
-                    )
+                    async with pool.acquire() as persist_conn:
+                        await _persist_turn(
+                            persist_conn, request.conversation_id, user.user_id,
+                            request.message, accumulated,
+                            idempotency_key=request.idempotency_key,
+                        )
                 except Exception as e:
                     logger.warning("persist_on_complete_failed", error=str(e))
 

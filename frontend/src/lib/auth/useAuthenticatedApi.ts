@@ -1,7 +1,7 @@
 'use client';
 
 import { useAuth } from './AuthProvider';
-import { useCallback, useMemo } from 'react';
+import { useCallback, useMemo, useRef } from 'react';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'https://arth-rdd5.onrender.com';
 
@@ -18,10 +18,14 @@ interface RequestOptions {
  */
 export function useAuthenticatedApi() {
   const { session } = useAuth();
+  const tokenRef = useRef(session?.access_token);
+  
+  // Keep ref in sync without changing callback identity
+  tokenRef.current = session?.access_token;
 
   const authFetch = useCallback(
     async <T = unknown>(path: string, options: RequestOptions = {}): Promise<T> => {
-      const token = session?.access_token;
+      const token = tokenRef.current;
       if (!token) {
         throw new Error('Not authenticated');
       }
@@ -50,7 +54,7 @@ export function useAuthenticatedApi() {
 
       return resp.json();
     },
-    [session?.access_token]
+    []
   );
 
   const isAuthenticated = !!session?.access_token;
