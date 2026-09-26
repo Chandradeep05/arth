@@ -66,6 +66,15 @@ CAPABILITIES = {
         "holders": False,
         "financials": True,
     },
+    "upstox": {
+        "quote": True,
+        "history": True,
+        "company_info": True,
+        "fundamentals": True,
+        "news": True,
+        "holders": False,
+        "financials": True,
+    },
 }
 
 def normalize_ohlcv(data: Any, source: str) -> pd.DataFrame | None:
@@ -144,6 +153,16 @@ class MarketDataProvider:
         self._nse = nse_adapter
         self._finnhub = finnhub_adapter
         self._fmp = fmp_adapter
+        
+        try:
+            from app.config import get_settings
+            if get_settings().upstox_enabled:
+                from app.data.adapters.upstox import upstox_adapter
+                self._upstox = upstox_adapter
+            else:
+                self._upstox = None
+        except Exception:
+            self._upstox = None
 
     def _check_capability(self, symbol: str, capability: str) -> DataResult | None:
         provider = self._get_provider(symbol)
@@ -160,11 +179,14 @@ class MarketDataProvider:
     def _get_chain(self, symbol: str, capability: str) -> List[str]:
         is_indian = symbol.upper().endswith(('.NS', '.BO'))
         if is_indian:
-            # Indian symbols: NSE only — TwelveData doesn't understand .NS/.BO suffixes
-            # and sending them wastes our 8 credits/min free-tier quota
+            chain = []
+            # Upstox is primary if enabled and has capability
+            if self._upstox and CAPABILITIES.get("upstox", {}).get(capability):
+                chain.append("upstox")
+            # NSE as fallback for quote/history
             if capability in ["quote", "history"]:
-                return ["nse"]
-            return []  # No provider for Indian news/fundamentals/financials yet
+                chain.append("nse")
+            return chain
 
         # US Stocks provider chain
         chains = {
@@ -189,6 +211,8 @@ class MarketDataProvider:
                 elif provider == "finnhub":
                     raw = await self._finnhub._throttled_get("quote", {"symbol": symbol.split(".")[0]})
                     data = {"price": raw.get("c"), "change": raw.get("d"), "percent_change": raw.get("dp")} if raw else None
+                elif provider == "upstox":
+                    data = await self._upstox.get_quote(symbol)
                 else:
                     data = None
 
@@ -207,6 +231,8 @@ class MarketDataProvider:
                     data = await self._twelve.get_ohlcv(symbol, period=period, interval=interval)
                 elif provider == "nse":
                     data = await self._nse.get_ohlcv(symbol, period=period)
+                elif provider == "upstox":
+                    data = await self._upstox.get_ohlcv(symbol, period=period, interval=interval)
                 else:
                     data = None
 
@@ -226,6 +252,8 @@ class MarketDataProvider:
                     data = await self._finnhub.get_company_info(symbol)
                 elif provider == "twelvedata":
                     data = await self._twelve.get_company_info(symbol)
+                elif provider == "upstox":
+                    data = await self._upstox.get_company_info(symbol)
                 else:
                     data = None
 
@@ -247,6 +275,8 @@ class MarketDataProvider:
                 elif provider == "twelvedata":
                     raw = await self._twelve.get_company_info(symbol)
                     data = raw.get('metrics', {}) if isinstance(raw, dict) else {}
+                elif provider == "upstox":
+                    data = await self._upstox.get_fundamentals(symbol)
                 else:
                     data = None
 
@@ -265,6 +295,10 @@ class MarketDataProvider:
                     articles = await self._finnhub.get_news(symbol, count)
                     if articles:
                         return DataResult(articles, DataStatus.SUCCESS, provider)
+                elif provider == "upstox":
+                    articles = await self._upstox.get_news(symbol, count)
+                    if articles:
+                        return DataResult(articles, DataStatus.SUCCESS, provider)
             except Exception as e:
                 logger.warning("news_provider_failed", provider=provider, symbol=symbol, error=str(e))
 
@@ -278,6 +312,10 @@ class MarketDataProvider:
                     data = await self._fmp.get_financial_statements(symbol)
                     if data:
                         return DataResult(data, DataStatus.SUCCESS, provider)
+                elif provider == "upstox":
+                    data = await self._upstox.get_financial_statements(symbol)
+                    if data:
+                        return DataResult(data, DataStatus.SUCCESS, provider)
             except Exception as e:
                 logger.warning("financials_provider_failed", provider=provider, symbol=symbol, error=str(e))
 
@@ -288,7 +326,7 @@ class MarketDataProvider:
 
     def get_source_label(self, symbol: str) -> str:
         provider = self._get_provider(symbol)
-        labels = {'twelvedata': 'Twelve Data', 'nse': 'NSE India', 'finnhub': 'Finnhub', 'fmp': 'Financial Modeling Prep'}
+        labels = {'twelvedata': 'Twelve Data', 'nse': 'NSE India', 'finnhub': 'Finnhub', 'fmp': 'Financial Modeling Prep', 'upstox': 'Upstox'}
         return labels.get(provider, provider)
 
     def _get_provider(self, symbol: str) -> str:

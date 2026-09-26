@@ -222,9 +222,9 @@ export default function SystemPage() {
             ['Application', 'ARTH v2.0.0'],
             ['Backend', 'FastAPI + Uvicorn'],
             ['Frontend', 'Next.js 16 (Turbopack)'],
-            ['LLM Provider', 'Groq (Llama 3.3 70B)'],
-            ['Data Source', 'Twelve Data / NSE India (~15s delay)'],
-            ['Phase', '2 — Intelligence Expansion'],
+            ['LLM Provider', 'ARTH AI (Multi-model)'],
+            ['Data Source', 'Twelve Data / NSE / Upstox / Finnhub'],
+            ['Phase', '4 — Production Integration'],
           ].map(([label, value]) => (
             <div key={label} className="flex justify-between">
               <span className="text-[var(--text-dim)]">{label}</span>

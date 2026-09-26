@@ -308,6 +308,35 @@ export default function AssistantPage() {
     return parts.length === 1 ? parts[0] : <>{parts}</>;
   };
 
+  // ── Auth Guard ──
+  if (authLoading) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-[var(--bg)]">
+        <Loader2 className="w-6 h-6 animate-spin text-[var(--text-dim)]" />
+      </div>
+    );
+  }
+
+  if (!session || !user) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-[var(--bg)] p-4">
+        <div className="card p-8 max-w-md w-full text-center">
+          <Bot className="w-10 h-10 text-[var(--accent)] mx-auto mb-4" />
+          <h2 className="text-lg font-bold text-white mb-2">Sign In Required</h2>
+          <p className="text-sm text-[var(--text-muted)] mb-4">
+            Sign in to access the ARTH AI Assistant.
+          </p>
+          <a
+            href="/auth/login"
+            className="inline-block px-6 py-2.5 rounded-lg bg-[var(--accent)] text-black font-bold text-sm hover:opacity-90 transition-opacity"
+          >
+            Sign In
+          </a>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex h-screen bg-[var(--bg)] text-[var(--text)] font-sans">
       {/* Mobile Sidebar Overlay */}

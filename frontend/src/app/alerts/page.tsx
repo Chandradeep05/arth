@@ -192,8 +192,8 @@ export default function AlertsPage() {
                         </span>
                       </div>
                       <div className="text-xs font-mono text-[var(--text-dim)]">
-                        Trigger when {alert.alert_type === 'price_above' ? '≥' : '≤'} {alert.threshold.toFixed(2)}
-                        {alert.last_evaluated_price && ` · Last Evaluated: ${alert.last_evaluated_price.toFixed(2)}`}
+                        Trigger when {alert.alert_type === 'price_above' ? '≥' : '≤'} {(alert.symbol.endsWith('.NS') || alert.symbol.endsWith('.BO')) ? '₹' : '$'}{alert.threshold.toFixed(2)}
+                        {alert.last_evaluated_price && ` · Last: ${(alert.symbol.endsWith('.NS') || alert.symbol.endsWith('.BO')) ? '₹' : '$'}${alert.last_evaluated_price.toFixed(2)}`}
                       </div>
                     </div>
                   </div>

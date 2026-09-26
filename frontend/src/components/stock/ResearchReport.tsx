@@ -166,7 +166,7 @@ export default function ResearchReport({ symbol }: ResearchReportProps) {
       {(status === 'streaming' || status === 'done') && (
         <div className="px-5 py-2.5 border-t border-white/[0.06] bg-transparent">
           <p className="text-[10px] font-mono text-[var(--text-dim)]">
-            ⚠ AI-generated · For informational purposes only · Groq LLaMA 3.3 70B
+            ⚠ AI-generated · For informational purposes only · Powered by ARTH AI
           </p>
         </div>
       )}

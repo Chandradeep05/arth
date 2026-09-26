@@ -160,7 +160,7 @@ class Settings(BaseSettings):
     # ── Upstox (Phase 4 — Indian Market Data) ──
     upstox_api_key: str = ""
     upstox_api_secret: str = ""
-    upstox_access_token: str = ""   # Analytics Token (read-only, long-lived)
+    upstox_analytics_token: str = ""   # Analytics Token (read-only, long-lived)
     upstox_enabled: bool = False    # Set True via UPSTOX_ENABLED=true once token is configured
 
     # ── Internal Job Secret ──

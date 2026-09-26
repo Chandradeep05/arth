@@ -88,6 +88,26 @@ export default function SavedResearchPage() {
     );
   }
 
+  if (!api.isAuthenticated) {
+    return (
+      <div className="space-y-8 animate-fadeIn max-w-5xl">
+        <div className="card text-center py-16">
+          <FileText className="w-10 h-10 text-[var(--text-dim)] mx-auto mb-3 opacity-40" />
+          <p className="text-sm font-medium text-[var(--text)]">Sign in to view saved reports</p>
+          <p className="text-xs text-[var(--text-dim)] font-mono mt-1">
+            Authentication is required to access your research portfolio.
+          </p>
+          <a
+            href="/auth/login"
+            className="inline-block mt-4 px-5 py-2 rounded-lg bg-[var(--accent)] text-black font-bold text-xs hover:opacity-90 transition-opacity"
+          >
+            Sign In
+          </a>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-8 animate-fadeIn max-w-5xl">
       <div className="flex items-center gap-3">
