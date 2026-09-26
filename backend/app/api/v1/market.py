@@ -84,10 +84,13 @@ def _raise_data_error(symbol: str):
 
     failure_count = health.failure_count + (td_health.failure_count if td_health else 0)
 
-    if is_rate_limited or is_circuit_open or (is_recent_failure and failure_count >= 2):
+    # If ANY provider is unhealthy, assume data is temporarily unavailable
+    # (not that the symbol doesn't exist). SymbolNotFoundError (404) is only
+    # appropriate when all providers are healthy and genuinely have no data.
+    if is_rate_limited or is_circuit_open or is_recent_failure:
         raise DataSourceError(
             source="MarketDataProvider",
-            message=f"Data for '{symbol}' temporarily unavailable — data provider rate limited. Try again in ~60s.",
+            message=f"Data for '{symbol}' temporarily unavailable — data provider rate limited or failing. Try again in ~60s.",
         )
     raise SymbolNotFoundError(symbol)
 

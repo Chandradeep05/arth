@@ -361,6 +361,11 @@ class TwelveDataAdapter(BaseDataAdapter):
 
         # Split into chunks of _MAX_BATCH_SIZE
         for i in range(0, len(symbols), _MAX_BATCH_SIZE):
+            # If we're already rate-limited, stop — return what we have so far
+            if self._cache_get("_rate_limit_cooldown"):
+                logger.info("twelvedata_batch_stopping_early", reason="rate_limited", fetched=len(all_results))
+                break
+
             chunk = symbols[i:i + _MAX_BATCH_SIZE]
             chunk_key = f"batch:{'|'.join(sorted(chunk))}"
 
@@ -401,8 +406,6 @@ class TwelveDataAdapter(BaseDataAdapter):
 
                         price = _safe_float(item.get("close"), 0)
                         prev_close = _safe_float(item.get("previous_close"), price)
-                        # open/high/low may be "0" or "" when market is closed —
-                        # fall back to price/prev_close so the UI never shows blanks.
                         raw_open = _safe_float(item.get("open"), 0)
                         raw_high = _safe_float(item.get("high"), 0)
                         raw_low = _safe_float(item.get("low"), 0)
@@ -439,9 +442,9 @@ class TwelveDataAdapter(BaseDataAdapter):
             except Exception as e:
                 logger.warning("twelvedata_batch_chunk_failed", error=str(e))
 
-            # Wait 60s between chunks to reset credit counter
+            # Brief pause between chunks to be polite (NOT 60s)
             if i + _MAX_BATCH_SIZE < len(symbols):
-                await asyncio.sleep(60)
+                await asyncio.sleep(2)
 
         return all_results
 

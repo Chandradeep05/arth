@@ -23,24 +23,8 @@ import { useStockAtmosphere } from '@/lib/atmosphere';
 /* 25 cross-sector stocks (US market via Twelve Data). */
 /* Batched in chunks of 8 by the backend to stay within free-tier credits. */
 const MARKET_STOCKS = [
-  // Tech
-  'AAPL', 'MSFT', 'GOOGL', 'META', 'NVDA', 'AMD', 'CRM',
-  // E-Commerce / Consumer
-  'AMZN', 'WMT', 'COST',
-  // Auto / EV
-  'TSLA',
-  // Finance
-  'JPM', 'GS', 'V', 'MA',
-  // Healthcare
-  'JNJ', 'UNH', 'PFE',
-  // Energy
-  'XOM', 'CVX',
-  // Industrial / Aerospace
-  'BA', 'CAT',
-  // Telecom / Media
-  'DIS', 'NFLX',
-  // Semiconductors
-  'AVGO',
+  // 8 stocks = 1 batch = instant load (free tier: 8 credits/min)
+  'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'TSLA', 'META', 'JPM',
 ];
 
 interface StockMover {

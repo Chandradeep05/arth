@@ -26,9 +26,12 @@ logger = get_logger(__name__)
 class VectorStore:
     """Lightweight ChromaDB wrapper with per-symbol collections."""
 
+    MAX_COLLECTIONS = 50  # Prevent unbounded memory on 512MB Render
+
     def __init__(self) -> None:
         # Ephemeral in-memory client — no disk persistence
         self._client = chromadb.Client()
+        self._access_order: list[str] = []  # LRU tracking by collection name
         logger.info("vector_store_initialized", mode="in-memory")
 
     # ── Collection helpers ──────────────────────────────────────
@@ -41,8 +44,23 @@ class VectorStore:
         return name[:63]
 
     def get_or_create_collection(self, symbol: str) -> chromadb.Collection:
-        """Get (or create) the collection for *symbol*."""
+        """Get (or create) the collection for *symbol*. Evicts LRU if at limit."""
         name = self._collection_name(symbol)
+
+        # LRU tracking — move to end (most recently used)
+        if name in self._access_order:
+            self._access_order.remove(name)
+        self._access_order.append(name)
+
+        # Evict oldest collection if over limit
+        while len(self._access_order) > self.MAX_COLLECTIONS:
+            evict_name = self._access_order.pop(0)
+            try:
+                self._client.delete_collection(evict_name)
+                logger.info("collection_evicted_lru", collection=evict_name)
+            except Exception:
+                pass  # Collection may not exist
+
         return self._client.get_or_create_collection(name=name)
 
     # ── Write ───────────────────────────────────────────────────

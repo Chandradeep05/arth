@@ -16,6 +16,8 @@ interface PriceChartProps {
   data: OHLCVBar[];
   symbol: string;
   height?: number;
+  activeTimeframe?: string;
+  onTimeframeChange?: (period: string, interval: string) => void;
 }
 
 const TIMEFRAMES = [
@@ -27,9 +29,10 @@ const TIMEFRAMES = [
   { label: '5Y', period: '5y', interval: '1mo' },
 ] as const;
 
-export default function PriceChart({ data, symbol, height = 420 }: PriceChartProps) {
+export default function PriceChart({ data, symbol, height = 420, activeTimeframe: controlledTimeframe, onTimeframeChange }: PriceChartProps) {
   const chartContainerRef = useRef<HTMLDivElement>(null);
-  const [activeTimeframe, setActiveTimeframe] = useState('3M');
+  const [internalTimeframe, setInternalTimeframe] = useState('3M');
+  const activeTimeframe = controlledTimeframe || internalTimeframe;
 
   useEffect(() => {
     if (!chartContainerRef.current || data.length === 0) return;
@@ -144,7 +147,12 @@ export default function PriceChart({ data, symbol, height = 420 }: PriceChartPro
           {TIMEFRAMES.map((tf) => (
             <button
               key={tf.label}
-              onClick={() => setActiveTimeframe(tf.label)}
+              onClick={() => {
+                setInternalTimeframe(tf.label);
+                if (onTimeframeChange) {
+                  onTimeframeChange(tf.period, tf.interval);
+                }
+              }}
               className={`
                 px-2.5 py-1 text-[11px] font-mono rounded-md cursor-pointer transition-all
                 ${activeTimeframe === tf.label
