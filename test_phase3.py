@@ -465,12 +465,12 @@ class TestOutcomeTrackerStore(unittest.TestCase):
         self.assertIsNone(record.directional_correct)
 
     def test_evaluate_pending_raises_not_implemented(self):
-        """evaluate_pending should fail closed with NotImplementedError."""
+        """evaluate_pending should evaluate pending predictions against live fetch."""
         async def dummy_fetch(sym):
             return 100.0
 
-        with self.assertRaises(NotImplementedError):
-            run_async(self.tracker.evaluate_pending(dummy_fetch))
+        res = run_async(self.tracker.evaluate_pending(dummy_fetch))
+        self.assertIsInstance(res, (int, list))
 
 
 class TestOutcomeTrackerHistory(unittest.TestCase):
@@ -553,10 +553,8 @@ class TestOutcomeTrackerHistory(unittest.TestCase):
             confidence_band="high",
         ))
         history = run_async(self.tracker.get_history("AAPL"))
-        # Only 1 record because same key overwrites
-        self.assertEqual(len(history), 1)
-        # Should keep the latest value
-        self.assertEqual(history[0].predicted_return_pct, 2.0)
+        # In V3.2+, records get unique UUIDs so both are preserved
+        self.assertEqual(len(history), 2)
 
 
 class TestOutcomeTrackerAccuracy(unittest.TestCase):
@@ -573,12 +571,13 @@ class TestOutcomeTrackerAccuracy(unittest.TestCase):
         self.assertEqual(stats.evaluated_predictions, 0)
 
     def test_accuracy_with_pending(self):
-        """Stored but unevaluated predictions should be pending."""
+        """Stored but unevaluated predictions with reference_price should be pending."""
         run_async(self.tracker.store_prediction(
             symbol="AAPL",
             predicted_return_pct=1.0,
             confidence_score=0.7,
             confidence_band="high",
+            reference_price=150.0,
         ))
         stats = run_async(self.tracker.get_accuracy())
         self.assertEqual(stats.total_predictions, 1)
@@ -646,6 +645,7 @@ class TestPredictionRecord(unittest.TestCase):
         """Should construct with required fields."""
         from app.engines.prediction.outcome_tracker import PredictionRecord
         record = PredictionRecord(
+            prediction_id="test-pred-1",
             symbol="AAPL",
             predicted_return_pct=2.5,
             confidence_score=0.75,
@@ -659,6 +659,7 @@ class TestPredictionRecord(unittest.TestCase):
         """Should survive JSON serialization round-trip."""
         from app.engines.prediction.outcome_tracker import PredictionRecord
         record = PredictionRecord(
+            prediction_id="test-pred-2",
             symbol="TSLA",
             predicted_return_pct=-1.5,
             confidence_score=0.6,

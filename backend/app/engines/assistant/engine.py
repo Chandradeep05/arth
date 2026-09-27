@@ -280,9 +280,39 @@ class AssistantEngine:
             if quote:
                 has_data = True
                 quote.pop("_validation", None)
+                price = quote.get('price')
+                prev_close = quote.get('previous_close')
+                raw_change = quote.get('change')
+                raw_pct = quote.get('change_percent')
+                
+                try:
+                    c_val = float(raw_change) if raw_change is not None else None
+                except (ValueError, TypeError):
+                    c_val = None
+                    
+                try:
+                    p_val = float(raw_pct) if raw_pct is not None else None
+                except (ValueError, TypeError):
+                    p_val = None
+                    
+                if c_val is None and price is not None and prev_close is not None:
+                    try:
+                        c_val = round(float(price) - float(prev_close), 2)
+                    except (ValueError, TypeError):
+                        pass
+                        
+                if p_val is None and c_val is not None and prev_close:
+                    try:
+                        p_val = round((c_val / float(prev_close)) * 100, 2)
+                    except (ValueError, TypeError, ZeroDivisionError):
+                        pass
+
+                c_str = f"{c_val:+.2f}" if c_val is not None else "0.00"
+                p_str = f"{p_val:+.2f}%" if p_val is not None else "0.00%"
+
                 parts.append(
-                    f"Price: {quote.get('price', 'N/A')} | "
-                    f"Change: {quote.get('change', 0)} ({quote.get('change_percent', 0):.2f}%) | "
+                    f"Price: {price if price is not None else 'N/A'} | "
+                    f"Change: {c_str} ({p_str}) | "
                     f"Volume: {quote.get('volume', 'N/A')} | "
                     f"High: {quote.get('high', 'N/A')} | Low: {quote.get('low', 'N/A')} | "
                     f"Market Cap: {self._fmt_market_cap(quote.get('market_cap'))} | "

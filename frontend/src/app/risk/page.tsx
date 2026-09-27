@@ -12,7 +12,7 @@ function RiskBar({ label, score, color }: { label: string; score: number; color:
     <div className="space-y-1.5">
       <div className="flex justify-between text-xs font-mono">
         <span className="text-[var(--text-muted)]">{label}</span>
-        <span style={{ color }}>{score.toFixed(1)}/100</span>
+        <span style={{ color }}>{score != null && !isNaN(Number(score)) ? Number(score).toFixed(1) : '—'}/100</span>
       </div>
       <div className="h-2 rounded-full bg-[var(--surface-2)] overflow-hidden">
         <motion.div
@@ -123,7 +123,7 @@ export default function RiskPage() {
               </div>
               <div className="text-right">
                 <div className="font-heading text-3xl font-extrabold" style={{ color: getRiskColor(risk.composite_score) }}>
-                  {risk.composite_score?.toFixed(1)}
+                  {risk.composite_score != null && !isNaN(Number(risk.composite_score)) ? Number(risk.composite_score).toFixed(1) : '—'}
                 </div>
                 <div className="text-xs font-mono font-medium" style={{ color: getRiskColor(risk.composite_score) }}>
                   {risk.composite_label}

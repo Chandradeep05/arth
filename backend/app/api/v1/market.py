@@ -58,18 +58,37 @@ def _raise_data_error(symbol: str):
     err = health.last_error_message.lower()
 
     # Also check the underlying TwelveData adapter directly
+    td_in_cooldown = False
     try:
         from app.data.adapters.twelvedata import twelvedata_adapter
         td_health = twelvedata_adapter.get_health()
         td_err = td_health.last_error_message.lower()
+        td_in_cooldown = getattr(twelvedata_adapter, "is_cooling_down", False) or bool(twelvedata_adapter._cache_get("_rate_limit_cooldown"))
     except Exception:
         td_err = ""
         td_health = None
 
-    combined_err = f"{err} {td_err}"
+    # Also check Upstox circuit / rate-limiting if Indian symbol
+    upstox_err = ""
+    is_upstox_limited = False
+    if symbol.upper().endswith(('.NS', '.BO')):
+        try:
+            from app.data.adapters.upstox import upstox_adapter
+            upstox_health = upstox_adapter.get_health()
+            if upstox_health.circuit_state != "closed" or upstox_health.failure_count > 0:
+                is_upstox_limited = True
+            upstox_err = upstox_health.last_error_message.lower()
+        except Exception:
+            pass
 
-    # Rate-limit keywords in either adapter's error message
-    is_rate_limited = any(kw in combined_err for kw in ["rate", "429", "too many", "crumb", "cooldown"])
+    combined_err = f"{err} {td_err} {upstox_err}"
+
+    # Rate-limit keywords in either adapter's error message, active cooldown, or Upstox failure
+    is_rate_limited = (
+        any(kw in combined_err for kw in ["rate", "429", "too many", "crumb", "cooldown"])
+        or td_in_cooldown
+        or is_upstox_limited
+    )
 
     # Circuit breaker is open or half-open on either adapter
     is_circuit_open = health.circuit_state != "closed"

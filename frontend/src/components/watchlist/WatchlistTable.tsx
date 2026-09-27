@@ -141,7 +141,7 @@ export default function WatchlistTable({
           </thead>
           <tbody className="divide-y divide-[rgba(255,255,255,0.03)]">
             {listItems.map((item, idx) => {
-              const chg = item.change_percent ?? item.changePct ?? 0;
+              const chg = Number(item.change_percent ?? item.changePct ?? 0);
               const isPositive = chg > 0;
               const isNegative = chg < 0;
               const tickerClean = item.symbol.replace('.NS', '').replace('.BO', '');
@@ -208,7 +208,7 @@ export default function WatchlistTable({
                   {/* Risk Badge */}
                   <td className="py-3.5 px-4 text-center">
                     <span className={`badge ${getRiskBadgeClass(item.risk_label)} text-[10px]`}>
-                      {item.risk_label ?? (item.risk_score ? `${item.risk_score.toFixed(0)}` : '—')}
+                      {item.risk_label ?? (item.risk_score != null && !isNaN(Number(item.risk_score)) ? `${Number(item.risk_score).toFixed(0)}` : '—')}
                     </span>
                   </td>
 

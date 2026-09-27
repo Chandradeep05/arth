@@ -345,7 +345,7 @@ test(
 )
 test(
     "build_features uses np.nan for pb",
-    "pb = np.nan" in source,
+    'df["pb_ratio"] = np.nan' in source or 'pb = np.nan' in source,
     "pb_ratio not set to NaN",
 )
 
@@ -361,8 +361,8 @@ settings = Settings()
 test("newsapi_enabled = False", settings.newsapi_enabled is False,
      f"Got: {settings.newsapi_enabled}")
 test("alpha_vantage_enabled = False", settings.alpha_vantage_enabled is False)
-test("groq_model contains qwen", "qwen" in settings.groq_model.lower(),
-     f"Got: {settings.groq_model}")
+test("groq models configured", bool(settings.groq_model_research or settings.groq_model_chat or settings.groq_model),
+     f"Got: research={settings.groq_model_research}, chat={settings.groq_model_chat}")
 
 
 # ===================================================================

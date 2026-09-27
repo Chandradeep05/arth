@@ -219,7 +219,7 @@ class NSEAdapter:
             "open": round(float(price_info.get("open", 0) or 0), 2),
             "previous_close": round(float(prev_close or 0), 2),
             "market_cap": None,
-            "pe_ratio": metadata.get("pdSymbolPe"),
+            "pe_ratio": float(str(metadata.get("pdSymbolPe")).replace(",", "").strip()) if metadata.get("pdSymbolPe") not in (None, "", "-", "NA") else None,
             "timestamp": datetime.now(timezone.utc),
             "exchange": "NSE",
             "market": "india",

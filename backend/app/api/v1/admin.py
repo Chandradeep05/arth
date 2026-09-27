@@ -106,7 +106,19 @@ async def create_invite_code(
 @router.get("/invite-codes")
 async def list_invite_codes(request: Request, admin: UserContext = Depends(require_admin)) -> list:
     db = request.state.db
-    rows = await db.fetch("SELECT id, code, used_by, used_at, expires_at FROM invite_codes ORDER BY id DESC")
+    rows = await db.fetch("""
+        SELECT 
+            ic.id, 
+            ic.code, 
+            ic.created_by,
+            p.email as user_email,
+            ic.used_by, 
+            ic.used_at, 
+            ic.expires_at 
+        FROM invite_codes ic
+        LEFT JOIN profiles p ON ic.created_by = p.id
+        ORDER BY ic.id DESC
+    """)
     return [dict(row) for row in rows]
 
 

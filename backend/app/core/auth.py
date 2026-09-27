@@ -177,16 +177,18 @@ async def _resolve_or_create_profile(
 
     # First-time user -- create profile atomically (includes email for admin queries)
     logger.info("profile_auto_creating", user_id=str(user_id), email=email)
-    await db.execute(
+    inserted = await db.fetchrow(
         """
         INSERT INTO profiles (id, email, display_name, access_status, role, last_login)
         VALUES ($1, $2, $3, 'pending', 'user', now())
         ON CONFLICT (id) DO NOTHING
+        RETURNING id
         """,
         user_id,
         email,
         display_name or email.split("@")[0],
     )
+    is_new_user = inserted is not None
 
     # Check if this email should be auto-promoted to admin
     from app.config import get_settings as _get_settings
@@ -213,8 +215,8 @@ async def _resolve_or_create_profile(
         logger.error("profile_create_failed", user_id=str(user_id))
         raise HTTPException(status_code=500, detail="Could not provision user profile")
 
-    # Auto-generate an invite code for pending users so admin can share it
-    if row["access_status"] == "pending":
+    # Auto-generate an invite code ONLY for genuinely new pending users so admin can share it
+    if is_new_user and row["access_status"] == "pending":
         try:
             await _auto_generate_invite(user_id, email, db)
         except Exception as e:
@@ -242,13 +244,14 @@ async def _auto_generate_invite(user_id: UUID, email: str, db) -> None:
     chars = string.ascii_uppercase + string.digits
     code = "".join(secrets.choice(chars) for _ in range(10))
 
-    # Store the invite code (created_by = NULL means system-generated)
+    # Store the invite code linked to this pending user
     await db.execute(
         """
         INSERT INTO invite_codes (code, created_by, expires_at)
-        VALUES ($1, NULL, $2)
+        VALUES ($1, $2, $3)
         """,
         code,
+        user_id,
         datetime.now(timezone.utc) + timedelta(days=30),
     )
 

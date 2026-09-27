@@ -136,8 +136,8 @@ const SECTOR_MAP: Record<string, string[]> = {
 
 /* ── Index Card Component ── */
 function IndexCard({ index, delay }: { index: MarketIndex; delay: number }) {
-  const change = index.change ?? 0;
-  const changePct = index.change_percent ?? 0;
+  const change = Number(index.change ?? 0);
+  const changePct = Number(index.change_percent ?? 0);
   const isPositive = change >= 0;
   return (
     <motion.div
@@ -192,7 +192,7 @@ function SectorHeatmap({ sectors }: { sectors: { name: string; change: number }[
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
         {sectors.map((sector) => {
-          const sectorChange = sector.change ?? 0;
+          const sectorChange = Number(sector.change ?? 0);
           const isPositive = sectorChange >= 0;
 
           return (
@@ -295,7 +295,7 @@ function MoversTable({
                           ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
                           : 'bg-red-500/10 text-red-400 border border-red-500/20'
                       }`}>
-                        {isPositive ? '+' : ''}{(stock.change_percent ?? 0).toFixed(2)}%
+                        {isPositive ? '+' : ''}{Number(stock.change_percent ?? 0).toFixed(2)}%
                       </span>
                     </td>
                     <td className="text-right hidden sm:table-cell text-[var(--text-dim)] font-mono text-xs">

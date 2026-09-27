@@ -88,6 +88,11 @@ class TwelveDataAdapter(BaseDataAdapter):
         """Store in cache with TTL."""
         _cache[key] = (data, time.monotonic() + ttl)
 
+    @property
+    def is_cooling_down(self) -> bool:
+        """Check if adapter is currently in rate-limit cooldown."""
+        return bool(self._cache_get("_rate_limit_cooldown"))
+
     async def _throttled_request(
         self, endpoint: str, params: Dict[str, Any],
         cache_key: Optional[str] = None, cache_ttl: float = _CACHE_TTL_QUOTE,

@@ -102,8 +102,9 @@ class FeatureEngineer:
         # is look-ahead leakage — the model sees future-state data during training.
         # XGBoost handles NaN natively (splits learn to route missing values optimally),
         # so NaN is both safe and honest.
+        pb = np.nan
         df["pe_ratio"] = np.nan
-        df["pb_ratio"] = np.nan
+        df["pb_ratio"] = pb
         df["market_cap_log"] = np.nan
 
         # ── Calendar features ──

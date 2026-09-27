@@ -218,6 +218,139 @@ def test_upstox_normalize_empty_or_none_statement():
     assert normalized_empty == {"annual": [], "quarterly": []}
 
 
+def test_upstox_parse_real_full_statement_schema():
+    """
+    Test that Upstox real full_statement schema (particular + history list)
+    is correctly pivoted and parsed into reverse-chronologically sorted periods.
+    """
+    adapter = UpstoxAdapter()
+
+    sample_real_upstox_payload = {
+        "data": {
+            "type": "consolidated",
+            "time_period": "yearly",
+            "full_statement": [
+                {
+                    "particular": "Total Revenue",
+                    "history": [
+                        {"period": "Mar 2024", "value": "850,000.50"},
+                        {"period": "Mar 2025", "value": "950,000.00"},
+                        {"period": "Mar 2023", "value": 750000.0},
+                    ],
+                },
+                {
+                    "particular": "Operating Income",
+                    "history": [
+                        {"period": "Mar 2024", "value": "160,000.00"},
+                        {"period": "Mar 2025", "value": "180,000.00"},
+                        {"period": "Mar 2023", "value": 140000.0},
+                    ],
+                },
+                {
+                    "particular": "Net Income",
+                    "history": [
+                        {"period": "Mar 2024", "value": "115,000.00"},
+                        {"period": "Mar 2025", "value": "130,000.00"},
+                        {"period": "Mar 2023", "value": 100000.0},
+                    ],
+                },
+            ]
+        }
+    }
+
+    periods = adapter._parse_upstox_periods(sample_real_upstox_payload)
+    assert len(periods) == 3
+    # Reverse chronological sorting: 2025 first, then 2024, then 2023
+    assert periods[0]["period"] == "Mar 2025"
+    assert periods[0]["items"]["Total Revenue"] == 950000.00
+    assert periods[0]["items"]["Operating Income"] == 180000.00
+    assert periods[0]["items"]["Net Income"] == 130000.00
+
+    assert periods[1]["period"] == "Mar 2024"
+    assert periods[1]["items"]["Total Revenue"] == 850000.50
+
+    assert periods[2]["period"] == "Mar 2023"
+    assert periods[2]["items"]["Total Revenue"] == 750000.0
+
+
+@pytest.mark.asyncio
+async def test_upstox_financial_statements_with_statement_parser():
+    """
+    Test that StatementParser correctly consumes get_financial_statements() output
+    structured with both annual and quarterly statements.
+    """
+    adapter = UpstoxAdapter()
+    parser = StatementParser()
+
+    annual_income = {
+        "data": {
+            "type": "consolidated",
+            "time_period": "yearly",
+            "full_statement": [
+                {
+                    "particular": "Total Revenue",
+                    "history": [
+                        {"period": "Mar 2025", "value": 1000000.0},
+                        {"period": "Mar 2024", "value": 900000.0},
+                    ],
+                },
+                {
+                    "particular": "Net Income",
+                    "history": [
+                        {"period": "Mar 2025", "value": 150000.0},
+                        {"period": "Mar 2024", "value": 120000.0},
+                    ],
+                },
+            ]
+        }
+    }
+
+    annual_bs = {
+        "data": {
+            "type": "consolidated",
+            "time_period": "yearly",
+            "full_statement": [
+                {
+                    "particular": "Total Assets",
+                    "history": [
+                        {"period": "Mar 2025", "value": 2000000.0},
+                        {"period": "Mar 2024", "value": 1800000.0},
+                    ],
+                },
+                {
+                    "particular": "Total Stockholders Equity",
+                    "history": [
+                        {"period": "Mar 2025", "value": 1200000.0},
+                        {"period": "Mar 2024", "value": 1000000.0},
+                    ],
+                },
+            ]
+        }
+    }
+
+    with patch.object(adapter, "_get_isin", new_callable=AsyncMock, return_value="INE002A01018"), \
+         patch.object(adapter, "_throttled_request") as mock_req:
+
+        async def fake_throttled(method, path, **kwargs):
+            if "income-statement" in path:
+                return annual_income
+            elif "balance-sheet" in path:
+                return annual_bs
+            return None
+
+        mock_req.side_effect = fake_throttled
+
+        stmts = await adapter.get_financial_statements("RELIANCE.NS")
+        assert stmts is not None
+        assert "income_statement" in stmts
+        assert "balance_sheet" in stmts
+        assert "annual" in stmts["income_statement"]
+        assert "quarterly" in stmts["income_statement"]
+        assert len(stmts["income_statement"]["annual"]) == 2
+        assert stmts["income_statement"]["annual"][0]["items"]["Total Revenue"] == 1000000.0
+
+
+
 @pytest.mark.asyncio
 async def test_upstox_news_canonical_field_names():
     """

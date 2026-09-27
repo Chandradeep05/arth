@@ -1,0 +1,81 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  backend-tests:
+    name: Backend Pytest & Integration Suites
+    runs-on: ubuntu-latest
+    env:
+      PYTHONPATH: .
+      ENVIRONMENT: development
+      UPSTOX_ENABLED: "false"
+      TWELVEDATA_API_KEY: "dummy"
+      FINNHUB_API_KEY: "dummy"
+      FMP_API_KEY: "dummy"
+      GROQ_API_KEY: "dummy"
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.9
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+          cache: "pip"
+
+      - name: Install backend dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements.txt
+
+      - name: Run Backend Unit & Behavioral Tests
+        run: python -m pytest backend/tests/ -v
+
+      - name: Run Integration Suite
+        run: python test_integration.py
+
+      - name: Run Stabilization Suite
+        run: python test_stabilization.py
+
+      - name: Run Phase 3 Suite
+        run: python test_phase3.py
+
+      - name: Run Adversarial Auth Suite
+        run: python -m pytest test_adversarial_auth.py -v
+
+      - name: Run CORS Suite
+        run: python test_cors.py
+
+  frontend-check:
+    name: Frontend TypeScript & Next.js Build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    env:
+      NEXT_PUBLIC_SUPABASE_URL: "https://dummy.supabase.co"
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: "dummy-key-for-ci-build"
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Verify TypeScript Types
+        run: npx tsc --noEmit
+
+      - name: Verify Next.js Production Build
+        run: npm run build

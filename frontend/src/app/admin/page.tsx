@@ -17,9 +17,13 @@ interface User {
 interface InviteCode {
   id: string;
   code: string;
-  max_uses: number | null;
-  used_count: number;
-  created_at: string;
+  user_email?: string | null;
+  max_uses?: number | null;
+  used_count?: number;
+  used_by?: string | null;
+  used_at?: string | null;
+  expires_at?: string | null;
+  created_at?: string;
 }
 
 export default function AdminPage() {
@@ -269,26 +273,47 @@ export default function AdminPage() {
             <table className="w-full text-left text-sm">
               <thead className="text-zinc-400">
                 <tr>
-                  <th className="pb-3 font-medium">Code ID (Redacted)</th>
-                  <th className="pb-3 font-medium">Uses</th>
-                  <th className="pb-3 font-medium">Created</th>
+                  <th className="pb-3 font-medium">Invite Code</th>
+                  <th className="pb-3 font-medium">For User</th>
+                  <th className="pb-3 font-medium">Status</th>
+                  <th className="pb-3 font-medium">Expires</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-zinc-800">
                 {inviteCodes.map((code) => (
                   <tr key={code.id}>
-                    <td className="py-3 font-mono text-zinc-500">{code.id}</td>
+                    <td className="py-3 font-mono text-zinc-400">
+                      {code.code ? (
+                        <div className="flex items-center gap-2">
+                          <code className="bg-zinc-950 px-2 py-0.5 rounded border border-zinc-800 text-emerald-400 font-semibold">{code.code}</code>
+                          <button
+                            onClick={() => copyToClipboard(code.code)}
+                            className="p-1 hover:bg-zinc-800 rounded transition-colors text-zinc-400 hover:text-white"
+                            title="Copy invite code"
+                          >
+                            {copiedCode === code.code ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                          </button>
+                        </div>
+                      ) : (
+                        code.id
+                      )}
+                    </td>
+                    <td className="py-3 text-zinc-300 font-mono text-xs">
+                      {code.user_email || <span className="text-zinc-600">Manual (Admin)</span>}
+                    </td>
                     <td className="py-3">
-                      <span className="bg-zinc-800 px-2 py-1 rounded text-xs">
-                        {code.used_count} / {code.max_uses === null ? '∞' : code.max_uses}
+                      <span className={`px-2 py-0.5 rounded text-xs ${code.used_by || (code.used_count && code.used_count > 0) ? 'bg-zinc-800 text-zinc-500' : 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'}`}>
+                        {code.used_by || (code.used_count && code.used_count > 0) ? 'Redeemed' : 'Available'}
                       </span>
                     </td>
-                    <td className="py-3 text-zinc-400">{new Date(code.created_at).toLocaleString()}</td>
+                    <td className="py-3 text-zinc-400 text-xs">
+                      {code.expires_at ? new Date(code.expires_at).toLocaleDateString() : 'Never'}
+                    </td>
                   </tr>
                 ))}
                 {inviteCodes.length === 0 && (
                   <tr>
-                    <td colSpan={3} className="py-8 text-center text-zinc-500 italic">No invite codes generated yet.</td>
+                    <td colSpan={4} className="py-8 text-center text-zinc-500 italic">No invite codes generated yet.</td>
                   </tr>
                 )}
               </tbody>

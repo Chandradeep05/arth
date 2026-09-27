@@ -64,6 +64,8 @@ class UpstoxAdapter(BaseDataAdapter):
             self._symbol_to_key[sym] = key
             self._key_to_symbol[key] = sym
             
+    _CACHE_MAX_ENTRIES = 500
+
     def _cache_get(self, key: str) -> Optional[Any]:
         if key in _cache:
             data, expiry = _cache[key]
@@ -73,7 +75,17 @@ class UpstoxAdapter(BaseDataAdapter):
         return None
 
     def _cache_set(self, key: str, data: Any, ttl: int) -> None:
-        _cache[key] = (data, time.time() + ttl)
+        now = time.time()
+        if len(_cache) >= _CACHE_MAX_ENTRIES:
+            # Purge expired items first
+            expired = [k for k, (_, exp) in _cache.items() if now >= exp]
+            for k in expired:
+                _cache.pop(k, None)
+            # If still over limit, drop oldest entries
+            if len(_cache) >= _CACHE_MAX_ENTRIES:
+                for k in list(_cache.keys())[: max(1, _CACHE_MAX_ENTRIES // 10)]:
+                    _cache.pop(k, None)
+        _cache[key] = (data, now + ttl)
 
     async def _load_instruments(self) -> None:
         now = time.time()
@@ -226,20 +238,20 @@ class UpstoxAdapter(BaseDataAdapter):
             if not quote_data or not isinstance(quote_data, dict):
                 return None
                 
-            last_price = quote_data.get("last_price", 0.0)
+            last_price = self._safe_num(quote_data.get("last_price")) or 0.0
             ohlc = quote_data.get("ohlc", {})
             if isinstance(ohlc, dict):
-                prev_close = ohlc.get("close", quote_data.get("cp", quote_data.get("previous_close", last_price)))
-                high = ohlc.get("high", quote_data.get("high"))
-                low = ohlc.get("low", quote_data.get("low"))
-                open_price = ohlc.get("open", quote_data.get("open"))
+                prev_close = self._safe_num(ohlc.get("close", quote_data.get("cp", quote_data.get("previous_close", last_price)))) or last_price
+                high = self._safe_num(ohlc.get("high", quote_data.get("high")))
+                low = self._safe_num(ohlc.get("low", quote_data.get("low")))
+                open_price = self._safe_num(ohlc.get("open", quote_data.get("open")))
             else:
-                prev_close = quote_data.get("cp", quote_data.get("previous_close", last_price))
-                high = quote_data.get("high")
-                low = quote_data.get("low")
-                open_price = quote_data.get("open")
+                prev_close = self._safe_num(quote_data.get("cp", quote_data.get("previous_close", last_price))) or last_price
+                high = self._safe_num(quote_data.get("high"))
+                low = self._safe_num(quote_data.get("low"))
+                open_price = self._safe_num(quote_data.get("open"))
             
-            volume = quote_data.get("volume", 0)
+            volume = int(self._safe_num(quote_data.get("volume")) or 0)
             
             if not last_price:
                 return None
@@ -250,14 +262,14 @@ class UpstoxAdapter(BaseDataAdapter):
             return {
                 "symbol": symbol,
                 "name": symbol,
-                "price": last_price,
-                "change": change,
-                "change_percent": change_percent,
+                "price": round(float(last_price), 2),
+                "change": round(float(change), 2),
+                "change_percent": round(float(change_percent), 2),
                 "volume": volume,
-                "high": high,
-                "low": low,
-                "open": open_price,
-                "previous_close": prev_close,
+                "high": round(float(high), 2) if high is not None else None,
+                "low": round(float(low), 2) if low is not None else None,
+                "open": round(float(open_price), 2) if open_price is not None else None,
+                "previous_close": round(float(prev_close), 2) if prev_close is not None else None,
                 "market_cap": None,
                 "pe_ratio": None,
                 "timestamp": datetime.now(timezone.utc),
@@ -463,59 +475,145 @@ class UpstoxAdapter(BaseDataAdapter):
             
         return await self.execute_with_resilience(_fetch)
 
+    @staticmethod
+    def _safe_num(val: Any) -> Optional[float]:
+        """Safely convert Upstox values (including formatted strings) to float."""
+        if val is None or val == "":
+            return None
+        try:
+            if isinstance(val, (int, float)):
+                return float(val)
+            clean = str(val).replace(",", "").replace("%", "").strip()
+            return float(clean)
+        except (ValueError, TypeError):
+            return None
+
+    def _parse_upstox_periods(self, raw_data: Any) -> List[Dict[str, Any]]:
+        """
+        Parse Upstox financial statement response into canonical list of periods:
+        [{"period": "Mar 2025", "items": {"Total Revenue": 950000.0, ...}}, ...]
+        Sorted in reverse-chronological order (most recent first).
+
+        Upstox API structure:
+        data:
+          full_statement: [
+            {"particular": "Total Revenue", "history": [{"period": "Mar 2025", "value": ...}, ...]}
+          ]
+          income_statement: [
+            {"category": "revenue", "history": [{"period": "Mar 2025", "value": ...}, ...]}
+          ]
+          history: [
+            {"period": "Mar 2025", "total_asset": 1200000.0, "total_liability": 500000.0}
+          ]
+        """
+        if not raw_data or not isinstance(raw_data, dict):
+            return []
+
+        data = raw_data.get("data", raw_data)
+        if not isinstance(data, dict):
+            if isinstance(data, list):
+                res = []
+                for row in data:
+                    if isinstance(row, dict):
+                        period = str(row.get("period", row.get("year", "Unknown")))
+                        items = {k: self._safe_num(v) for k, v in row.items() if k not in ("period", "year")}
+                        res.append({"period": period, "items": items})
+                return res
+            return []
+
+        # If data already has "annual" / "quarterly" list
+        if "annual" in data or "quarterly" in data:
+            return data.get("annual", []) or data.get("quarterly", [])
+
+        periods_map: Dict[str, Dict[str, Optional[float]]] = {}
+
+        # 1. Parse `full_statement` (Upstox primary documentation)
+        full_statement = data.get("full_statement") or []
+        if isinstance(full_statement, list):
+            for row in full_statement:
+                if not isinstance(row, dict):
+                    continue
+                particular = (row.get("particular") or row.get("category") or "").strip()
+                if not particular:
+                    continue
+                history = row.get("history") or []
+                if isinstance(history, list):
+                    for entry in history:
+                        if isinstance(entry, dict):
+                            period = str(entry.get("period") or entry.get("year") or "").strip()
+                            if period:
+                                val = self._safe_num(entry.get("value"))
+                                if period not in periods_map:
+                                    periods_map[period] = {}
+                                periods_map[period][particular] = val
+
+        # 2. Parse summary `income_statement` or `history` (summary records)
+        summary_records = data.get("income_statement") or data.get("history") or []
+        if isinstance(summary_records, list):
+            for row in summary_records:
+                if not isinstance(row, dict):
+                    continue
+                # If row has "category" and "history" (e.g. category="revenue")
+                cat = (row.get("category") or "").strip()
+                hist = row.get("history")
+                if cat and isinstance(hist, list):
+                    for entry in hist:
+                        if isinstance(entry, dict):
+                            period = str(entry.get("period") or entry.get("year") or "").strip()
+                            if period:
+                                val = self._safe_num(entry.get("value"))
+                                if period not in periods_map:
+                                    periods_map[period] = {}
+                                if cat not in periods_map[period]:
+                                    periods_map[period][cat] = val
+                # If row is a direct summary dict with "period" (e.g. balance sheet summary)
+                period = str(row.get("period") or row.get("year") or "").strip()
+                if period and not hist:
+                    if period not in periods_map:
+                        periods_map[period] = {}
+                    for k, v in row.items():
+                        if k not in ("period", "year", "time_period", "type"):
+                            val = self._safe_num(v)
+                            periods_map[period][k] = val
+                            _name_map = {
+                                "total_asset": "Total Assets",
+                                "total_liability": "Total Liabilities Net Minority Interest",
+                                "total_equity": "Total Stockholders Equity",
+                                "revenue": "Total Revenue",
+                                "net_profit": "Net Income",
+                            }
+                            if k in _name_map and _name_map[k] not in periods_map[period]:
+                                periods_map[period][_name_map[k]] = val
+
+        periods_list = [{"period": p, "items": items} for p, items in periods_map.items()]
+
+        # Sort reverse-chronologically (latest periods first)
+        def _sort_key(item):
+            p = item["period"]
+            import re
+            m = re.search(r'\d{4}', p)
+            return int(m.group(0)) if m else 0
+
+        periods_list.sort(key=_sort_key, reverse=True)
+        return periods_list
+
     def _normalize_statement(self, raw_data: Any) -> Dict[str, List[Dict[str, Any]]]:
         """
-        Normalize Upstox statement data into canonical format expected by StatementParser:
-        {"annual": [{"period": str, "items": {line_item: float, ...}}], "quarterly": []}
+        Normalize a statement payload into {'annual': [...], 'quarterly': [...]}.
+        Provides backward compatibility and single-statement normalization.
         """
-        empty = {"annual": [], "quarterly": []}
-        if not raw_data or not isinstance(raw_data, dict):
-            return empty
-
-        data_content = raw_data.get("data", raw_data)
-        if isinstance(data_content, dict) and "annual" in data_content:
-            return data_content
-
-        annual_periods: List[Dict[str, Any]] = []
-        quarterly_periods: List[Dict[str, Any]] = []
-
-        if isinstance(data_content, list):
-            for row in data_content:
-                if isinstance(row, dict):
-                    period = str(row.get("year", row.get("period", row.get("date", "Unknown"))))
-                    items = {}
-                    for k, v in row.items():
-                        if k not in ("year", "period", "date", "type", "time_period"):
-                            try:
-                                items[k] = float(v) if v is not None else None
-                            except (ValueError, TypeError):
-                                items[k] = None
-                    annual_periods.append({"period": period, "items": items})
-        elif isinstance(data_content, dict):
-            records = (
-                data_content.get("income_statement")
-                or data_content.get("balance_sheet")
-                or data_content.get("cash_flow")
-                or data_content.get("history")
-                or []
-            )
-            time_period = data_content.get("time_period", "yearly")
-            target_list = quarterly_periods if time_period == "quarterly" else annual_periods
-
-            if isinstance(records, list):
-                for row in records:
-                    if isinstance(row, dict):
-                        period = str(row.get("year", row.get("period", row.get("date", "Unknown"))))
-                        items = {}
-                        for k, v in row.items():
-                            if k not in ("year", "period", "date", "type", "time_period"):
-                                try:
-                                    items[k] = float(v) if v is not None else None
-                                except (ValueError, TypeError):
-                                    items[k] = None
-                        target_list.append({"period": period, "items": items})
-
-        return {"annual": annual_periods, "quarterly": quarterly_periods}
+        if not raw_data:
+            return {"annual": [], "quarterly": []}
+        time_period = ""
+        if isinstance(raw_data, dict):
+            data = raw_data.get("data", raw_data)
+            if isinstance(data, dict):
+                time_period = data.get("time_period", "")
+        parsed = self._parse_upstox_periods(raw_data)
+        if time_period == "quarterly":
+            return {"annual": [], "quarterly": parsed}
+        else:
+            return {"annual": parsed, "quarterly": []}
 
     async def get_financial_statements(self, symbol: str) -> Optional[Dict[str, Any]]:
         async def _fetch():
@@ -523,28 +621,41 @@ class UpstoxAdapter(BaseDataAdapter):
             if not isin:
                 return None
                 
-            async def fetch_stmt(stmt_type):
+            async def fetch_stmt(stmt_type: str, time_period: str = "yearly"):
                 try:
                     return await self._throttled_request(
                         "GET",
                         f"/v2/fundamentals/{isin}/{stmt_type}",
-                        cache_key=f"upstox:stmt:{stmt_type}:{symbol}",
+                        params={"time_period": time_period},
+                        cache_key=f"upstox:stmt:{stmt_type}:{time_period}:{symbol}",
                         cache_ttl=_CACHE_TTL_FUNDAMENTALS,
                     )
                 except Exception as e:
-                    logger.debug("upstox_stmt_fetch_error", stmt=stmt_type, error=str(e))
+                    logger.debug("upstox_stmt_fetch_error", stmt=stmt_type, time_period=time_period, error=str(e))
                     return None
                 
-            statements = await asyncio.gather(
-                fetch_stmt("income-statement"),
-                fetch_stmt("balance-sheet"),
-                fetch_stmt("cash-flow")
+            inc_yr, inc_qtr, bs_yr, bs_qtr, cf_yr, cf_qtr = await asyncio.gather(
+                fetch_stmt("income-statement", "yearly"),
+                fetch_stmt("income-statement", "quarterly"),
+                fetch_stmt("balance-sheet", "yearly"),
+                fetch_stmt("balance-sheet", "quarterly"),
+                fetch_stmt("cash-flow", "yearly"),
+                fetch_stmt("cash-flow", "quarterly"),
             )
             
             return {
-                "income_statement": self._normalize_statement(statements[0]),
-                "balance_sheet": self._normalize_statement(statements[1]),
-                "cash_flow": self._normalize_statement(statements[2]),
+                "income_statement": {
+                    "annual": self._parse_upstox_periods(inc_yr),
+                    "quarterly": self._parse_upstox_periods(inc_qtr),
+                },
+                "balance_sheet": {
+                    "annual": self._parse_upstox_periods(bs_yr),
+                    "quarterly": self._parse_upstox_periods(bs_qtr),
+                },
+                "cash_flow": {
+                    "annual": self._parse_upstox_periods(cf_yr),
+                    "quarterly": self._parse_upstox_periods(cf_qtr),
+                },
             }
             
         return await self.execute_with_resilience(_fetch)

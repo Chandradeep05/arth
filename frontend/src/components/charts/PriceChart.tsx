@@ -17,7 +17,7 @@ interface PriceChartProps {
   symbol: string;
   height?: number;
   activeTimeframe?: string;
-  onTimeframeChange?: (period: string, interval: string) => void;
+  onTimeframeChange?: (period: string, interval: string, label?: string) => void;
 }
 
 const TIMEFRAMES = [
@@ -144,26 +144,29 @@ export default function PriceChart({ data, symbol, height = 420, activeTimeframe
 
         {/* Polished Capsule Segmented Control */}
         <div className="flex items-center gap-0.5 p-0.5 rounded-lg bg-white/[0.03] border border-white/[0.06]">
-          {TIMEFRAMES.map((tf) => (
-            <button
-              key={tf.label}
-              onClick={() => {
-                setInternalTimeframe(tf.label);
-                if (onTimeframeChange) {
-                  onTimeframeChange(tf.period, tf.interval);
-                }
-              }}
-              className={`
-                px-2.5 py-1 text-[11px] font-mono rounded-md cursor-pointer transition-all
-                ${activeTimeframe === tf.label
-                  ? 'bg-white/[0.1] text-white font-semibold shadow-sm border border-white/[0.08]'
-                  : 'text-[var(--text-dim)] hover:text-[var(--text)] hover:bg-white/[0.03] border border-transparent'
-                }
-              `}
-            >
-              {tf.label}
-            </button>
-          ))}
+          {TIMEFRAMES.map((tf) => {
+            const isSelected = activeTimeframe === tf.label || activeTimeframe?.toLowerCase() === tf.period.toLowerCase();
+            return (
+              <button
+                key={tf.label}
+                onClick={() => {
+                  setInternalTimeframe(tf.label);
+                  if (onTimeframeChange) {
+                    onTimeframeChange(tf.period, tf.interval, tf.label);
+                  }
+                }}
+                className={`
+                  px-2.5 py-1 text-[11px] font-mono rounded-md cursor-pointer transition-all
+                  ${isSelected
+                    ? 'bg-white/[0.1] text-white font-semibold shadow-sm border border-white/[0.08]'
+                    : 'text-[var(--text-dim)] hover:text-[var(--text)] hover:bg-white/[0.03] border border-transparent'
+                  }
+                `}
+              >
+                {tf.label}
+              </button>
+            );
+          })}
         </div>
       </div>
 

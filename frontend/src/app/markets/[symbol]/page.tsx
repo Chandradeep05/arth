@@ -58,23 +58,12 @@ export default function StockDetailPage() {
   const [company, setCompany] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [lastUpdated, setLastUpdated] = useState<Date>(new Date());
-  const [activeTimeframe, setActiveTimeframe] = useState<string>('3mo');
+  const [activeTimeframe, setActiveTimeframe] = useState<string>('3M');
 
-  // Timeframe → API params mapping
-  const TIMEFRAME_MAP: Record<string, { period: string; interval: string }> = {
-    '1D': { period: '1d', interval: '5m' },
-    '1W': { period: '5d', interval: '15m' },
-    '1M': { period: '1mo', interval: '1h' },
-    '3M': { period: '3mo', interval: '1d' },
-    '1Y': { period: '1y', interval: '1d' },
-    '5Y': { period: '5y', interval: '1wk' },
-  };
-
-  const fetchOhlcv = useCallback(async (timeframe: string) => {
-    const params = TIMEFRAME_MAP[timeframe] || { period: '3mo', interval: '1d' };
+  const fetchOhlcv = useCallback(async (period: string = '3mo', interval: string = '1d') => {
     try {
       const res = await apiClient.get<{ data: OHLCVBar[] }>(
-        `/api/v1/market/ohlcv/${encodeURIComponent(symbol)}?period=${params.period}&interval=${params.interval}`
+        `/api/v1/market/ohlcv/${encodeURIComponent(symbol)}?period=${period}&interval=${interval}`
       );
       if (res.data) {
         setOhlcv(Array.isArray(res.data) ? res.data : []);
@@ -248,7 +237,9 @@ export default function StockDetailPage() {
                 </div>
                 <div className="p-2 rounded-lg bg-white/[0.02] border border-white/[0.04]">
                   <span className="text-[10px] text-[var(--text-dim)] uppercase tracking-wider block">PE Ratio</span>
-                  <span className="text-white font-medium">{quote.pe_ratio != null ? quote.pe_ratio.toFixed(1) : '—'}</span>
+                  <span className="text-white font-medium">
+                    {quote.pe_ratio != null && !isNaN(Number(quote.pe_ratio)) ? Number(quote.pe_ratio).toFixed(1) : '—'}
+                  </span>
                 </div>
               </div>
             </div>
@@ -265,9 +256,9 @@ export default function StockDetailPage() {
         data={ohlcv}
         symbol={symbol}
         activeTimeframe={activeTimeframe}
-        onTimeframeChange={(tf: string) => {
-          setActiveTimeframe(tf);
-          fetchOhlcv(tf);
+        onTimeframeChange={(period: string, interval: string, label?: string) => {
+          setActiveTimeframe(label || '3M');
+          fetchOhlcv(period, interval);
         }}
       />
 

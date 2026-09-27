@@ -324,14 +324,20 @@ class MarketDataProvider:
     async def get_holders(self, symbol: str) -> DataResult:
         return DataResult(None, DataStatus.UNSUPPORTED_CAPABILITY, None, "Holders data unsupported")
 
-    def get_source_label(self, symbol: str) -> str:
-        provider = self._get_provider(symbol)
-        labels = {'twelvedata': 'Twelve Data', 'nse': 'NSE India', 'finnhub': 'Finnhub', 'fmp': 'Financial Modeling Prep', 'upstox': 'Upstox'}
-        return labels.get(provider, provider)
+    def get_source_label(self, symbol: str, provider: Optional[str] = None) -> str:
+        prov = provider or self._get_provider(symbol)
+        labels = {
+            'twelvedata': 'Twelve Data',
+            'nse': 'NSE India',
+            'finnhub': 'Finnhub',
+            'fmp': 'Financial Modeling Prep',
+            'upstox': 'Upstox',
+        }
+        return labels.get(prov, prov)
 
     def _get_provider(self, symbol: str) -> str:
         if symbol.upper().endswith(('.NS', '.BO')):
-            return 'nse'
+            return 'upstox' if self._upstox else 'nse'
         return 'twelvedata'
 
 

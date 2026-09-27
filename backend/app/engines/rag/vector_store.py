@@ -15,12 +15,38 @@ Usage:
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
+import hashlib
+import numpy as np
 
 import chromadb
+from chromadb.api.types import Documents, EmbeddingFunction, Embeddings
 
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
+
+
+class LightweightEmbeddingFunction(EmbeddingFunction):
+    """
+    Zero-download, low-memory deterministic feature hashing embedding function.
+    Safely runs within 512MB RAM free tier without downloading ONNX models (~80MB)
+    which would otherwise trigger OOMKilled (502 / CORS) on Render.
+    """
+    def __init__(self, dim: int = 128) -> None:
+        self.dim = dim
+
+    def __call__(self, input: Documents) -> Embeddings:
+        embeddings: List[List[float]] = []
+        for text in input:
+            vec = np.zeros(self.dim, dtype=np.float32)
+            for word in text.lower().split():
+                idx = int(hashlib.md5(word.encode("utf-8")).hexdigest(), 16) % self.dim
+                vec[idx] += 1.0
+            norm = float(np.linalg.norm(vec))
+            if norm > 0:
+                vec /= norm
+            embeddings.append(vec.tolist())
+        return embeddings
 
 
 class VectorStore:
@@ -31,6 +57,7 @@ class VectorStore:
     def __init__(self) -> None:
         # Ephemeral in-memory client — no disk persistence
         self._client = chromadb.Client()
+        self._embedding_function = LightweightEmbeddingFunction()
         self._access_order: list[str] = []  # LRU tracking by collection name
         logger.info("vector_store_initialized", mode="in-memory")
 
@@ -61,7 +88,10 @@ class VectorStore:
             except Exception:
                 pass  # Collection may not exist
 
-        return self._client.get_or_create_collection(name=name)
+        return self._client.get_or_create_collection(
+            name=name,
+            embedding_function=self._embedding_function,
+        )
 
     # ── Write ───────────────────────────────────────────────────
 
