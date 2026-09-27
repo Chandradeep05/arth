@@ -299,12 +299,12 @@ async def _send_invite_email(email: str, code: str) -> None:
                         email=email,
                     )
 
-        # Always log the code so admin can find it in logs as backup
+        # Log code prefix for audit trail without leaking credential in logs
         logger.info(
             "invite_code_for_user",
             email=email,
-            invite_code=code,
-            message="Share this code with the user to activate their account",
+            code_prefix=code[:4] + "****",
+            message="Invite code issued for user",
         )
     except Exception as e:
         logger.warning("invite_email_send_failed", error=str(e), email=email)

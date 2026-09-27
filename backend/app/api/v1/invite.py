@@ -78,7 +78,7 @@ async def redeem_invite_code(
         # Lock the invite code row for this transaction
         invite = await db.fetchrow(
             """
-            SELECT id, used_by, expires_at
+            SELECT id, used_by, expires_at, created_by
             FROM invite_codes
             WHERE code = $1
             FOR UPDATE
@@ -100,6 +100,16 @@ async def redeem_invite_code(
                 status_code=410,
                 detail="Invite code has expired",
             )
+
+        # Enforce personal binding: if the code was auto-generated for a specific user,
+        # only that user can redeem it (unless created by an admin)
+        if invite["created_by"] is not None:
+            creator_role = await db.fetchval("SELECT role FROM profiles WHERE id = $1", invite["created_by"])
+            if creator_role != "admin" and invite["created_by"] != user.user_id:
+                raise HTTPException(
+                    status_code=403,
+                    detail="This invite code was issued to a different user.",
+                )
 
         # Atomically mark code as used and activate the user
         await db.execute(

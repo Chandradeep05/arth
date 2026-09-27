@@ -142,14 +142,14 @@ async def list_notifications(request: Request, limit: int = Query(default=20, le
     if cursor:
         rows = await db.fetch(
             "SELECT id, alert_id, title, body, is_read, created_at FROM notifications "
-            "WHERE user_id = $1 AND created_at < (SELECT created_at FROM notifications WHERE id = $2) "
-            "ORDER BY created_at DESC LIMIT $3",
+            "WHERE user_id = $1 AND (created_at, id) < ((SELECT created_at FROM notifications WHERE id = $2), $2) "
+            "ORDER BY created_at DESC, id DESC LIMIT $3",
             user.user_id, cursor, limit,
         )
     else:
         rows = await db.fetch(
             "SELECT id, alert_id, title, body, is_read, created_at FROM notifications "
-            "WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2",
+            "WHERE user_id = $1 ORDER BY created_at DESC, id DESC LIMIT $2",
             user.user_id, limit,
         )
     

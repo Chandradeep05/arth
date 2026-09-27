@@ -139,7 +139,7 @@ class ResearchEngine:
         # Cache the report
         if cache:
             await cache.set(
-                cache.research_key(symbol),
+                cache.research_key(symbol, depth),
                 report,
                 ttl=3600,  # 1 hour
             )
@@ -309,7 +309,7 @@ class ResearchEngine:
         }
 
         if cache:
-            await cache.set(cache.research_key(symbol), report, ttl=3600)
+            await cache.set(cache.research_key(symbol, "deep"), report, ttl=3600)
 
         logger.info(
             "deep_research_generated",

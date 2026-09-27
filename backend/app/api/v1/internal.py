@@ -11,6 +11,7 @@ Symbols with no cached price are skipped that cycle.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import secrets
 from datetime import datetime, timezone
@@ -152,39 +153,80 @@ async def warm_alert_symbols(
     alerts = await db.fetch("SELECT DISTINCT symbol FROM alerts WHERE is_active = true")
     if not alerts:
         return {"warmed": 0, "skipped": 0}
-        
+
     symbols = [row["symbol"] for row in alerts]
+    now = datetime.now(timezone.utc)
+    now_ts = now.timestamp()
+    WARMUP_ZSET = "alert_symbols_warmup_schedule"
+
+    # Track active symbols in scheduling ZSET (default priority 0 for new symbols)
+    for s in symbols:
+        try:
+            await redis.zadd(WARMUP_ZSET, {s: 0}, nx=True)
+        except Exception:
+            pass
+
+    # Clean up symbols in ZSET that are no longer active
+    scheduled_symbols = []
+    try:
+        entries = await redis.zrange(WARMUP_ZSET, 0, -1)
+        for entry in entries:
+            sym_str = entry.decode("utf-8") if isinstance(entry, bytes) else str(entry)
+            if sym_str in symbols:
+                scheduled_symbols.append(sym_str)
+            else:
+                await redis.zrem(WARMUP_ZSET, sym_str)
+    except Exception as e:
+        logger.warning("warmup_schedule_read_failed", error=str(e))
+        scheduled_symbols = symbols
+
+    # Append any symbols that might have failed to register in ZSET
+    for s in symbols:
+        if s not in scheduled_symbols:
+            scheduled_symbols.append(s)
+
+    # Check which symbols currently lack a cached price in Redis
     uncached = []
-    
-    for symbol in symbols:
-        price = None
-        for key in [f"quote:{symbol}", f"market:quote:{symbol}", f"tick:{symbol}"]:
+    for s in scheduled_symbols:
+        has_price = False
+        for key in [f"quote:{s}", f"market:quote:{s}", f"tick:{s}"]:
             if await redis.exists(key):
-                price = True
+                has_price = True
                 break
-        if not price:
-            uncached.append(symbol)
-            
-    # Process up to 5 uncached symbols
-    to_warm = uncached[:5]
+        if not has_price:
+            uncached.append(s)
+
+    # Process up to 10 uncached symbols per cycle in round-robin order
+    to_warm = uncached[:10]
     warmed = 0
-    
+
     from app.data.market_data_provider import market_data
-    
+
     for symbol in to_warm:
+        # Immediately bump score to prevent retry looping on failing symbols
+        try:
+            await redis.zadd(WARMUP_ZSET, {symbol: now_ts})
+        except Exception:
+            pass
+
         try:
             res = await market_data.get_quote(symbol)
             if res.available and res.data:
                 await redis.set(
                     f"quote:{symbol}",
                     json.dumps(res.data),
-                    ex=1860  # 31 minutes — survives between 30-min warmup cycles
+                    ex=1860,  # 31 minutes — survives between 30-min warmup cycles
                 )
                 warmed += 1
+            await asyncio.sleep(0.1)  # 100ms pacing between provider calls
         except Exception as e:
             logger.warning("warmup_failed", symbol=symbol, error=str(e))
-            
-    return {"warmed": warmed, "skipped": len(symbols) - len(uncached), "uncached_remaining": max(0, len(uncached) - 5)}
+
+    return {
+        "warmed": warmed,
+        "skipped": len(symbols) - len(uncached),
+        "uncached_remaining": max(0, len(uncached) - len(to_warm)),
+    }
 
 
 @router.post("/jobs/evaluate-predictions")

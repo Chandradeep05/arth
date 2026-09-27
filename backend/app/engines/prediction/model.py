@@ -29,6 +29,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
+import time
 
 from app.core.logging import get_logger
 from app.engines.prediction.feature_engineering import FeatureEngineer
@@ -39,169 +40,177 @@ logger = get_logger(__name__)
 _MODEL_CACHE_DIR = Path("/tmp/arth_models")
 _MODEL_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
+# Per-symbol concurrency locks to prevent parallel XGBoost training for the same ticker
+_symbol_locks: dict[str, asyncio.Lock] = {}
+_symbol_lock_guard = asyncio.Lock()
+
+async def _get_symbol_lock(symbol: str) -> asyncio.Lock:
+    sym = symbol.upper()
+    async with _symbol_lock_guard:
+        if sym not in _symbol_locks:
+            _symbol_locks[sym] = asyncio.Lock()
+        return _symbol_locks[sym]
+
 
 class PredictionModel:
     """XGBoost prediction model with SHAP explanations."""
 
     def __init__(self):
         self._feature_engineer = FeatureEngineer()
+        self._forecast_cache: Dict[str, tuple[Dict[str, Any], float]] = {}
 
     async def forecast(self, symbol: str) -> Dict[str, Any]:
         """Generate 5-day forecast with SHAP explanations.
 
-        Returns:
-            {
-                "symbol": str,
-                "prediction": {
-                    "direction": "bullish" | "bearish" | "neutral",
-                    "predicted_return_pct": float,
-                    "confidence": "high" | "medium" | "low",
-                    "confidence_score": float (0-1),
-                    "horizon_days": 5,
-                },
-                "factors": [
-                    {"name": str, "importance": float, "value": float, "direction": "positive" | "negative"},
-                    ...
-                ],
-                "regime": {
-                    "current": "trending" | "ranging" | "reverting",
-                    "description": str,
-                },
-                "model_info": {
-                    "features_used": int,
-                    "training_samples": int,
-                    "r2_score": float,
-                },
-                "disclaimer": str,
-                "generated_at": str,
-            }
+        Returns cached forecast if available within 10 minutes.
+        Uses per-symbol concurrency lock to prevent duplicate XGBoost training.
         """
-        import xgboost as xgb
-        from sklearn.metrics import r2_score, mean_absolute_error
+        sym = symbol.upper()
+        now = time.time()
+
+        # Fast-path cache check
+        if sym in self._forecast_cache:
+            data, exp = self._forecast_cache[sym]
+            if now < exp:
+                return dict(data)
 
         try:
-            # Build features (2 years of daily data)
-            X, y = await self._feature_engineer.build_features(symbol, period="2y")
-            live_features = await self._feature_engineer.build_live_features(symbol)
+            lock = await _get_symbol_lock(sym)
+            async with lock:
+                now = time.time()
+                if sym in self._forecast_cache:
+                    data, exp = self._forecast_cache[sym]
+                    if now < exp:
+                        return dict(data)
 
-            logger.info(
-                "prediction_training",
-                symbol=symbol,
-                samples=len(X),
-                features=len(X.columns),
-            )
+                import xgboost as xgb
+                from sklearn.metrics import r2_score, mean_absolute_error
 
-            # Chronological 80/20 split (NOT walk-forward — that's deferred architecture work)
-            split_idx = int(len(X) * 0.8)
-            X_train, X_val = X.iloc[:split_idx], X.iloc[split_idx:]
-            y_train, y_val = y.iloc[:split_idx], y.iloc[split_idx:]
+                # Build features (2 years of daily data)
+                X, y = await self._feature_engineer.build_features(symbol, period="2y")
+                live_features = await self._feature_engineer.build_live_features(symbol)
 
-            # Train XGBoost
-            model = xgb.XGBRegressor(
-                n_estimators=100,
-                max_depth=4,
-                learning_rate=0.05,
-                subsample=0.8,
-                colsample_bytree=0.8,
-                reg_alpha=0.1,
-                reg_lambda=1.0,
-                random_state=42,
-                n_jobs=1,  # Single thread for Render
-                tree_method="hist",  # Memory-efficient
-            )
+                logger.info(
+                    "prediction_training",
+                    symbol=symbol,
+                    samples=len(X),
+                    features=len(X.columns),
+                )
 
-            await asyncio.to_thread(
-                model.fit,
-                X_train, y_train,
-                eval_set=[(X_val, y_val)],
-                verbose=False,
-            )
+                # Chronological 80/20 split (NOT walk-forward — that's deferred architecture work)
+                split_idx = int(len(X) * 0.8)
+                X_train, X_val = X.iloc[:split_idx], X.iloc[split_idx:]
+                y_train, y_val = y.iloc[:split_idx], y.iloc[split_idx:]
 
-            # Validation metrics
-            y_pred_val = await asyncio.to_thread(model.predict, X_val)
-            r2 = float(r2_score(y_val, y_pred_val))
-            mae = float(mean_absolute_error(y_val, y_pred_val))
+                # Train XGBoost
+                model = xgb.XGBRegressor(
+                    n_estimators=100,
+                    max_depth=4,
+                    learning_rate=0.05,
+                    subsample=0.8,
+                    colsample_bytree=0.8,
+                    reg_alpha=0.1,
+                    reg_lambda=1.0,
+                    random_state=42,
+                    n_jobs=1,  # Single thread for Render
+                    tree_method="hist",  # Memory-efficient
+                )
 
-            # Predict live
-            live_df = pd.DataFrame([live_features])
-            live_df = live_df[X.columns]  # Ensure column order matches
-            # Sanitize infinities → NaN. Preserve NaN for fundamental columns
-            # (pe_ratio, pb_ratio, market_cap_log) — XGBoost handles NaN natively.
-            # Fill other NaNs with 0 to avoid errors in non-fundamental features.
-            _NAN_PRESERVE = {"pe_ratio", "pb_ratio", "market_cap_log"}
-            live_df = live_df.replace([np.inf, -np.inf], np.nan)
-            fill_cols = [c for c in live_df.columns if c not in _NAN_PRESERVE]
-            live_df[fill_cols] = live_df[fill_cols].fillna(0)
-            live_pred = await asyncio.to_thread(model.predict, live_df)
-            predicted_return = float(live_pred[0])
+                await asyncio.to_thread(
+                    model.fit,
+                    X_train, y_train,
+                    eval_set=[(X_val, y_val)],
+                    verbose=False,
+                )
 
-            # SHAP explanations
-            factors = self._compute_shap(model, live_df, X.columns.tolist())
+                # Validation metrics
+                y_pred_val = await asyncio.to_thread(model.predict, X_val)
+                r2 = float(r2_score(y_val, y_pred_val))
+                mae = float(mean_absolute_error(y_val, y_pred_val))
 
-            # Regime detection from recent price action
-            regime = self._detect_regime(X)
+                # Predict live
+                live_df = pd.DataFrame([live_features])
+                live_df = live_df[X.columns]  # Ensure column order matches
+                # Sanitize infinities → NaN. Preserve NaN for fundamental columns
+                # (pe_ratio, pb_ratio, market_cap_log) — XGBoost handles NaN natively.
+                # Fill other NaNs with 0 to avoid errors in non-fundamental features.
+                _NAN_PRESERVE = {"pe_ratio", "pb_ratio", "market_cap_log"}
+                live_df = live_df.replace([np.inf, -np.inf], np.nan)
+                fill_cols = [c for c in live_df.columns if c not in _NAN_PRESERVE]
+                live_df[fill_cols] = live_df[fill_cols].fillna(0)
+                live_pred = await asyncio.to_thread(model.predict, live_df)
+                predicted_return = float(live_pred[0])
 
-            # Confidence scoring
-            confidence_score = self._compute_confidence(
-                predicted_return, r2, mae, len(X_train)
-            )
-            confidence_label = (
-                "high" if confidence_score > 0.65
-                else "medium" if confidence_score > 0.4
-                else "low"
-            )
+                # SHAP explanations
+                factors = self._compute_shap(model, live_df, X.columns.tolist())
 
-            # Direction
-            if predicted_return > 0.005:
-                direction = "bullish"
-            elif predicted_return < -0.005:
-                direction = "bearish"
-            else:
-                direction = "neutral"
+                # Regime detection from recent price action
+                regime = self._detect_regime(X)
 
-            # Cleanup for memory
-            del model, X_train, X_val, y_train, y_val
-            gc.collect()
+                # Confidence scoring
+                confidence_score = self._compute_confidence(
+                    predicted_return, r2, mae, len(X_train)
+                )
+                confidence_label = (
+                    "high" if confidence_score > 0.65
+                    else "medium" if confidence_score > 0.4
+                    else "low"
+                )
 
-            # Fetch latest close price using market_data
-            from app.data.market_data_provider import market_data
-            quote_result = await market_data.get_quote(symbol)
-            if quote_result.available and quote_result.data:
-                latest_close = quote_result.data.get("price")
-                latest_close_ts = datetime.now(timezone.utc).isoformat()
-            else:
-                latest_close = None
-                latest_close_ts = None
+                # Direction
+                if predicted_return > 0.005:
+                    direction = "bullish"
+                elif predicted_return < -0.005:
+                    direction = "bearish"
+                else:
+                    direction = "neutral"
 
-            return {
-                "symbol": symbol.upper(),
-                "prediction": {
-                    "direction": direction,
-                    "predicted_return_pct": round(predicted_return * 100, 2),
-                    "confidence": confidence_label,
-                    "confidence_score": round(confidence_score, 3),
-                    "horizon_days": 5,
-                },
-                "factors": factors[:7],  # Top 7 factors
-                "regime": regime,
-                "model_info": {
-                    "features_used": len(X.columns),
-                    "training_samples": len(X),
-                    "validation_samples": len(y_pred_val),
-                    "r2_score": round(r2, 4),
-                    "mae": round(mae, 6),
-                    "latest_close": latest_close,
-                    "latest_close_timestamp": latest_close_ts,
-                },
-                "disclaimer": (
-                    "⚠ This is a statistical model prediction, NOT financial advice. "
-                    "Directional accuracy for 5-day returns is typically 52-58% — "
-                    "barely above random in efficient markets. Never trade based "
-                    "solely on model outputs. Past performance does not predict "
-                    "future results."
-                ),
-                "generated_at": datetime.now(timezone.utc).isoformat(),
-            }
+                # Cleanup for memory
+                del model, X_train, X_val, y_train, y_val
+                gc.collect()
+
+                # Fetch latest close price using market_data
+                from app.data.market_data_provider import market_data
+                quote_result = await market_data.get_quote(symbol)
+                if quote_result.available and quote_result.data:
+                    latest_close = quote_result.data.get("price")
+                    latest_close_ts = datetime.now(timezone.utc).isoformat()
+                else:
+                    latest_close = None
+                    latest_close_ts = None
+
+                result = {
+                    "symbol": symbol.upper(),
+                    "prediction": {
+                        "direction": direction,
+                        "predicted_return_pct": round(predicted_return * 100, 2),
+                        "confidence": confidence_label,
+                        "confidence_score": round(confidence_score, 3),
+                        "horizon_days": 5,
+                    },
+                    "factors": factors[:7],  # Top 7 factors
+                    "regime": regime,
+                    "model_info": {
+                        "features_used": len(X.columns),
+                        "training_samples": len(X),
+                        "validation_samples": len(y_pred_val),
+                        "r2_score": round(r2, 4),
+                        "mae": round(mae, 6),
+                        "latest_close": latest_close,
+                        "latest_close_timestamp": latest_close_ts,
+                    },
+                    "disclaimer": (
+                        "⚠ This is a statistical model prediction, NOT financial advice. "
+                        "Directional accuracy for 5-day returns is typically 52-58% — "
+                        "barely above random in efficient markets. Never trade based "
+                        "solely on model outputs. Past performance does not predict "
+                        "future results."
+                    ),
+                    "generated_at": datetime.now(timezone.utc).isoformat(),
+                }
+
+                self._forecast_cache[sym] = (result, now + 600)  # 10 min TTL
+                return result
 
         except Exception as e:
             logger.error("prediction_failed", symbol=symbol, error=str(e))

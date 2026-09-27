@@ -23,6 +23,7 @@ _CACHE_TTL_OHLCV = 600       # 10 min for OHLCV
 _CACHE_TTL_FUNDAMENTALS = 86400  # 24 hours
 _CACHE_TTL_NEWS = 1800       # 30 min
 _CACHE_TTL_INSTRUMENTS = 86400  # 24 hours
+_CACHE_MAX_ENTRIES = 500
 
 _request_semaphore = asyncio.Semaphore(5)
 
@@ -54,17 +55,13 @@ class UpstoxAdapter(BaseDataAdapter):
     def __init__(self):
         super().__init__()
         self._symbol_to_key: Dict[str, str] = {}
-        self._key_to_symbol: Dict[str, str] = {}
         self._symbol_to_isin: Dict[str, str] = {}
-        self._instruments_loaded = False
-        self._instruments_last_load = 0.0
+        self._loaded_exchanges: set[str] = set()
+        self._instruments_last_load: Dict[str, float] = {}
         self._instruments_lock = asyncio.Lock()
         
         for sym, key in _STATIC_INDEX_MAP.items():
             self._symbol_to_key[sym] = key
-            self._key_to_symbol[key] = sym
-            
-    _CACHE_MAX_ENTRIES = 500
 
     def _cache_get(self, key: str) -> Optional[Any]:
         if key in _cache:
@@ -87,70 +84,63 @@ class UpstoxAdapter(BaseDataAdapter):
                     _cache.pop(k, None)
         _cache[key] = (data, now + ttl)
 
-    async def _load_instruments(self) -> None:
+    async def _load_instruments(self, target_exchange: str = "NSE") -> None:
         now = time.time()
-        if self._instruments_loaded and (now - self._instruments_last_load < _CACHE_TTL_INSTRUMENTS):
+        if target_exchange in self._loaded_exchanges and (now - self._instruments_last_load.get(target_exchange, 0) < _CACHE_TTL_INSTRUMENTS):
             return
 
         async with self._instruments_lock:
-            # Re-check after acquiring lock (another coroutine may have loaded)
+            # Re-check after acquiring lock
             now = time.time()
-            if self._instruments_loaded and (now - self._instruments_last_load < _CACHE_TTL_INSTRUMENTS):
+            if target_exchange in self._loaded_exchanges and (now - self._instruments_last_load.get(target_exchange, 0) < _CACHE_TTL_INSTRUMENTS):
                 return
 
-            loaded_count = 0
             try:
                 client = _get_client()
-                for exchange in ["NSE", "BSE"]:
-                    try:
-                        url = f"https://assets.upstox.com/market-quote/instruments/exchange/{exchange}.json.gz"
-                        resp = await client.get(url)
-                        if resp.status_code == 200:
-                            data = gzip.decompress(resp.content)
-                            instruments = json.loads(data)
-                            for inst in instruments:
-                                symbol = inst.get("trading_symbol") or inst.get("tradingsymbol")
-                                if not symbol:
-                                    continue
-                                # Only process equity instruments
-                                inst_type = inst.get("instrument_type", "")
-                                if inst_type and inst_type not in ("EQ", ""):
-                                    continue
+                url = f"https://assets.upstox.com/market-quote/instruments/exchange/{target_exchange}.json.gz"
+                resp = await client.get(url)
+                if resp.status_code == 200:
+                    data = gzip.decompress(resp.content)
+                    instruments = json.loads(data)
+                    for inst in instruments:
+                        symbol = inst.get("trading_symbol") or inst.get("tradingsymbol")
+                        if not symbol:
+                            continue
+                        # Only process equity cash instruments (filter out derivatives/options/futures)
+                        inst_type = inst.get("instrument_type", "")
+                        if inst_type and inst_type not in ("EQ", ""):
+                            continue
+                        segment = inst.get("segment", "")
+                        if segment and segment not in ("NSE_EQ", "BSE_EQ"):
+                            continue
 
-                                std_symbol = f"{symbol}.NS" if exchange == "NSE" else f"{symbol}.BO"
-                                key = inst.get("instrument_key")
-                                isin = inst.get("isin")
+                        std_symbol = f"{symbol}.NS" if target_exchange == "NSE" else f"{symbol}.BO"
+                        key = inst.get("instrument_key")
+                        isin = inst.get("isin")
 
-                                if key:
-                                    self._symbol_to_key[std_symbol] = key
-                                    self._key_to_symbol[key] = std_symbol
-                                if isin:
-                                    self._symbol_to_isin[std_symbol] = isin
-                            loaded_count += 1
-                            logger.info("upstox_exchange_loaded", exchange=exchange, symbols=len(instruments))
-                        else:
-                            logger.warning("upstox_instrument_download_failed", exchange=exchange, status=resp.status_code)
-                    except Exception as e:
-                        logger.warning("upstox_exchange_load_error", exchange=exchange, error=str(e))
+                        if key:
+                            self._symbol_to_key[std_symbol] = key
+                        if isin:
+                            self._symbol_to_isin[std_symbol] = isin
 
-                # Only mark loaded if at least one exchange succeeded
-                if loaded_count > 0:
-                    self._instruments_loaded = True
-                    self._instruments_last_load = time.time()
-                    logger.info("upstox_instruments_loaded", exchanges=loaded_count)
+                    self._loaded_exchanges.add(target_exchange)
+                    self._instruments_last_load[target_exchange] = now
+                    logger.info("upstox_exchange_loaded", exchange=target_exchange, symbols=len(instruments))
                 else:
-                    logger.error("upstox_all_instruments_failed", message="No exchange data loaded")
+                    logger.warning("upstox_instrument_download_failed", exchange=target_exchange, status=resp.status_code)
             except Exception as e:
-                logger.error("upstox_instrument_load_failed", error=str(e))
+                logger.error("upstox_instrument_load_failed", exchange=target_exchange, error=str(e))
 
     async def _get_instrument_key(self, symbol: str) -> Optional[str]:
         if symbol in _STATIC_INDEX_MAP:
             return _STATIC_INDEX_MAP[symbol]
-        await self._load_instruments()
+        target_exchange = "BSE" if symbol.upper().endswith(".BO") else "NSE"
+        await self._load_instruments(target_exchange)
         return self._symbol_to_key.get(symbol.upper())
 
     async def _get_isin(self, symbol: str) -> Optional[str]:
-        await self._load_instruments()
+        target_exchange = "BSE" if symbol.upper().endswith(".BO") else "NSE"
+        await self._load_instruments(target_exchange)
         return self._symbol_to_isin.get(symbol.upper())
 
     async def _throttled_request(

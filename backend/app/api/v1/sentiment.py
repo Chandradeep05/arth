@@ -28,38 +28,34 @@ async def get_sentiment(
     """Get sentiment analysis for a stock symbol."""
     cache = CacheManager(redis)
 
-    # Try cache first
+    # Try cache first or stampede-protected fetch
     cached = await cache.get(cache.sentiment_key(symbol))
-    if cached:
-        cached.pop("_cache_hit", None)
-        cached.pop("_cached_at", None)
-        return {
-            "success": True,
-            "data": cached,
-            "freshness": FreshnessMetadata(
-                source="cache",
-                timestamp=datetime.now(timezone.utc),
-                is_stale=False,
-                delay_label="Cached",
-                cache_hit=True,
-            ).model_dump(),
-        }
+    was_cached = cached is not None
+    if not was_cached:
+        engine = SentimentEngine()
+        result = await cache.get_or_fetch(
+            key=cache.sentiment_key(symbol),
+            fetch_func=engine.analyze,
+            ttl=300,
+            symbol=symbol,
+        )
+    else:
+        result = cached
 
-    # Compute fresh sentiment
-    engine = SentimentEngine()
-    result = await engine.analyze(symbol)
+    if not result:
+        result = {}
 
-    # Cache for 5 minutes
-    await cache.set(cache.sentiment_key(symbol), result, ttl=300)
+    result.pop("_cache_hit", None)
+    result.pop("_cached_at", None)
 
     return {
         "success": True,
         "data": result,
         "freshness": FreshnessMetadata(
-            source="yahoo_finance",
+            source="cache" if was_cached else "yahoo_finance",
             timestamp=datetime.now(timezone.utc),
             is_stale=False,
-            delay_label="~15s delayed",
-            cache_hit=False,
+            delay_label="Cached" if was_cached else "~15s delayed",
+            cache_hit=was_cached,
         ).model_dump(),
     }

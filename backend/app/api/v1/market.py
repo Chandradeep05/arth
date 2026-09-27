@@ -300,42 +300,39 @@ async def get_indicators(
 
     cache = CacheManager(redis)
 
-    # Try cache first
+    # Try cache first or stampede-protected fetch
     cached = await cache.get(cache.indicators_key(symbol))
-    if cached:
-        cached.pop("_cache_hit", None)
-        cached.pop("_cached_at", None)
-        return {
-            "success": True,
-            "data": {"symbol": symbol.upper(), **cached},
-            "freshness": _make_freshness(cache_hit=True).model_dump(),
-        }
+    was_cached = cached is not None
+    if not was_cached:
+        async def _fetch_and_compute(sym: str) -> dict | None:
+            res = await _yahoo_adapter.get_ohlcv(sym, period="3mo", interval="1d")
+            if not res:
+                return None
+            ohlcv = res.get("bars", res) if isinstance(res, dict) else res
+            return compute_indicators(ohlcv)
 
-    # Fetch OHLCV and compute indicators
-    result = await _yahoo_adapter.get_ohlcv(symbol, period="3mo", interval="1d")
-    if not result:
-        _raise_data_error(symbol)
-
-    # Unwrap new dict format from validator integration
-    if isinstance(result, dict):
-        ohlcv = result.get("bars", result)
+        indicators = await cache.get_or_fetch(
+            key=cache.indicators_key(symbol),
+            fetch_func=_fetch_and_compute,
+            ttl=settings.redis_cache_ttl_indicators,
+            sym=symbol,
+        )
     else:
-        ohlcv = result
+        indicators = cached
 
-    indicators = compute_indicators(ohlcv)
     if indicators is None:
         return {
             "success": False,
             "message": "Insufficient data for indicator computation",
         }
 
-    # Cache for 60s
-    await cache.set(cache.indicators_key(symbol), indicators, ttl=settings.redis_cache_ttl_indicators)
+    indicators.pop("_cache_hit", None)
+    indicators.pop("_cached_at", None)
 
     return {
         "success": True,
         "data": {"symbol": symbol.upper(), **indicators},
-        "freshness": _make_freshness(cache_hit=False).model_dump(),
+        "freshness": _make_freshness(cache_hit=was_cached).model_dump(),
     }
 
 

@@ -109,11 +109,12 @@ async def generate_research(
 @router.get("/report/{symbol}")
 async def get_cached_report(
     symbol: str,
+    depth: str = Query(default="standard"),
     redis=Depends(get_redis),
 ):
     """Get a previously generated research report from cache."""
     cache = CacheManager(redis)
-    report = await cache.get(cache.research_key(symbol))
+    report = await cache.get(cache.research_key(symbol, depth))
 
     if report is None:
         return {

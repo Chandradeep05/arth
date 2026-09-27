@@ -191,6 +191,11 @@ async def get_accuracy(
     if cached and not cached.get("error"):
         return AccuracyResponse(**cached)
 
+    # Quota check before expensive backtesting
+    if request:
+        redis_instance = getattr(request.app.state, "redis", None)
+        await check_user_quota(user.user_id, "accuracy", redis_instance)
+
     # Run fresh backtest
     logger.info("backtest_requested", symbol=symbol, lookback=lookback_days)
     result = await backtester.run_backtest(symbol, lookback_days)

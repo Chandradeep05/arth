@@ -34,8 +34,36 @@ from app.core.logging import get_logger
 from app.core.quotas import check_user_quota
 from app.engines.assistant.engine import AssistantEngine
 
+from contextlib import asynccontextmanager
+
 logger = get_logger(__name__)
 router = APIRouter(prefix="/assistant", tags=["assistant"])
+
+# In-flight request deduplication & reservation locks per (conversation_id, idempotency_key)
+_idempotency_locks: dict[str, asyncio.Lock] = {}
+_idempotency_registry_lock = asyncio.Lock()
+
+
+@asynccontextmanager
+async def _get_db_connection(http_request: Request):
+    """
+    Acquire DB connection from app.state.pg_pool only for the immediate query,
+    releasing it immediately to avoid holding connections across SSE streams.
+    Both streaming persist paths (CancelledError and normal completion) use pool.acquire().
+    Falls back to http_request.state.db if already set (e.g. in test fixtures).
+    """
+    db = getattr(http_request.state, "db", None)
+    if db is not None:
+        yield db
+        return
+
+    pool = getattr(http_request.app.state, "pg_pool", None)
+    if pool is not None:
+        async with pool.acquire() as conn:
+            yield conn
+            return
+
+    yield None
 
 
 class ChatRequest(BaseModel):
@@ -62,119 +90,149 @@ async def chat(
     Conversation ownership is validated BEFORE any LLM call.
     """
     engine = AssistantEngine(settings)
-    db = getattr(http_request.state, "db", None)
 
-    # ── Ownership check BEFORE LLM generation ──
-    if request.conversation_id and db:
-        owned = await db.fetchval(
-            "SELECT id FROM conversations WHERE id = $1 AND user_id = $2",
-            request.conversation_id, user.user_id,
-        )
-        if not owned:
-            raise HTTPException(status_code=403, detail="Conversation not found or not yours.")
+    # ── Idempotency Reservation Lock ──
+    # Prevents concurrent requests with the same idempotency key from both calling Groq
+    idem_lock = None
+    if request.idempotency_key and request.conversation_id:
+        lock_id = f"{request.conversation_id}:{request.idempotency_key}"
+        async with _idempotency_registry_lock:
+            if lock_id not in _idempotency_locks:
+                _idempotency_locks[lock_id] = asyncio.Lock()
+            idem_lock = _idempotency_locks[lock_id]
+        await idem_lock.acquire()
 
-    # ── Idempotency check BEFORE LLM generation ──
-    if request.idempotency_key and request.conversation_id and db:
-        existing = await db.fetchrow(
-            "SELECT m.content FROM messages m "
-            "WHERE m.conversation_id = $1 AND m.role = 'assistant' "
-            "AND m.idempotency_key = $2",
-            request.conversation_id, request.idempotency_key,
-        )
-        if existing:
-            # Duplicate request — return cached assistant response
-            if request.stream:
-                async def replay_stream():
-                    yield f"data: {json.dumps({'type': 'token', 'content': existing['content']})}\n\n"
-                    yield f"data: {json.dumps({'type': 'done', 'entities': [], 'duplicate': True})}\n\n"
-                return StreamingResponse(replay_stream(), media_type="text/event-stream")
-            else:
-                return {"success": True, "data": {"response": existing["content"], "duplicate": True}}
+    try:
+        # ── Ownership check BEFORE LLM generation ──
+        if request.conversation_id:
+            async with _get_db_connection(http_request) as db:
+                if db:
+                    owned = await db.fetchval(
+                        "SELECT id FROM conversations WHERE id = $1 AND user_id = $2",
+                        request.conversation_id, user.user_id,
+                    )
+                    if not owned:
+                        raise HTTPException(status_code=403, detail="Conversation not found or not yours.")
 
-    # ── Quota check BEFORE LLM generation ──
-    # After idempotency (duplicates don't consume quota), before expensive work
-    redis_instance = getattr(http_request.app.state, "redis", None)
-    await check_user_quota(user.user_id, "chat", redis_instance)
+                    # ── Idempotency check with lock held ──
+                    if request.idempotency_key:
+                        existing = await db.fetchrow(
+                            "SELECT m.content FROM messages m "
+                            "WHERE m.conversation_id = $1 AND m.role = 'assistant' "
+                            "AND m.idempotency_key = $2",
+                            request.conversation_id, request.idempotency_key,
+                        )
+                        if existing:
+                            # Release reservation lock before returning duplicate
+                            if idem_lock and idem_lock.locked():
+                                idem_lock.release()
+                            if request.stream:
+                                async def replay_stream():
+                                    yield f"data: {json.dumps({'type': 'token', 'content': existing['content']})}\n\n"
+                                    yield f"data: {json.dumps({'type': 'done', 'entities': [], 'duplicate': True})}\n\n"
+                                return StreamingResponse(replay_stream(), media_type="text/event-stream")
+                            else:
+                                return {"success": True, "data": {"response": existing["content"], "duplicate": True}}
 
-    if request.stream:
-        # Pass user_id to session management for tenant isolation
-        session = engine.get_or_create_session(request.session_id, user_id=str(user.user_id))
+        # ── Quota check BEFORE LLM generation ──
+        # After idempotency (duplicates don't consume quota), before expensive work
+        redis_instance = getattr(http_request.app.state, "redis", None)
+        await check_user_quota(user.user_id, "chat", redis_instance)
 
-        async def event_stream():
-            yield f"data: {json.dumps({'type': 'session', 'session_id': session.session_id})}\n\n"
-            pool = getattr(http_request.app.state, "pg_pool", None)
+        if request.stream:
+            # Pass user_id to session management for tenant isolation
+            session = engine.get_or_create_session(request.session_id, user_id=str(user.user_id))
 
-            # Extract symbols and send tool usage events
-            symbols = engine._extract_symbols(request.message)
-            if symbols:
-                yield f"data: {json.dumps({'type': 'tools', 'symbols': list(symbols)})}\n\n"
+            async def event_stream():
+                try:
+                    yield f"data: {json.dumps({'type': 'session', 'session_id': session.session_id})}\n\n"
 
-            accumulated = ""
-            persist_needed = True
-            try:
-                async for token in engine.stream_chat(request.message, session.session_id):
-                    accumulated += token
-                    yield f"data: {json.dumps({'type': 'token', 'content': token})}\n\n"
+                    # Extract symbols and send tool usage events
+                    symbols = engine._extract_symbols(request.message)
+                    if symbols:
+                        yield f"data: {json.dumps({'type': 'tools', 'symbols': list(symbols)})}\n\n"
 
-                yield f"data: {json.dumps({'type': 'done', 'entities': list(session.entities)})}\n\n"
-
-            except asyncio.CancelledError:
-                # Client disconnected — persist partial content
-                if accumulated and request.conversation_id and pool:
+                    accumulated = ""
+                    persist_needed = True
                     try:
-                        async with pool.acquire() as persist_conn:
-                            await asyncio.shield(
-                                _persist_turn(
+                        async for token in engine.stream_chat(request.message, session.session_id):
+                            accumulated += token
+                            yield f"data: {json.dumps({'type': 'token', 'content': token})}\n\n"
+
+                        yield f"data: {json.dumps({'type': 'done', 'entities': list(session.entities)})}\n\n"
+
+                    except asyncio.CancelledError:
+                        # Client disconnected — persist partial content
+                        if accumulated and request.conversation_id:
+                            try:
+                                async with _get_db_connection(http_request) as persist_conn:
+                                    if persist_conn:
+                                        await asyncio.shield(
+                                            _persist_turn(
+                                                persist_conn, request.conversation_id, user.user_id,
+                                                request.message, accumulated,
+                                                idempotency_key=request.idempotency_key,
+                                            )
+                                        )
+                            except Exception as e:
+                                logger.warning("persist_on_disconnect_failed", error=str(e))
+                        raise
+
+                    # Normal completion: persist full response
+                    if persist_needed and accumulated and request.conversation_id:
+                        try:
+                            async with _get_db_connection(http_request) as persist_conn:
+                                if persist_conn:
+                                    await _persist_turn(
+                                        persist_conn, request.conversation_id, user.user_id,
+                                        request.message, accumulated,
+                                        idempotency_key=request.idempotency_key,
+                                    )
+                        except Exception as e:
+                            logger.warning("persist_on_complete_failed", error=str(e))
+                finally:
+                    if idem_lock and idem_lock.locked():
+                        idem_lock.release()
+
+            return StreamingResponse(
+                event_stream(),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                    "X-Accel-Buffering": "no",
+                },
+            )
+        else:
+            # Non-stream path
+            try:
+                result = await engine.chat(request.message, request.session_id, user_id=str(user.user_id))
+
+                if result.get("error"):
+                    return {"success": False, "message": result.get("message")}
+
+                # Persist non-stream response to DB
+                response_text = result.get("response", "")
+                if response_text and request.conversation_id:
+                    try:
+                        async with _get_db_connection(http_request) as persist_conn:
+                            if persist_conn:
+                                await _persist_turn(
                                     persist_conn, request.conversation_id, user.user_id,
-                                    request.message, accumulated,
+                                    request.message, response_text,
                                     idempotency_key=request.idempotency_key,
                                 )
-                            )
                     except Exception as e:
-                        logger.warning("persist_on_disconnect_failed", error=str(e))
-                raise
+                        logger.warning("persist_non_stream_failed", error=str(e))
 
-            # Normal completion: persist full response
-            if persist_needed and accumulated and request.conversation_id and pool:
-                try:
-                    async with pool.acquire() as persist_conn:
-                        await _persist_turn(
-                            persist_conn, request.conversation_id, user.user_id,
-                            request.message, accumulated,
-                            idempotency_key=request.idempotency_key,
-                        )
-                except Exception as e:
-                    logger.warning("persist_on_complete_failed", error=str(e))
-
-        return StreamingResponse(
-            event_stream(),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-                "X-Accel-Buffering": "no",
-            },
-        )
-    else:
-        # Non-stream path
-        result = await engine.chat(request.message, request.session_id, user_id=str(user.user_id))
-
-        if result.get("error"):
-            return {"success": False, "message": result.get("message")}
-
-        # Persist non-stream response to DB
-        response_text = result.get("response", "")
-        if response_text and request.conversation_id and db:
-            try:
-                await _persist_turn(
-                    db, request.conversation_id, user.user_id,
-                    request.message, response_text,
-                    idempotency_key=request.idempotency_key,
-                )
-            except Exception as e:
-                logger.warning("persist_non_stream_failed", error=str(e))
-
-        return {"success": True, "data": result}
+                return {"success": True, "data": result}
+            finally:
+                if idem_lock and idem_lock.locked():
+                    idem_lock.release()
+    except Exception:
+        if idem_lock and idem_lock.locked():
+            idem_lock.release()
+        raise
 
 
 @router.get("/sessions")

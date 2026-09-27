@@ -65,14 +65,16 @@ async def _fetch_symbol_data(
     # --- Risk ---
     async def _get_risk() -> Dict[str, Any] | None:
         try:
-            cached = await cache.get(CacheManager.risk_key(symbol))
-            if cached:
-                cached.pop("_cache_hit", None)
-                cached.pop("_cached_at", None)
-                return cached
-            result = await _risk_engine.compute_risk(symbol)
-            await cache.set(CacheManager.risk_key(symbol), result, ttl=600)
-            return result
+            data = await cache.get_or_fetch(
+                key=CacheManager.risk_key(symbol),
+                fetch_func=_risk_engine.compute_risk,
+                ttl=600,
+                symbol=symbol,
+            )
+            if data:
+                data.pop("_cache_hit", None)
+                data.pop("_cached_at", None)
+            return data
         except Exception as e:
             logger.warning("watchlist_risk_failed", symbol=symbol, error=str(e))
             return None
@@ -80,14 +82,16 @@ async def _fetch_symbol_data(
     # --- Sentiment ---
     async def _get_sentiment() -> Dict[str, Any] | None:
         try:
-            cached = await cache.get(CacheManager.sentiment_key(symbol))
-            if cached:
-                cached.pop("_cache_hit", None)
-                cached.pop("_cached_at", None)
-                return cached
-            result = await _sentiment_engine.analyze(symbol)
-            await cache.set(CacheManager.sentiment_key(symbol), result, ttl=300)
-            return result
+            data = await cache.get_or_fetch(
+                key=CacheManager.sentiment_key(symbol),
+                fetch_func=_sentiment_engine.analyze,
+                ttl=300,
+                symbol=symbol,
+            )
+            if data:
+                data.pop("_cache_hit", None)
+                data.pop("_cached_at", None)
+            return data
         except Exception as e:
             logger.warning("watchlist_sentiment_failed", symbol=symbol, error=str(e))
             return None

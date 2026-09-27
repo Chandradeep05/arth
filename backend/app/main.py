@@ -41,6 +41,15 @@ logger = get_logger(__name__)
 
 SELF_PING_INTERVAL = 4 * 60  # 4 minutes
 
+# Endpoints that do not require an asyncpg DB connection from the middleware.
+# Crucial for SSE streams (/research, /assistant, /prediction) to prevent pool starvation.
+_NO_DB_PREFIXES = (
+    "/health", "/ready", "/docs", "/redoc", "/openapi",
+    "/api/v1/market", "/api/v1/financials", "/api/v1/risk",
+    "/api/v1/sentiment", "/api/v1/system", "/api/v1/watchlist",
+    "/api/v1/research", "/api/v1/assistant", "/api/v1/prediction",
+)
+
 
 async def _keepalive_loop():
     """Background task: ping own /health endpoint to prevent cold starts."""
@@ -267,11 +276,6 @@ def create_app() -> FastAPI:
     # Acquires an asyncpg connection per-request, stores it on request.state.db.
     # All Phase 4 endpoints (auth, watchlists, conversations, alerts, admin, etc.)
     # use request.state.db.fetchrow() / .fetch() / .execute() for raw SQL.
-    _NO_DB_PREFIXES = (
-        "/health", "/ready", "/docs", "/redoc", "/openapi",
-        "/api/v1/market", "/api/v1/financials", "/api/v1/risk",
-        "/api/v1/sentiment", "/api/v1/system", "/api/v1/watchlist",
-    )
 
     @app.middleware("http")
     async def db_connection_middleware(request: Request, call_next):

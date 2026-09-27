@@ -15,6 +15,7 @@ The assistant maintains ephemeral in-memory sessions with entity tracking.
 
 from __future__ import annotations
 
+import asyncio
 import time
 import uuid
 from collections import defaultdict
@@ -80,6 +81,7 @@ class AssistantSession:
         self.created_at = datetime.now(timezone.utc)
         self.last_active = datetime.now(timezone.utc)
         self.tool_calls: List[str] = []
+        self._lock = asyncio.Lock()
 
     def add_message(self, role: str, content: str) -> None:
         self.messages.append({"role": role, "content": content})
@@ -397,56 +399,57 @@ class AssistantEngine:
 
         session = self.get_or_create_session(session_id, user_id=user_id)
 
-        # Extract and track symbols
-        symbols = self._extract_symbols(message)
-        if not symbols and hasattr(session, 'entities') and session.entities:
-            symbols = [list(session.entities)[-1]]
-        tools_used = []
+        async with session._lock:
+            # Extract and track symbols
+            symbols = self._extract_symbols(message)
+            if not symbols and hasattr(session, 'entities') and session.entities:
+                symbols = [list(session.entities)[-1]]
+            tools_used = []
 
-        # Build context with real market data
-        data_context = ""
-        for sym in symbols:
-            data_str = await self._fetch_market_data(sym)
-            if data_str:
-                session.add_entity(sym)
-                data_context += data_str
-                tools_used.append(f"quote:{sym}")
+            # Build context with real market data
+            data_context = ""
+            for sym in symbols:
+                data_str = await self._fetch_market_data(sym)
+                if data_str:
+                    session.add_entity(sym)
+                    data_context += data_str
+                    tools_used.append(f"quote:{sym}")
 
-        # Build augmented user message
-        augmented_message = message
-        if data_context:
-            augmented_message = f"{message}\n\n{data_context}"
+            # Build augmented user message
+            augmented_message = message
+            if data_context:
+                augmented_message = f"{message}\n\n{data_context}"
 
-        session.add_message("user", message)  # Store original (no data injection)
+            session.add_message("user", message)  # Store original (no data injection)
 
-        # Build LLM messages
-        llm_messages = [
-            LLMMessage(role="system", content=ASSISTANT_SYSTEM_PROMPT),
-        ]
-        # Add conversation history (last N messages)
-        for msg in session.messages[-12:]:
-            llm_messages.append(LLMMessage(role=msg["role"], content=msg["content"]))
-        # Replace last user message with augmented version
-        llm_messages[-1] = LLMMessage(role="user", content=augmented_message)
+            # Build LLM messages
+            llm_messages = [
+                LLMMessage(role="system", content=ASSISTANT_SYSTEM_PROMPT),
+            ]
+            # Add conversation history (last N messages)
+            for msg in session.messages[-12:]:
+                llm_messages.append(LLMMessage(role=msg["role"], content=msg["content"]))
+            # Replace last user message with augmented version
+            llm_messages[-1] = LLMMessage(role="user", content=augmented_message)
 
-        config = LLMConfig(max_tokens=min(self._settings.groq_max_tokens, 2048), temperature=0.4)
+            config = LLMConfig(max_tokens=min(self._settings.groq_max_tokens, 2048), temperature=0.4)
 
-        start = time.monotonic()
-        response = await self._llm.generate(llm_messages, config)
-        latency = (time.monotonic() - start) * 1000
+            start = time.monotonic()
+            response = await self._llm.generate(llm_messages, config)
+            latency = (time.monotonic() - start) * 1000
 
-        # Store assistant response
-        session.add_message("assistant", response.content)
-        session.tool_calls.extend(tools_used)
+            # Store assistant response
+            session.add_message("assistant", response.content)
+            session.tool_calls.extend(tools_used)
 
-        return {
-            "session_id": session.session_id,
-            "response": response.content,
-            "tools_used": tools_used,
-            "entities": session.entities,
-            "tokens_used": response.tokens_used,
-            "latency_ms": round(latency, 2),
-        }
+            return {
+                "session_id": session.session_id,
+                "response": response.content,
+                "tools_used": tools_used,
+                "entities": session.entities,
+                "tokens_used": response.tokens_used,
+                "latency_ms": round(latency, 2),
+            }
 
     async def chat_stateless(
         self,
@@ -513,36 +516,37 @@ class AssistantEngine:
 
         session = self.get_or_create_session(session_id, user_id=user_id)
 
-        # Extract symbols and fetch data
-        symbols = self._extract_symbols(message)
-        if not symbols and hasattr(session, 'entities') and session.entities:
-            symbols = [list(session.entities)[-1]]
-        data_context = ""
-        for sym in symbols:
-            data_str = await self._fetch_market_data(sym)
-            if data_str:
-                session.add_entity(sym)
-                data_context += data_str
-                session.tool_calls.append(f"quote:{sym}")
+        async with session._lock:
+            # Extract symbols and fetch data
+            symbols = self._extract_symbols(message)
+            if not symbols and hasattr(session, 'entities') and session.entities:
+                symbols = [list(session.entities)[-1]]
+            data_context = ""
+            for sym in symbols:
+                data_str = await self._fetch_market_data(sym)
+                if data_str:
+                    session.add_entity(sym)
+                    data_context += data_str
+                    session.tool_calls.append(f"quote:{sym}")
 
-        augmented_message = message
-        if data_context:
-            augmented_message = f"{message}\n\n{data_context}"
+            augmented_message = message
+            if data_context:
+                augmented_message = f"{message}\n\n{data_context}"
 
-        session.add_message("user", message)
+            session.add_message("user", message)
 
-        llm_messages = [
-            LLMMessage(role="system", content=ASSISTANT_SYSTEM_PROMPT),
-        ]
-        for msg in session.messages[-12:]:
-            llm_messages.append(LLMMessage(role=msg["role"], content=msg["content"]))
-        llm_messages[-1] = LLMMessage(role="user", content=augmented_message)
+            llm_messages = [
+                LLMMessage(role="system", content=ASSISTANT_SYSTEM_PROMPT),
+            ]
+            for msg in session.messages[-12:]:
+                llm_messages.append(LLMMessage(role=msg["role"], content=msg["content"]))
+            llm_messages[-1] = LLMMessage(role="user", content=augmented_message)
 
-        config = LLMConfig(max_tokens=min(self._settings.groq_max_tokens, 2048), temperature=0.4)
+            config = LLMConfig(max_tokens=min(self._settings.groq_max_tokens, 2048), temperature=0.4)
 
-        full_response = ""
-        async for token in self._llm.stream(llm_messages, config):
-            full_response += token
-            yield token
+            full_response = ""
+            async for token in self._llm.stream(llm_messages, config):
+                full_response += token
+                yield token
 
-        session.add_message("assistant", full_response)
+            session.add_message("assistant", full_response)

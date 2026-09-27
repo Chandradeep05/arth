@@ -39,37 +39,34 @@ async def get_governance(
 
     # Try cache (governance data changes slowly — 1hr TTL)
     cached = await cache.get(cache_key)
-    if cached:
-        cached.pop("_cache_hit", None)
-        cached.pop("_cached_at", None)
-        return {
-            "success": True,
-            "data": cached,
-            "freshness": FreshnessMetadata(
-                source="cache",
-                timestamp=datetime.now(timezone.utc),
-                is_stale=False,
-                delay_label="Cached",
-                cache_hit=True,
-            ).model_dump(),
-        }
+    was_cached = cached is not None
+    if not was_cached:
+        result = await cache.get_or_fetch(
+            key=cache_key,
+            fetch_func=get_governance_data,
+            ttl=3600,
+            symbol=symbol,
+        )
+    else:
+        result = cached
 
-    result = await get_governance_data(symbol)
-
+    if not result:
+        return {"success": False, "message": f"Could not fetch governance data for {symbol}"}
     if result.get("error"):
         return {"success": False, "message": result.get("message")}
 
-    await cache.set(cache_key, result, ttl=3600)
+    result.pop("_cache_hit", None)
+    result.pop("_cached_at", None)
 
     return {
         "success": True,
         "data": result,
         "freshness": FreshnessMetadata(
-            source="yahoo_finance",
+            source="cache" if was_cached else "yahoo_finance",
             timestamp=datetime.now(timezone.utc),
             is_stale=False,
-            delay_label="~15s delayed",
-            cache_hit=False,
+            delay_label="Cached" if was_cached else "~15s delayed",
+            cache_hit=was_cached,
         ).model_dump(),
     }
 
@@ -85,39 +82,35 @@ async def get_risk_score(
     """Get composite risk score for a stock symbol."""
     cache = CacheManager(redis)
 
-    # Try cache first
+    # Try cache first or stampede-protected fetch
     cached = await cache.get(cache.risk_key(symbol))
-    if cached:
-        cached.pop("_cache_hit", None)
-        cached.pop("_cached_at", None)
-        return {
-            "success": True,
-            "data": cached,
-            "freshness": FreshnessMetadata(
-                source="cache",
-                timestamp=datetime.now(timezone.utc),
-                is_stale=False,
-                delay_label="Cached",
-                cache_hit=True,
-            ).model_dump(),
-        }
+    was_cached = cached is not None
+    if not was_cached:
+        engine = RiskEngine()
+        result = await cache.get_or_fetch(
+            key=cache.risk_key(symbol),
+            fetch_func=engine.compute_risk,
+            ttl=600,
+            symbol=symbol,
+        )
+    else:
+        result = cached
 
-    # Compute fresh risk score
-    engine = RiskEngine()
-    result = await engine.compute_risk(symbol)
+    if not result:
+        result = {}
 
-    # Cache for 10 minutes
-    await cache.set(cache.risk_key(symbol), result, ttl=600)
+    result.pop("_cache_hit", None)
+    result.pop("_cached_at", None)
 
     return {
         "success": True,
         "data": result,
         "freshness": FreshnessMetadata(
-            source="yahoo_finance",
+            source="cache" if was_cached else "yahoo_finance",
             timestamp=datetime.now(timezone.utc),
             is_stale=False,
-            delay_label="~15s delayed",
-            cache_hit=False,
+            delay_label="Cached" if was_cached else "~15s delayed",
+            cache_hit=was_cached,
         ).model_dump(),
     }
 

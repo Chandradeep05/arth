@@ -278,7 +278,9 @@ class CacheManager:
         return f"company:{symbol.upper()}"
 
     @staticmethod
-    def research_key(symbol: str) -> str:
+    def research_key(symbol: str, depth: str | None = None) -> str:
+        if depth:
+            return f"research:{symbol.upper()}:{depth.lower()}"
         return f"research:{symbol.upper()}"
 
     @staticmethod

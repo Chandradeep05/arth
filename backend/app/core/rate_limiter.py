@@ -33,6 +33,7 @@ RATE_LIMITS: Dict[str, Tuple[int, int]] = {
     "/api/v1/research/generate": (5, 60),      # 5 req/min — each call burns Groq + RAG
     "/api/v1/prediction/": (10, 60),           # 10 req/min — XGBoost training is CPU-heavy
     "/api/v1/research/index": (3, 60),         # 3 req/min — document ingestion is expensive
+    "/api/v1/watchlist/batch": (10, 60),       # 10 req/min — multi-symbol quotes + risk + sentiment
 }
 
 # Global fallback for all /api/ endpoints not in a specific group

@@ -26,6 +26,7 @@ QUOTA_CONFIG = {
     "chat": (3600, 30),         # 30 messages per hour
     "research_gen": (86400, 10), # 10 deep research reports per day
     "prediction": (86400, 20),   # 20 forecasts per day
+    "accuracy": (3600, 5),       # 5 backtests per hour
 }
 
 
