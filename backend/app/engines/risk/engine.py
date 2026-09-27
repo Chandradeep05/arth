@@ -181,21 +181,30 @@ class RiskEngine:
 
         all_unavail = not (vol_avail or liq_avail or fin_avail)
 
-        # ── Composite Score (weighted average) ──
+        # ── Composite Score (weighted average of AVAILABLE dimensions only) ──
         weights = {"volatility": 0.35, "liquidity": 0.25, "financial_health": 0.40}
-        composite = sum(
-            d["score"] * weights.get(d["dimension"], 0.33)
-            for d in dimensions
-        )
+        scored = [d for d in dimensions if d.get("available", True)]
+        if scored:
+            wsum = sum(weights.get(d["dimension"], 0.33) for d in scored)
+            composite = sum(
+                d["score"] * weights.get(d["dimension"], 0.33) / wsum
+                for d in scored
+            )
+        else:
+            composite = None
+
+        # Confidence scales with data availability
+        available_count = sum(1 for d in dimensions if d.get("available", True))
+        confidence = round(available_count / len(dimensions) * 100, 1) if dimensions else 0.0
 
         return {
             "available": not all_unavail,
             "symbol": symbol.upper(),
-            "composite_score": round(composite, 1) if not all_unavail else None,
-            "composite_label": self._risk_label(composite) if not all_unavail else "Insufficient data",
+            "composite_score": round(composite, 1) if composite is not None else None,
+            "composite_label": self._risk_label(composite) if composite is not None else "Insufficient data",
             "dimensions": dimensions,
             "sector": sector,
-            "confidence": 60.0 if not all_unavail else 0.0,  # Base confidence for Phase 1
+            "confidence": confidence,
             "computed_at": datetime.now(timezone.utc).isoformat(),
             "disclaimer": (
                 "⚠ Risk scores are probabilistic assessments, not guarantees. "

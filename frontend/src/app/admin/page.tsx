@@ -60,7 +60,7 @@ export default function AdminPage() {
 
   const handleUpdateRole = async (userId: string, newRole: 'user' | 'admin') => {
     try {
-      await api.patch(`/api/v1/admin/users/${userId}/role`, { role: newRole });
+      await api.put(`/api/v1/admin/users/${userId}/role`, { role: newRole });
       setUsers(users.map(u => u.id === userId ? { ...u, role: newRole } : u));
     } catch (error) {
       console.error('Failed to update role', error);
@@ -69,7 +69,7 @@ export default function AdminPage() {
 
   const handleUpdateStatus = async (userId: string, newStatus: 'active' | 'suspended' | 'pending') => {
     try {
-      await api.patch(`/api/v1/admin/users/${userId}/status`, { access_status: newStatus });
+      await api.put(`/api/v1/admin/users/${userId}/status`, { access_status: newStatus });
       setUsers(users.map(u => u.id === userId ? { ...u, access_status: newStatus } : u));
     } catch (error) {
       console.error('Failed to update status', error);
@@ -139,9 +139,24 @@ export default function AdminPage() {
         </div>
 
         <div className="bg-zinc-900 border border-zinc-800 rounded-xl overflow-hidden">
-          <div className="p-4 md:p-6 border-b border-zinc-800 flex items-center gap-2">
-            <Users className="w-5 h-5 text-zinc-400" />
-            <h2 className="text-xl font-semibold">Users</h2>
+          <div className="p-4 md:p-6 border-b border-zinc-800 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Users className="w-5 h-5 text-zinc-400" />
+              <h2 className="text-xl font-semibold">Users</h2>
+            </div>
+            {stats.pending > 0 && (
+              <button
+                onClick={async () => {
+                  const pendingUsers = users.filter(u => u.access_status === 'pending');
+                  for (const u of pendingUsers) {
+                    await handleUpdateStatus(u.id, 'active');
+                  }
+                }}
+                className="bg-emerald-600 text-white px-4 py-1.5 rounded-lg text-sm font-medium hover:bg-emerald-500 transition-colors"
+              >
+                Activate All Pending ({stats.pending})
+              </button>
+            )}
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-left text-sm">
@@ -151,7 +166,7 @@ export default function AdminPage() {
                   <th className="px-6 py-3 font-medium">Role</th>
                   <th className="px-6 py-3 font-medium">Status</th>
                   <th className="px-6 py-3 font-medium">Joined</th>
-                  <th className="px-6 py-3 font-medium">Last Login</th>
+                  <th className="px-6 py-3 font-medium">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-zinc-800">
@@ -182,7 +197,24 @@ export default function AdminPage() {
                       </select>
                     </td>
                     <td className="px-6 py-4 text-zinc-400">{new Date(u.created_at).toLocaleDateString()}</td>
-                    <td className="px-6 py-4 text-zinc-400">{u.last_login ? new Date(u.last_login).toLocaleDateString() : 'Never'}</td>
+                    <td className="px-6 py-4">
+                      {u.access_status === 'pending' && u.id !== user?.id && (
+                        <button
+                          onClick={() => handleUpdateStatus(u.id, 'active')}
+                          className="bg-emerald-600/20 text-emerald-400 border border-emerald-500/30 px-3 py-1 rounded-md text-xs font-medium hover:bg-emerald-600/30 transition-colors"
+                        >
+                          Activate
+                        </button>
+                      )}
+                      {u.access_status === 'active' && u.id !== user?.id && (
+                        <button
+                          onClick={() => handleUpdateStatus(u.id, 'suspended')}
+                          className="bg-red-600/20 text-red-400 border border-red-500/30 px-3 py-1 rounded-md text-xs font-medium hover:bg-red-600/30 transition-colors"
+                        >
+                          Suspend
+                        </button>
+                      )}
+                    </td>
                   </tr>
                 ))}
               </tbody>

@@ -659,6 +659,7 @@ class HybridAdapter(BaseDataAdapter):
         super().__init__()
         self._twelve = None
         self._nse = None
+        self._upstox = None
         # Raw Yahoo adapter kept for modules that need direct yfinance access
         # (prediction, sentiment, governance, RAG document processing).
         # These modules call throttled_run_sync() to run sync yfinance
@@ -676,6 +677,17 @@ class HybridAdapter(BaseDataAdapter):
             from app.data.adapters.nse import nse_adapter
             self._nse = nse_adapter
         return self._nse
+
+    def _get_upstox(self):
+        if self._upstox is None:
+            try:
+                from app.config import get_settings
+                if get_settings().upstox_enabled:
+                    from app.data.adapters.upstox import upstox_adapter
+                    self._upstox = upstox_adapter
+            except Exception:
+                self._upstox = None
+        return self._upstox
 
     async def throttled_run_sync(self, func, *args, **kwargs):
         """Public API: run a synchronous function through the Yahoo rate limiter.
@@ -698,6 +710,16 @@ class HybridAdapter(BaseDataAdapter):
 
     async def get_quote(self, symbol: str):
         if self._is_indian(symbol):
+            # Upstox is primary for Indian symbols if enabled
+            upstox = self._get_upstox()
+            if upstox:
+                try:
+                    result = await upstox.get_quote(symbol)
+                    if result:
+                        return result
+                except Exception as e:
+                    logger.warning("upstox_quote_failed", symbol=symbol, error=str(e))
+            # Fallback to NSE
             try:
                 result = await self._get_nse().get_quote(symbol)
                 if result:
@@ -709,6 +731,14 @@ class HybridAdapter(BaseDataAdapter):
 
     async def get_ohlcv(self, symbol: str, period: str = "1mo", interval: str = "1d"):
         if self._is_indian(symbol):
+            upstox = self._get_upstox()
+            if upstox:
+                try:
+                    result = await upstox.get_ohlcv(symbol, period=period, interval=interval)
+                    if result:
+                        return result
+                except Exception as e:
+                    logger.warning("upstox_ohlcv_failed", symbol=symbol, error=str(e))
             try:
                 result = await self._get_nse().get_ohlcv(symbol, period=period, interval=interval)
                 if result:
@@ -720,6 +750,14 @@ class HybridAdapter(BaseDataAdapter):
 
     async def get_company_info(self, symbol: str):
         if self._is_indian(symbol):
+            upstox = self._get_upstox()
+            if upstox:
+                try:
+                    result = await upstox.get_company_info(symbol)
+                    if result:
+                        return result
+                except Exception as e:
+                    logger.warning("upstox_company_info_failed", symbol=symbol, error=str(e))
             try:
                 result = await self._get_nse().get_company_info(symbol)
                 if result:
@@ -730,16 +768,23 @@ class HybridAdapter(BaseDataAdapter):
         return await self._get_twelve().get_company_info(symbol)
 
     async def search(self, query: str):
-        """Search across both providers. NSE for Indian names, TwelveData for US."""
+        """Search across both providers. Upstox/NSE for Indian names, TwelveData for US."""
         results = []
-        # Try NSE search (for Indian stocks)
-        try:
-            nse_results = await self._get_nse().search(query)
-            if nse_results:
-                results.extend(nse_results)
-        except Exception:
-            pass
-        # Always include TwelveData results
+        upstox = self._get_upstox()
+        if upstox:
+            try:
+                upstox_results = await upstox.search(query)
+                if upstox_results:
+                    results.extend(upstox_results)
+            except Exception:
+                pass
+        if not results:
+            try:
+                nse_results = await self._get_nse().search(query)
+                if nse_results:
+                    results.extend(nse_results)
+            except Exception:
+                pass
         try:
             td_results = await self._get_twelve().search(query)
             if td_results:
@@ -749,7 +794,7 @@ class HybridAdapter(BaseDataAdapter):
         return results
 
     async def get_market_indices(self):
-        """Combine US indices (TwelveData) + Indian indices (NSE)."""
+        """Combine US indices (TwelveData) + Indian indices (NSE/Upstox)."""
         results = []
         # TwelveData indices (US)
         try:
@@ -758,7 +803,7 @@ class HybridAdapter(BaseDataAdapter):
                 results.extend(td_indices)
         except Exception:
             pass
-        # NSE indices (Indian)
+        # Indian indices (NSE)
         try:
             nse_indices = await self._get_nse().get_market_indices()
             if nse_indices:
@@ -768,7 +813,7 @@ class HybridAdapter(BaseDataAdapter):
         return results
 
     async def get_batch_quotes(self, symbols):
-        """Batch quotes — route Indian symbols to NSE, US to TwelveData."""
+        """Batch quotes — route Indian symbols to Upstox/NSE, US to TwelveData."""
         results = []
 
         # Split by market
@@ -784,19 +829,34 @@ class HybridAdapter(BaseDataAdapter):
             except Exception as e:
                 logger.warning("hybrid_batch_us_failed", error=str(e))
 
-        # Indian quotes (one-by-one through NSE, rate limited)
+        # Indian quotes (Upstox primary if enabled, NSE fallback)
+        upstox = self._get_upstox()
         for sym in indian_symbols:
-            try:
-                quote = await self._get_nse().get_quote(sym)
-                if quote:
-                    results.append(quote)
-            except Exception:
-                pass
+            quote = None
+            if upstox:
+                try:
+                    quote = await upstox.get_quote(sym)
+                except Exception:
+                    quote = None
+            if not quote:
+                try:
+                    quote = await self._get_nse().get_quote(sym)
+                except Exception:
+                    quote = None
+            if quote:
+                results.append(quote)
 
         return results
 
     async def health_check(self) -> bool:
         """At least one provider working = healthy."""
+        upstox = self._get_upstox()
+        if upstox:
+            try:
+                if await upstox.health_check():
+                    return True
+            except Exception:
+                pass
         try:
             td_ok = await self._get_twelve().health_check()
             if td_ok:

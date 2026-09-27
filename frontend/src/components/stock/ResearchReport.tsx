@@ -74,7 +74,7 @@ export default function ResearchReport({ symbol }: ResearchReportProps) {
       setError(e instanceof Error ? e.message : 'Failed to generate report');
       setStatus('error');
     }
-  }, [symbol]);
+  }, [symbol, session?.access_token]);
 
   // Auto-scroll during streaming
   useEffect(() => {

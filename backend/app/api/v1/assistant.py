@@ -253,7 +253,8 @@ async def _persist_turn(
             await db.execute(
                 "INSERT INTO messages (conversation_id, role, content, created_at, idempotency_key) "
                 "VALUES ($1, $2, $3, $4, $5) "
-                "ON CONFLICT (idempotency_key) DO NOTHING",
+                "ON CONFLICT (conversation_id, idempotency_key) "
+                "WHERE idempotency_key IS NOT NULL DO NOTHING",
                 conversation_id, "assistant", assistant_response, assistant_ts, idempotency_key,
             )
         else:

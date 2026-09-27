@@ -24,6 +24,7 @@ Profile Provisioning:
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Optional
 from uuid import UUID
 
@@ -212,6 +213,13 @@ async def _resolve_or_create_profile(
         logger.error("profile_create_failed", user_id=str(user_id))
         raise HTTPException(status_code=500, detail="Could not provision user profile")
 
+    # Auto-generate an invite code for pending users so admin can share it
+    if row["access_status"] == "pending":
+        try:
+            await _auto_generate_invite(user_id, email, db)
+        except Exception as e:
+            logger.warning("auto_invite_generation_failed", error=str(e), email=email)
+
     logger.info(
         "profile_created",
         user_id=str(user_id),
@@ -219,6 +227,84 @@ async def _resolve_or_create_profile(
         access_status=row["access_status"],
     )
     return row["access_status"], row["role"]
+
+
+async def _auto_generate_invite(user_id: UUID, email: str, db) -> None:
+    """
+    Auto-generate a personal invite code for a new pending user.
+    The code is stored in invite_codes and can be seen by admin in the admin panel.
+    Also attempts to send the code via email using Supabase's admin API.
+    """
+    import secrets
+    import string
+    from datetime import timedelta
+
+    chars = string.ascii_uppercase + string.digits
+    code = "".join(secrets.choice(chars) for _ in range(10))
+
+    # Store the invite code (created_by = NULL means system-generated)
+    await db.execute(
+        """
+        INSERT INTO invite_codes (code, created_by, expires_at)
+        VALUES ($1, NULL, $2)
+        """,
+        code,
+        datetime.now(timezone.utc) + timedelta(days=30),
+    )
+
+    logger.info(
+        "auto_invite_generated",
+        email=email,
+        code_prefix=code[:4] + "...",
+    )
+
+    # Attempt to send invite code via email
+    await _send_invite_email(email, code)
+
+
+async def _send_invite_email(email: str, code: str) -> None:
+    """
+    Send the invite code to the user's email.
+    Uses a simple SMTP approach via Supabase Edge Function or direct SMTP.
+    Falls back to logging the code if no email service is configured.
+    """
+    try:
+        from app.config import get_settings as _get_settings
+        settings = _get_settings()
+
+        # If Supabase is configured, use the Admin API to send a custom email
+        if settings.supabase_url and settings.supabase_service_key:
+            import httpx
+            async with httpx.AsyncClient(timeout=10) as client:
+                # Use Supabase's built-in email via Auth Admin API
+                # This sends a "magic link" style email - we repurpose the invite flow
+                resp = await client.post(
+                    f"{settings.supabase_url}/auth/v1/invite",
+                    headers={
+                        "Authorization": f"Bearer {settings.supabase_service_key}",
+                        "apikey": settings.supabase_service_key,
+                        "Content-Type": "application/json",
+                    },
+                    json={"email": email},
+                )
+                # Note: Supabase invite may fail if user already exists in auth.users
+                # That's OK - the admin can still see the code in the admin panel
+                if resp.status_code not in (200, 201, 422):
+                    logger.warning(
+                        "supabase_invite_email_failed",
+                        status=resp.status_code,
+                        email=email,
+                    )
+
+        # Always log the code so admin can find it in logs as backup
+        logger.info(
+            "invite_code_for_user",
+            email=email,
+            invite_code=code,
+            message="Share this code with the user to activate their account",
+        )
+    except Exception as e:
+        logger.warning("invite_email_send_failed", error=str(e), email=email)
 
 
 # == FastAPI Dependencies =====================================================

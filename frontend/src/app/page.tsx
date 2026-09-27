@@ -84,7 +84,7 @@ function StockMoverCard({ stock, index }: { stock: StockMover; index: number }) 
                   : 'bg-red-500/10 text-red-400 border border-red-500/20'
               }`}
             >
-              {isPositive ? '+' : ''}{stock.change.toFixed(2)} ({isPositive ? '+' : ''}{stock.change_percent.toFixed(2)}%)
+              {isPositive ? '+' : ''}{Number(stock.change ?? 0).toFixed(2)} ({isPositive ? '+' : ''}{Number(stock.change_percent ?? 0).toFixed(2)}%)
             </span>
           </div>
         </div>

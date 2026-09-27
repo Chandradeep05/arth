@@ -64,32 +64,32 @@ try:
     }, index=dates)
 
     # Test volatility computation with DataFrame
-    vol_score, vol_factors = engine._compute_volatility_risk(df)
+    vol_score, vol_factors, *rest = engine._compute_volatility_risk(df)
     test("Volatility: returns score with DataFrame", isinstance(vol_score, float))
     test("Volatility: score in valid range", 0 <= vol_score <= 100, f"got {vol_score}")
     test("Volatility: has factors", len(vol_factors) > 0)
     test("Volatility: factor mentions volatility", any("volatility" in f.lower() for f in vol_factors))
 
     # Test liquidity computation with DataFrame
-    liq_score, liq_factors = engine._compute_liquidity_risk(df)
+    liq_score, liq_factors, *rest = engine._compute_liquidity_risk(df)
     test("Liquidity: returns score with DataFrame", isinstance(liq_score, float))
     test("Liquidity: score in valid range", 0 <= liq_score <= 100, f"got {liq_score}")
     test("Liquidity: has factors", len(liq_factors) > 0)
     test("Liquidity: factor mentions liquidity", any("liquidity" in f.lower() for f in liq_factors))
 
     # Test with None (should return 50.0 default)
-    none_score, none_factors = engine._compute_volatility_risk(None)
+    none_score, none_factors, *rest = engine._compute_volatility_risk(None)
     test("Volatility: None input returns 50.0", none_score == 50.0)
 
     # Test with empty DataFrame
     empty_df = pd.DataFrame(columns=["Open", "High", "Low", "Close", "Volume"])
-    empty_score, empty_factors = engine._compute_volatility_risk(empty_df)
+    empty_score, empty_factors, *rest = engine._compute_volatility_risk(empty_df)
     test("Volatility: empty DataFrame returns 50.0", empty_score == 50.0)
 
     # Test with list of dicts (old format — should still work)
     bars_list = [{"Close": float(c), "Volume": int(v), "close": float(c), "volume": int(v)}
                  for c, v in zip(closes, np.random.randint(1_000_000, 50_000_000, 60))]
-    list_score, list_factors = engine._compute_volatility_risk(bars_list)
+    list_score, list_factors, *rest = engine._compute_volatility_risk(bars_list)
     test("Volatility: list-of-dicts still works", isinstance(list_score, float) and 0 <= list_score <= 100)
 
 except Exception as e:
@@ -403,8 +403,8 @@ try:
     # Verify the reconstructed DataFrame works with RiskEngine
     from app.engines.risk.engine import RiskEngine
     re = RiskEngine()
-    vol_score, _ = re._compute_volatility_risk(reconstructed)
-    liq_score, _ = re._compute_liquidity_risk(reconstructed)
+    vol_score, *rest = re._compute_volatility_risk(reconstructed)
+    liq_score, *rest = re._compute_liquidity_risk(reconstructed)
     test("RiskEngine accepts reconstructed DataFrame (vol)", isinstance(vol_score, float))
     test("RiskEngine accepts reconstructed DataFrame (liq)", isinstance(liq_score, float))
 

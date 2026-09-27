@@ -356,11 +356,12 @@ class StatementParser:
         ratios = ratios_data.get("ratios", {})
 
         # If no financial data is available, return unavailable instead of a fake score
+        # Keys must match what get_ratios() actually produces: roe, roa, free_cash_flow
         all_ratios_missing = all(
             ratios.get(k) is None
-            for k in ('profit_margin', 'return_on_equity', 'return_on_assets',
+            for k in ('profit_margin', 'roe', 'roa',
                       'debt_to_equity', 'current_ratio', 'operating_margin',
-                      'free_cash_flow_per_share', 'revenue_growth')
+                      'free_cash_flow', 'revenue_growth')
         )
         if all_ratios_missing:
             return {

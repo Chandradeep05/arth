@@ -58,6 +58,31 @@ export default function StockDetailPage() {
   const [company, setCompany] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [lastUpdated, setLastUpdated] = useState<Date>(new Date());
+  const [activeTimeframe, setActiveTimeframe] = useState<string>('3mo');
+
+  // Timeframe → API params mapping
+  const TIMEFRAME_MAP: Record<string, { period: string; interval: string }> = {
+    '1D': { period: '1d', interval: '5m' },
+    '1W': { period: '5d', interval: '15m' },
+    '1M': { period: '1mo', interval: '1h' },
+    '3M': { period: '3mo', interval: '1d' },
+    '1Y': { period: '1y', interval: '1d' },
+    '5Y': { period: '5y', interval: '1wk' },
+  };
+
+  const fetchOhlcv = useCallback(async (timeframe: string) => {
+    const params = TIMEFRAME_MAP[timeframe] || { period: '3mo', interval: '1d' };
+    try {
+      const res = await apiClient.get<{ data: OHLCVBar[] }>(
+        `/api/v1/market/ohlcv/${encodeURIComponent(symbol)}?period=${params.period}&interval=${params.interval}`
+      );
+      if (res.data) {
+        setOhlcv(Array.isArray(res.data) ? res.data : []);
+      }
+    } catch {
+      // Keep existing OHLCV data on failure
+    }
+  }, [symbol]);
 
   const fetchAll = useCallback(async () => {
     try {
@@ -190,7 +215,7 @@ export default function StockDetailPage() {
                       : 'bg-red-500/10 text-red-400 border border-red-500/20'
                   }`}>
                     {isPositive ? <TrendingUp className="w-4 h-4" /> : <TrendingDown className="w-4 h-4" />}
-                    {isPositive ? '+' : ''}{formatNumber(quote.change)} ({isPositive ? '+' : ''}{quote.change_percent.toFixed(2)}%)
+                    {isPositive ? '+' : ''}{formatNumber(quote.change)} ({isPositive ? '+' : ''}{Number(quote.change_percent ?? 0).toFixed(2)}%)
                   </span>
                 </div>
               </div>
@@ -215,7 +240,7 @@ export default function StockDetailPage() {
                 </div>
                 <div className="p-2 rounded-lg bg-white/[0.02] border border-white/[0.04]">
                   <span className="text-[10px] text-[var(--text-dim)] uppercase tracking-wider block">Volume</span>
-                  <span className="text-white font-medium">{(quote.volume / 1e6).toFixed(1)}M</span>
+                  <span className="text-white font-medium">{(Number(quote.volume ?? 0) / 1e6).toFixed(1)}M</span>
                 </div>
                 <div className="p-2 rounded-lg bg-white/[0.02] border border-white/[0.04]">
                   <span className="text-[10px] text-[var(--text-dim)] uppercase tracking-wider block">Mkt Cap</span>
@@ -236,7 +261,15 @@ export default function StockDetailPage() {
       )}
 
       {/* Chart */}
-      <PriceChart data={ohlcv} symbol={symbol} />
+      <PriceChart
+        data={ohlcv}
+        symbol={symbol}
+        activeTimeframe={activeTimeframe}
+        onTimeframeChange={(tf: string) => {
+          setActiveTimeframe(tf);
+          fetchOhlcv(tf);
+        }}
+      />
 
       {/* AI Forecast */}
       <PredictionPanel symbol={symbol} />

@@ -58,6 +58,7 @@ class UpstoxAdapter(BaseDataAdapter):
         self._symbol_to_isin: Dict[str, str] = {}
         self._instruments_loaded = False
         self._instruments_last_load = 0.0
+        self._instruments_lock = asyncio.Lock()
         
         for sym, key in _STATIC_INDEX_MAP.items():
             self._symbol_to_key[sym] = key
@@ -78,39 +79,57 @@ class UpstoxAdapter(BaseDataAdapter):
         now = time.time()
         if self._instruments_loaded and (now - self._instruments_last_load < _CACHE_TTL_INSTRUMENTS):
             return
-            
-        try:
-            client = _get_client()
-            for exchange in ["NSE", "BSE"]:
-                url = f"https://assets.upstox.com/market-quote/instruments/exchange/{exchange}.json.gz"
-                resp = await client.get(url)
-                if resp.status_code == 200:
-                    data = gzip.decompress(resp.content)
-                    instruments = json.loads(data)
-                    for inst in instruments:
-                        symbol = inst.get("trading_symbol") or inst.get("tradingsymbol")
-                        if not symbol:
-                            continue
-                        # Only process equity instruments
-                        inst_type = inst.get("instrument_type", "")
-                        if inst_type and inst_type not in ("EQ", ""):
-                            continue
-                            
-                        std_symbol = f"{symbol}.NS" if exchange == "NSE" else f"{symbol}.BO"
-                        key = inst.get("instrument_key")
-                        isin = inst.get("isin")
-                        
-                        if key:
-                            self._symbol_to_key[std_symbol] = key
-                            self._key_to_symbol[key] = std_symbol
-                        if isin:
-                            self._symbol_to_isin[std_symbol] = isin
-                            
-            self._instruments_loaded = True
-            self._instruments_last_load = now
-            logger.info("upstox_instruments_loaded")
-        except Exception as e:
-            logger.error("upstox_instrument_load_failed", error=str(e))
+
+        async with self._instruments_lock:
+            # Re-check after acquiring lock (another coroutine may have loaded)
+            now = time.time()
+            if self._instruments_loaded and (now - self._instruments_last_load < _CACHE_TTL_INSTRUMENTS):
+                return
+
+            loaded_count = 0
+            try:
+                client = _get_client()
+                for exchange in ["NSE", "BSE"]:
+                    try:
+                        url = f"https://assets.upstox.com/market-quote/instruments/exchange/{exchange}.json.gz"
+                        resp = await client.get(url)
+                        if resp.status_code == 200:
+                            data = gzip.decompress(resp.content)
+                            instruments = json.loads(data)
+                            for inst in instruments:
+                                symbol = inst.get("trading_symbol") or inst.get("tradingsymbol")
+                                if not symbol:
+                                    continue
+                                # Only process equity instruments
+                                inst_type = inst.get("instrument_type", "")
+                                if inst_type and inst_type not in ("EQ", ""):
+                                    continue
+
+                                std_symbol = f"{symbol}.NS" if exchange == "NSE" else f"{symbol}.BO"
+                                key = inst.get("instrument_key")
+                                isin = inst.get("isin")
+
+                                if key:
+                                    self._symbol_to_key[std_symbol] = key
+                                    self._key_to_symbol[key] = std_symbol
+                                if isin:
+                                    self._symbol_to_isin[std_symbol] = isin
+                            loaded_count += 1
+                            logger.info("upstox_exchange_loaded", exchange=exchange, symbols=len(instruments))
+                        else:
+                            logger.warning("upstox_instrument_download_failed", exchange=exchange, status=resp.status_code)
+                    except Exception as e:
+                        logger.warning("upstox_exchange_load_error", exchange=exchange, error=str(e))
+
+                # Only mark loaded if at least one exchange succeeded
+                if loaded_count > 0:
+                    self._instruments_loaded = True
+                    self._instruments_last_load = time.time()
+                    logger.info("upstox_instruments_loaded", exchanges=loaded_count)
+                else:
+                    logger.error("upstox_all_instruments_failed", message="No exchange data loaded")
+            except Exception as e:
+                logger.error("upstox_instrument_load_failed", error=str(e))
 
     async def _get_instrument_key(self, symbol: str) -> Optional[str]:
         if symbol in _STATIC_INDEX_MAP:
@@ -130,7 +149,14 @@ class UpstoxAdapter(BaseDataAdapter):
         cache_key: Optional[str] = None,
         cache_ttl: int = 0,
     ) -> Optional[Dict[str, Any]]:
+        """
+        Make a rate-limited request to Upstox API.
         
+        IMPORTANT: This method RAISES exceptions on failures so that
+        execute_with_resilience() can properly track failures in the
+        circuit breaker. Catching errors here and returning None would
+        make the circuit breaker think every failed call was a success.
+        """
         if cache_key and cache_ttl > 0:
             cached = self._cache_get(cache_key)
             if cached is not None:
@@ -138,7 +164,7 @@ class UpstoxAdapter(BaseDataAdapter):
                 
         token = _get_token()
         if not token:
-            return None
+            raise RuntimeError("Upstox token not configured")
             
         headers = {
             "Authorization": f"Bearer {token}",
@@ -148,34 +174,26 @@ class UpstoxAdapter(BaseDataAdapter):
         client = _get_client()
         url = f"{BASE_URL}{endpoint}"
         
-        try:
-            async with _request_semaphore:
-                if method.upper() == "GET":
-                    resp = await client.get(url, headers=headers, params=params)
-                else:
-                    resp = await client.request(method, url, headers=headers, params=params)
-                    
-                if resp.status_code == 429:
-                    logger.warning("upstox_rate_limited", endpoint=endpoint)
-                    self._circuit.record_failure()
-                    return None
-                    
-                if resp.status_code != 200:
-                    logger.warning("upstox_api_error", endpoint=endpoint, status=resp.status_code)
-                    return None
-                    
-                data = resp.json()
+        async with _request_semaphore:
+            if method.upper() == "GET":
+                resp = await client.get(url, headers=headers, params=params)
+            else:
+                resp = await client.request(method, url, headers=headers, params=params)
                 
-                if cache_key and cache_ttl > 0:
-                    self._cache_set(cache_key, data, cache_ttl)
-                    
-                return data
-        except httpx.HTTPError as e:
-            logger.error("upstox_http_error", endpoint=endpoint, error=str(e))
-            return None
-        except Exception as e:
-            logger.error("upstox_request_error", endpoint=endpoint, error=str(e))
-            return None
+            if resp.status_code == 429:
+                logger.warning("upstox_rate_limited", endpoint=endpoint)
+                raise RuntimeError(f"Upstox rate limited on {endpoint}")
+                
+            if resp.status_code != 200:
+                logger.warning("upstox_api_error", endpoint=endpoint, status=resp.status_code)
+                raise RuntimeError(f"Upstox API error {resp.status_code} on {endpoint}")
+                
+            data = resp.json()
+            
+            if cache_key and cache_ttl > 0:
+                self._cache_set(cache_key, data, cache_ttl)
+                
+            return data
 
     async def get_quote(self, symbol: str) -> Optional[Dict[str, Any]]:
         async def _fetch():
@@ -183,10 +201,11 @@ class UpstoxAdapter(BaseDataAdapter):
             if not key:
                 return None
                 
+            # Use OHLC endpoint which provides genuine OHLC, last_price, and previous close
             data = await self._throttled_request(
                 "GET",
-                "/v3/market-quote/ltp",
-                params={"instrument_key": key},
+                "/v3/market-quote/ohlc",
+                params={"instrument_key": key, "interval": "1d"},
                 cache_key=f"upstox:quote:{symbol}",
                 cache_ttl=_CACHE_TTL_QUOTE,
             )
@@ -208,8 +227,18 @@ class UpstoxAdapter(BaseDataAdapter):
                 return None
                 
             last_price = quote_data.get("last_price", 0.0)
-            # In LTP endpoint, previous close is 'cp' (closing price)
-            prev_close = quote_data.get("cp", quote_data.get("previous_close", last_price))
+            ohlc = quote_data.get("ohlc", {})
+            if isinstance(ohlc, dict):
+                prev_close = ohlc.get("close", quote_data.get("cp", quote_data.get("previous_close", last_price)))
+                high = ohlc.get("high", quote_data.get("high"))
+                low = ohlc.get("low", quote_data.get("low"))
+                open_price = ohlc.get("open", quote_data.get("open"))
+            else:
+                prev_close = quote_data.get("cp", quote_data.get("previous_close", last_price))
+                high = quote_data.get("high")
+                low = quote_data.get("low")
+                open_price = quote_data.get("open")
+            
             volume = quote_data.get("volume", 0)
             
             if not last_price:
@@ -225,9 +254,9 @@ class UpstoxAdapter(BaseDataAdapter):
                 "change": change,
                 "change_percent": change_percent,
                 "volume": volume,
-                "high": quote_data.get("high", last_price),
-                "low": quote_data.get("low", last_price),
-                "open": quote_data.get("open", prev_close),
+                "high": high,
+                "low": low,
+                "open": open_price,
                 "previous_close": prev_close,
                 "market_cap": None,
                 "pe_ratio": None,
@@ -325,6 +354,37 @@ class UpstoxAdapter(BaseDataAdapter):
 
         return await self.execute_with_resilience(_fetch)
 
+    def _parse_key_ratios(self, ratios_data: Any) -> Dict[str, Any]:
+        """Parse Upstox key-ratios array/dict into canonical metrics dictionary."""
+        if not ratios_data:
+            return {}
+        ratios = ratios_data.get("data", ratios_data) if isinstance(ratios_data, dict) else ratios_data
+        ratio_map = {}
+        if isinstance(ratios, list):
+            for r in ratios:
+                name = (r.get("name") or "").strip()
+                val_str = r.get("company_value")
+                if name and val_str is not None:
+                    try:
+                        clean = str(val_str).replace("%", "").strip()
+                        ratio_map[name] = float(clean)
+                    except (ValueError, TypeError):
+                        ratio_map[name] = val_str
+        elif isinstance(ratios, dict):
+            ratio_map = ratios
+
+        return {
+            "pe_ratio": ratio_map.get("P/E"),
+            "pb_ratio": ratio_map.get("P/B"),
+            "roe": ratio_map.get("ROE"),
+            "roa": ratio_map.get("ROA"),
+            "roce": ratio_map.get("ROCE"),
+            "ev_ebitda": ratio_map.get("EV/EBITDA"),
+            "debt_to_equity": ratio_map.get("Debt/Equity", ratio_map.get("D/E")),
+            "dividend_yield": ratio_map.get("Dividend Yield"),
+            "current_ratio": ratio_map.get("Current Ratio"),
+        }
+
     async def get_company_info(self, symbol: str) -> Optional[Dict[str, Any]]:
         async def _fetch():
             isin = await self._get_isin(symbol)
@@ -342,7 +402,25 @@ class UpstoxAdapter(BaseDataAdapter):
                 return None
                 
             profile = data["data"]
+
+            # Merge fundamentals into metrics so Risk & Research engines have key ratios
+            metrics = {}
+            try:
+                ratios_data = await self._throttled_request(
+                    "GET",
+                    f"/v2/fundamentals/{isin}/key-ratios",
+                    cache_key=f"upstox:ratios:{symbol}",
+                    cache_ttl=_CACHE_TTL_FUNDAMENTALS,
+                )
+                if ratios_data:
+                    metrics = self._parse_key_ratios(ratios_data)
+            except Exception as e:
+                logger.debug("upstox_metrics_enrich_skipped", symbol=symbol, error=str(e))
             
+            roe_val = metrics.get("roe")
+            roa_val = metrics.get("roa")
+            div_val = metrics.get("dividend_yield")
+
             return {
                 "symbol": symbol,
                 "name": profile.get("company_name", symbol),
@@ -352,7 +430,15 @@ class UpstoxAdapter(BaseDataAdapter):
                 "market": "india",
                 "description": profile.get("company_profile"),
                 "website": None,
-                "metrics": {},
+                "metrics": metrics,
+                # Direct canonical fields for DocumentProcessor / RAG
+                "trailingPE": metrics.get("pe_ratio"),
+                "priceToBook": metrics.get("pb_ratio"),
+                "returnOnEquity": (roe_val / 100.0) if isinstance(roe_val, (int, float)) else None,
+                "returnOnAssets": (roa_val / 100.0) if isinstance(roa_val, (int, float)) else None,
+                "debtToEquity": metrics.get("debt_to_equity"),
+                "currentRatio": metrics.get("current_ratio"),
+                "dividendYield": (div_val / 100.0) if isinstance(div_val, (int, float)) else None,
             }
             
         return await self.execute_with_resilience(_fetch)
@@ -373,36 +459,63 @@ class UpstoxAdapter(BaseDataAdapter):
             if not data or "data" not in data:
                 return None
                 
-            ratios = data["data"]
-            # Upstox returns array like: [{"name": "P/E", "company_value": "24.15", "sector_value": "18.46"}, ...]
-            ratio_map = {}
-            if isinstance(ratios, list):
-                for r in ratios:
-                    name = (r.get("name") or "").strip()
-                    val_str = r.get("company_value")
-                    if name and val_str:
-                        try:
-                            # Strip % suffix if present
-                            clean = str(val_str).replace("%", "").strip()
-                            ratio_map[name] = float(clean)
-                        except (ValueError, TypeError):
-                            ratio_map[name] = val_str
-            elif isinstance(ratios, dict):
-                ratio_map = ratios
-                
-            return {
-                "pe_ratio": ratio_map.get("P/E"),
-                "pb_ratio": ratio_map.get("P/B"),
-                "roe": ratio_map.get("ROE"),
-                "roa": ratio_map.get("ROA"),
-                "roce": ratio_map.get("ROCE"),
-                "ev_ebitda": ratio_map.get("EV/EBITDA"),
-                "debt_to_equity": ratio_map.get("Debt/Equity", ratio_map.get("D/E")),
-                "dividend_yield": ratio_map.get("Dividend Yield"),
-                "current_ratio": ratio_map.get("Current Ratio"),
-            }
+            return self._parse_key_ratios(data)
             
         return await self.execute_with_resilience(_fetch)
+
+    def _normalize_statement(self, raw_data: Any) -> Dict[str, List[Dict[str, Any]]]:
+        """
+        Normalize Upstox statement data into canonical format expected by StatementParser:
+        {"annual": [{"period": str, "items": {line_item: float, ...}}], "quarterly": []}
+        """
+        empty = {"annual": [], "quarterly": []}
+        if not raw_data or not isinstance(raw_data, dict):
+            return empty
+
+        data_content = raw_data.get("data", raw_data)
+        if isinstance(data_content, dict) and "annual" in data_content:
+            return data_content
+
+        annual_periods: List[Dict[str, Any]] = []
+        quarterly_periods: List[Dict[str, Any]] = []
+
+        if isinstance(data_content, list):
+            for row in data_content:
+                if isinstance(row, dict):
+                    period = str(row.get("year", row.get("period", row.get("date", "Unknown"))))
+                    items = {}
+                    for k, v in row.items():
+                        if k not in ("year", "period", "date", "type", "time_period"):
+                            try:
+                                items[k] = float(v) if v is not None else None
+                            except (ValueError, TypeError):
+                                items[k] = None
+                    annual_periods.append({"period": period, "items": items})
+        elif isinstance(data_content, dict):
+            records = (
+                data_content.get("income_statement")
+                or data_content.get("balance_sheet")
+                or data_content.get("cash_flow")
+                or data_content.get("history")
+                or []
+            )
+            time_period = data_content.get("time_period", "yearly")
+            target_list = quarterly_periods if time_period == "quarterly" else annual_periods
+
+            if isinstance(records, list):
+                for row in records:
+                    if isinstance(row, dict):
+                        period = str(row.get("year", row.get("period", row.get("date", "Unknown"))))
+                        items = {}
+                        for k, v in row.items():
+                            if k not in ("year", "period", "date", "type", "time_period"):
+                                try:
+                                    items[k] = float(v) if v is not None else None
+                                except (ValueError, TypeError):
+                                    items[k] = None
+                        target_list.append({"period": period, "items": items})
+
+        return {"annual": annual_periods, "quarterly": quarterly_periods}
 
     async def get_financial_statements(self, symbol: str) -> Optional[Dict[str, Any]]:
         async def _fetch():
@@ -411,12 +524,16 @@ class UpstoxAdapter(BaseDataAdapter):
                 return None
                 
             async def fetch_stmt(stmt_type):
-                return await self._throttled_request(
-                    "GET",
-                    f"/v2/fundamentals/{isin}/{stmt_type}",
-                    cache_key=f"upstox:stmt:{stmt_type}:{symbol}",
-                    cache_ttl=_CACHE_TTL_FUNDAMENTALS,
-                )
+                try:
+                    return await self._throttled_request(
+                        "GET",
+                        f"/v2/fundamentals/{isin}/{stmt_type}",
+                        cache_key=f"upstox:stmt:{stmt_type}:{symbol}",
+                        cache_ttl=_CACHE_TTL_FUNDAMENTALS,
+                    )
+                except Exception as e:
+                    logger.debug("upstox_stmt_fetch_error", stmt=stmt_type, error=str(e))
+                    return None
                 
             statements = await asyncio.gather(
                 fetch_stmt("income-statement"),
@@ -425,9 +542,9 @@ class UpstoxAdapter(BaseDataAdapter):
             )
             
             return {
-                "income_statement": statements[0].get("data") if statements[0] else None,
-                "balance_sheet": statements[1].get("data") if statements[1] else None,
-                "cash_flow": statements[2].get("data") if statements[2] else None,
+                "income_statement": self._normalize_statement(statements[0]),
+                "balance_sheet": self._normalize_statement(statements[1]),
+                "cash_flow": self._normalize_statement(statements[2]),
             }
             
         return await self.execute_with_resilience(_fetch)
@@ -465,10 +582,16 @@ class UpstoxAdapter(BaseDataAdapter):
                 ts_ms = item.get("timestamp", 0)
                 ts = ts_ms / 1000.0 if ts_ms > 1e10 else ts_ms  # Handle both ms and seconds
                 result.append({
-                    "headline": item.get("headline", ""),
+                    # Canonical field names expected by DocumentProcessor / RAG
+                    "title": item.get("heading", item.get("headline", "")),
+                    "headline": item.get("heading", item.get("headline", "")),
                     "summary": item.get("summary", ""),
+                    "description": item.get("summary", ""),
+                    "link": item.get("article_link", ""),
                     "url": item.get("article_link", ""),
+                    "publisher": "Upstox News",
                     "source": "Upstox News",
+                    "providerPublishTime": ts,
                     "datetime": ts,
                     "image": item.get("thumbnail"),
                 })
