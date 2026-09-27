@@ -41,6 +41,7 @@ class DataSourceError(ARTHException):
     """Raised when a data source (Yahoo Finance, etc.) fails."""
 
     def __init__(self, source: str, message: str):
+        self.source = source
         super().__init__(
             message=f"Data source '{source}' error: {message}",
             status_code=status.HTTP_502_BAD_GATEWAY,

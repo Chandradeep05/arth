@@ -17,8 +17,8 @@ from fastapi import APIRouter, Depends
 
 from app.config import Settings, get_settings
 from app.core.logging import get_logger
-from app.data.adapters.yahoo import yahoo_adapter
 from app.data.cache import CacheManager
+from app.data.market_data_provider import market_data
 from app.dependencies import get_redis
 from app.engines.risk.engine import RiskEngine
 from app.engines.sentiment.engine import SentimentEngine
@@ -29,7 +29,6 @@ logger = get_logger(__name__)
 router = APIRouter(prefix="/watchlist", tags=["watchlist"])
 
 # Reusable singleton instances (stateless)
-_yahoo = yahoo_adapter
 _risk_engine = RiskEngine()
 _sentiment_engine = SentimentEngine()
 
@@ -47,11 +46,16 @@ async def _fetch_symbol_data(
     # --- Quote ---
     async def _get_quote() -> Dict[str, Any] | None:
         try:
+            async def _fetch(sym: str = None, symbol: str = None):
+                s = sym or symbol
+                res = await market_data.get_quote(s)
+                return res.data if res and res.available else None
+
             data = await cache.get_or_fetch(
                 key=CacheManager.quote_key(symbol),
-                fetch_func=_yahoo.get_quote,
+                fetch_func=_fetch,
                 ttl=settings.redis_cache_ttl_tick,
-                symbol=symbol,
+                sym=symbol,
             )
             if data:
                 data.pop("_cache_hit", None)

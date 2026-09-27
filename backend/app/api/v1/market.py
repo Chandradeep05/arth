@@ -21,10 +21,11 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, Query
 
 from app.config import Settings, get_settings
+import pandas as pd
 from app.core.exceptions import DataSourceError, SymbolNotFoundError
 from app.core.logging import get_logger
-from app.data.adapters.yahoo import yahoo_adapter
 from app.data.cache import CacheManager
+from app.data.market_data_provider import market_data
 from app.dependencies import get_redis
 from app.models.schemas.market import (
     FreshnessMetadata,
@@ -41,71 +42,43 @@ from app.models.schemas.market import (
 logger = get_logger(__name__)
 router = APIRouter(prefix="/market", tags=["market"])
 
-# Shared singleton adapter (single circuit breaker for all routes)
-_yahoo_adapter = yahoo_adapter
+# Alias for backwards compatibility with any internal caller
+_yahoo_adapter = market_data
 
 
 def _raise_data_error(symbol: str):
     """Raise the appropriate error when data source returns no data.
 
-    Checks both the HybridAdapter's health AND the underlying TwelveData
-    adapter's health to detect rate limiting. HybridAdapter.get_health()
-    alone is unreliable because it doesn't record failures from delegated
-    calls — it always reports healthy even when TwelveData is rate-limited.
+    Checks health across underlying providers (Upstox, NSE, TwelveData)
+    to detect rate limiting and provider circuit trips.
     """
-    # Check HybridAdapter health (may always be "healthy" — see Bug #1)
-    health = _yahoo_adapter.get_health()
-    err = health.last_error_message.lower()
+    is_indian = symbol.upper().endswith(('.NS', '.BO'))
+    chain = ["upstox", "nse"] if is_indian else ["twelvedata", "finnhub"]
+    health_dict = market_data.get_health()
 
-    # Also check the underlying TwelveData adapter directly
-    td_in_cooldown = False
-    try:
-        from app.data.adapters.twelvedata import twelvedata_adapter
-        td_health = twelvedata_adapter.get_health()
-        td_err = td_health.last_error_message.lower()
-        td_in_cooldown = getattr(twelvedata_adapter, "is_cooling_down", False) or bool(twelvedata_adapter._cache_get("_rate_limit_cooldown"))
-    except Exception:
-        td_err = ""
-        td_health = None
+    is_rate_limited = False
+    is_circuit_open = False
+    is_recent_failure = False
 
-    # Also check Upstox circuit / rate-limiting if Indian symbol
-    upstox_err = ""
-    is_upstox_limited = False
-    if symbol.upper().endswith(('.NS', '.BO')):
+    for prov in chain:
+        h = health_dict.get(prov, {})
+        err = str(h.get("last_error_message", "")).lower()
+        if any(kw in err for kw in ["rate", "429", "too many", "crumb", "cooldown"]):
+            is_rate_limited = True
+        if h.get("circuit_state", "closed") != "closed":
+            is_circuit_open = True
+        if h.get("failure_count", 0) > 0 and h.get("last_failure") is not None:
+            is_recent_failure = True
+
+    # Also check TwelveData cooldown directly
+    twelvedata_adapter = market_data._twelve
+    if not is_indian and twelvedata_adapter:
         try:
-            from app.data.adapters.upstox import upstox_adapter
-            upstox_health = upstox_adapter.get_health()
-            if upstox_health.circuit_state != "closed" or upstox_health.failure_count > 0:
-                is_upstox_limited = True
-            upstox_err = upstox_health.last_error_message.lower()
+            if getattr(twelvedata_adapter, "is_cooling_down", False) or bool(twelvedata_adapter._cache_get("_rate_limit_cooldown")):
+                is_rate_limited = True
         except Exception:
             pass
 
-    combined_err = f"{err} {td_err} {upstox_err}"
-
-    # Rate-limit keywords in either adapter's error message, active cooldown, or Upstox failure
-    is_rate_limited = (
-        any(kw in combined_err for kw in ["rate", "429", "too many", "crumb", "cooldown"])
-        or td_in_cooldown
-        or is_upstox_limited
-    )
-
-    # Circuit breaker is open or half-open on either adapter
-    is_circuit_open = health.circuit_state != "closed"
-    if td_health and td_health.circuit_state != "closed":
-        is_circuit_open = True
-
-    # Recent failure on either adapter
-    is_recent_failure = (
-        (health.last_failure is not None and health.failure_count > 0)
-        or (td_health and td_health.last_failure is not None and td_health.failure_count > 0)
-    )
-
-    failure_count = health.failure_count + (td_health.failure_count if td_health else 0)
-
-    # If ANY provider is unhealthy, assume data is temporarily unavailable
-    # (not that the symbol doesn't exist). SymbolNotFoundError (404) is only
-    # appropriate when all providers are healthy and genuinely have no data.
     if is_rate_limited or is_circuit_open or is_recent_failure:
         raise DataSourceError(
             source="MarketDataProvider",
@@ -115,7 +88,7 @@ def _raise_data_error(symbol: str):
 
 
 def _make_freshness(
-    source: str = "yahoo_finance",
+    source: str = "MarketDataProvider",
     cache_hit: bool = False,
     settings: Settings | None = None,
 ) -> FreshnessMetadata:
@@ -124,7 +97,7 @@ def _make_freshness(
         source=source,
         timestamp=datetime.now(timezone.utc),
         is_stale=False,
-        delay_label="~15s delayed",
+        delay_label="~15s delayed" if source.lower() in ("yahoo_finance", "twelvedata", "twelve data") else "real-time",
         cache_hit=cache_hit,
     )
 
@@ -145,23 +118,35 @@ async def get_quote(
     """
     cache = CacheManager(redis)
 
+    async def _fetch_quote(sym: str = None, symbol: str = None) -> dict | None:
+        s = sym or symbol
+        res = await market_data.get_quote(s)
+        if res and res.available and isinstance(res.data, dict):
+            d = dict(res.data)
+            d["_source"] = res.source or "MarketDataProvider"
+            return d
+        return None
+
     data = await cache.get_or_fetch(
         key=cache.quote_key(symbol),
-        fetch_func=_yahoo_adapter.get_quote,
+        fetch_func=_fetch_quote,
         ttl=settings.redis_cache_ttl_tick,
-        symbol=symbol,
+        sym=symbol,
     )
 
     if data is None:
         _raise_data_error(symbol)
 
     cache_hit = data.pop("_cache_hit", False)
+    source_name = data.pop("_source", None)
     data.pop("_cached_at", None)
     data.pop("_validation", None)  # Validation metadata from DataQualityValidator
 
+    source_label = market_data.get_source_label(symbol, source_name)
+
     return StockQuoteResponse(
         data=StockQuote(**data),
-        freshness=_make_freshness(cache_hit=cache_hit),
+        freshness=_make_freshness(source=source_label, cache_hit=cache_hit),
     )
 
 
@@ -178,33 +163,52 @@ async def get_ohlcv(
     cache_key = cache.ohlcv_key(symbol, period, interval)
     cache_hit = False
 
-    # Try cache first (stored as {"bars": [...]})
+    # Try cache first (stored as {"bars": [...], "_source": ...})
     cached = await cache.get(cache_key)
     if cached and "bars" in cached:
         cached.pop("_cache_hit", None)
         cached.pop("_cached_at", None)
         bars = cached["bars"]
+        source_name = cached.get("_source")
         cache_hit = True
     else:
-        # Fetch fresh from Yahoo
-        result = await _yahoo_adapter.get_ohlcv(symbol, period=period, interval=interval)
-        if result is None:
+        # Fetch fresh from MarketDataProvider
+        result = await market_data.get_history(symbol, period=period, interval=interval)
+        if result is None or not result.available or result.data is None:
             _raise_data_error(symbol)
-        # Result is now {"bars": [...], "_validation": {...}}
-        if isinstance(result, dict):
-            bars = result.get("bars", result)
-            validation = result.get("_validation")
-        else:
-            bars = result
-            validation = None
+
+        df = result.data
+        source_name = result.source
+        bars = []
+        if isinstance(df, pd.DataFrame):
+            for dt, row in df.iterrows():
+                bars.append({
+                    "date": dt.isoformat() if hasattr(dt, "isoformat") else str(dt),
+                    "open": float(row["Open"]),
+                    "high": float(row["High"]),
+                    "low": float(row["Low"]),
+                    "close": float(row["Close"]),
+                    "volume": int(row["Volume"]),
+                })
+        elif isinstance(df, dict) and "bars" in df:
+            bars = df["bars"]
+        elif isinstance(df, list):
+            bars = df
+
         # Cache as a dict wrapper so CacheManager can add metadata
-        await cache.set(cache_key, {"bars": bars}, ttl=settings.redis_cache_ttl_indicators)
+        await cache.set(
+            cache_key,
+            {"bars": bars, "_source": source_name},
+            ttl=settings.redis_cache_ttl_indicators,
+        )
+
+    source_label = market_data.get_source_label(symbol, source_name)
 
     return OHLCVResponse(
         symbol=symbol.upper(),
         timeframe=interval,
         data=[OHLCVBar(**bar) for bar in bars],
-        freshness=_make_freshness(cache_hit=cache_hit),
+        freshness=_make_freshness(source=source_label, cache_hit=cache_hit),
     )
 
 
@@ -226,8 +230,8 @@ async def get_indices(
         indices_list = cached["indices"]
         cache_hit = True
     else:
-        # Fetch fresh
-        indices_list = await _yahoo_adapter.get_market_indices()
+        # Fetch fresh via MarketDataProvider
+        indices_list = await market_data.get_market_indices()
         if indices_list:
             await cache.set(cache_key, {"indices": indices_list}, ttl=settings.redis_cache_ttl_tick)
         else:
@@ -243,7 +247,7 @@ async def get_indices(
 
     return MarketOverviewResponse(
         indices=parsed_indices,
-        freshness=_make_freshness(cache_hit=cache_hit),
+        freshness=_make_freshness(source="MarketDataProvider", cache_hit=cache_hit),
     )
 
 
@@ -252,7 +256,7 @@ async def search_stocks(
     q: str = Query(description="Search query (stock name or symbol)"),
 ):
     """Search for stocks by name or symbol."""
-    results = await _yahoo_adapter.search(q)
+    results = await market_data.search(q)
 
     return SearchResponse(
         query=q,
@@ -269,23 +273,35 @@ async def get_company_info(
     """Get company fundamentals and metadata."""
     cache = CacheManager(redis)
 
+    async def _fetch_company(sym: str = None, symbol: str = None) -> dict | None:
+        s = sym or symbol
+        res = await market_data.get_company_info(s)
+        if res and res.available and isinstance(res.data, dict):
+            d = dict(res.data)
+            d["_source"] = res.source or "MarketDataProvider"
+            return d
+        return None
+
     data = await cache.get_or_fetch(
         key=cache.company_key(symbol),
-        fetch_func=_yahoo_adapter.get_company_info,
+        fetch_func=_fetch_company,
         ttl=settings.redis_cache_ttl_fundamentals,
-        symbol=symbol,
+        sym=symbol,
     )
 
     if data is None:
         _raise_data_error(symbol)
 
     cache_hit = data.pop("_cache_hit", False)
+    source_name = data.pop("_source", None)
     data.pop("_cached_at", None)
+
+    source_label = market_data.get_source_label(symbol, source_name)
 
     return {
         "success": True,
         "data": data,
-        "freshness": _make_freshness(cache_hit=cache_hit).model_dump(),
+        "freshness": _make_freshness(source=source_label, cache_hit=cache_hit).model_dump(),
     }
 
 
@@ -304,12 +320,27 @@ async def get_indicators(
     cached = await cache.get(cache.indicators_key(symbol))
     was_cached = cached is not None
     if not was_cached:
-        async def _fetch_and_compute(sym: str) -> dict | None:
-            res = await _yahoo_adapter.get_ohlcv(sym, period="3mo", interval="1d")
-            if not res:
+        async def _fetch_and_compute(sym: str = None, symbol: str = None) -> dict | None:
+            s = sym or symbol
+            res = await market_data.get_history(s, period="3mo", interval="1d")
+            if not res or not res.available or res.data is None:
                 return None
-            ohlcv = res.get("bars", res) if isinstance(res, dict) else res
-            return compute_indicators(ohlcv)
+            df = res.data
+            bars = []
+            if isinstance(df, pd.DataFrame):
+                for _, row in df.iterrows():
+                    bars.append({
+                        "open": float(row["Open"]),
+                        "high": float(row["High"]),
+                        "low": float(row["Low"]),
+                        "close": float(row["Close"]),
+                        "volume": int(row["Volume"]),
+                    })
+            elif isinstance(df, dict) and "bars" in df:
+                bars = df["bars"]
+            elif isinstance(df, list):
+                bars = df
+            return compute_indicators(bars)
 
         indicators = await cache.get_or_fetch(
             key=cache.indicators_key(symbol),
@@ -329,10 +360,12 @@ async def get_indicators(
     indicators.pop("_cache_hit", None)
     indicators.pop("_cached_at", None)
 
+    source_label = market_data.get_source_label(symbol)
+
     return {
         "success": True,
         "data": {"symbol": symbol.upper(), **indicators},
-        "freshness": _make_freshness(cache_hit=was_cached).model_dump(),
+        "freshness": _make_freshness(source=source_label, cache_hit=was_cached).model_dump(),
     }
 
 
@@ -342,12 +375,10 @@ async def batch_quotes(
     redis=Depends(get_redis),
     settings: Settings = Depends(get_settings),
 ):
-    """Batch-fetch quotes for multiple symbols in ONE Yahoo Finance call.
+    """Batch-fetch quotes for multiple symbols.
 
     Body: {"symbols": ["RELIANCE.NS", "TCS.NS", ...]}
 
-    This is the FAST path for the dashboard — uses yf.download() internally
-    which makes a single HTTP request to Yahoo for all symbols.
     Results are cached for 30 seconds.
     """
     symbols = request.get("symbols", [])
@@ -369,11 +400,11 @@ async def batch_quotes(
             "success": True,
             "data": cached["quotes"],
             "count": len(cached["quotes"]),
-            "freshness": _make_freshness(cache_hit=True).model_dump(),
+            "freshness": _make_freshness(source="MarketDataProvider", cache_hit=True).model_dump(),
         }
 
-    # Fetch fresh — single yf.download() call
-    quotes = await _yahoo_adapter.get_batch_quotes(symbols)
+    # Fetch fresh via market_data
+    quotes = await market_data.get_batch_quotes(symbols)
 
     if quotes:
         await cache.set(cache_key, {"quotes": quotes}, ttl=30)
@@ -382,15 +413,22 @@ async def batch_quotes(
         "success": True,
         "data": quotes,
         "count": len(quotes),
-        "freshness": _make_freshness(cache_hit=False).model_dump(),
+        "freshness": _make_freshness(source="MarketDataProvider", cache_hit=False).model_dump(),
     }
 
 
 @router.get("/health")
 async def market_health():
     """Health check for the market data subsystem."""
-    adapter_health = _yahoo_adapter.get_health()
+    health_dict = market_data.get_health()
+    all_healthy = any(
+        h.get("is_healthy", False) if isinstance(h, dict) else getattr(h, "is_healthy", False)
+        for h in health_dict.values()
+    ) if health_dict else False
+
+    primary_health = health_dict.get("upstox") or health_dict.get("twelvedata") or {}
     return {
-        "adapter": adapter_health.__dict__,
-        "status": "healthy" if adapter_health.is_healthy else "degraded",
+        "adapter": primary_health,
+        "providers": health_dict,
+        "status": "healthy" if all_healthy else "degraded",
     }

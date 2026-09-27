@@ -209,7 +209,7 @@ class PredictionModel:
                     "generated_at": datetime.now(timezone.utc).isoformat(),
                 }
 
-                self._forecast_cache[sym] = (result, now + 600)  # 10 min TTL
+                self._forecast_cache[sym] = (result, time.time() + 600)  # 10 min TTL from completion
                 return result
 
         except Exception as e:
