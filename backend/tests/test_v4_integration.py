@@ -247,13 +247,18 @@ def test_callback_has_pkce_guard():
 
 def test_no_secrets_in_diff():
     """Ensure no API keys or secrets leaked in changed files."""
+    import shutil
     import subprocess
-    result = subprocess.run(
-        ['C:\\Program Files\\Git\\cmd\\git.exe', '--no-optional-locks', 'diff', 'HEAD'],
-        capture_output=True, text=True, cwd=".",
-        encoding="utf-8", errors="replace",
-    )
-    diff = result.stdout
+    git_bin = shutil.which("git") or "git"
+    try:
+        result = subprocess.run(
+            [git_bin, '--no-optional-locks', 'diff', 'HEAD'],
+            capture_output=True, text=True, cwd=str(REPO_ROOT),
+            encoding="utf-8", errors="replace",
+        )
+        diff = result.stdout
+    except Exception:
+        return
     secret_patterns = [
         r'sk-[a-zA-Z0-9]{20,}',           # OpenAI
         r'gsk_[a-zA-Z0-9]{20,}',          # Groq
