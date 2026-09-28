@@ -256,7 +256,7 @@ export default function FinancialsPage() {
       case 'ratios': {
         const rows = ratiosToTable(ratiosData?.ratios as Record<string, unknown> | undefined);
         return rows.length > 0 ? (
-          <StatementTable data={rows} title="Financial Ratios" currency={statementCurrency} />
+          <StatementTable data={rows} title="Financial Ratios" currency={statementCurrency} mode="ratio" />
         ) : (
           <EmptyTab />
         );

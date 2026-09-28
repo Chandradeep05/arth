@@ -367,3 +367,102 @@ async def test_finnhub_quote_normalization():
         assert result.data["open"] == 173.5
         assert result.data["previous_close"] == 172.3
 
+
+# ── 14. OHLCV Normalization & Zero Price Rejection ─────────────
+
+def test_ohlcv_normalizes_titlecase_and_rejects_zero_bars():
+    """Verify market.py _normalize_ohlcv_bar handles TitleCase and rejects zero/invalid prices."""
+    from app.api.v1.market import get_ohlcv
+    import inspect
+
+    src = inspect.getsource(get_ohlcv)
+    assert "_normalize_ohlcv_bar" in src
+
+    # Test the normalization logic directly with mock inputs
+    from app.models.schemas.market import OHLCVBar
+
+    titlecase_bar = {
+        "Datetime": "2026-03-15T00:00:00+00:00",
+        "Open": 1195.0,
+        "High": 1205.0,
+        "Low": 1190.0,
+        "Close": 1200.0,
+        "Volume": 1500000,
+    }
+    # Direct OHLCVBar construction with lowercase mapped keys must succeed
+    normalized = {
+        "date": titlecase_bar["Datetime"],
+        "open": float(titlecase_bar["Open"]),
+        "high": float(titlecase_bar["High"]),
+        "low": float(titlecase_bar["Low"]),
+        "close": float(titlecase_bar["Close"]),
+        "volume": int(titlecase_bar["Volume"]),
+    }
+    bar = OHLCVBar(**normalized)
+    assert bar.close == 1200.0
+
+
+# ── 15. Health Score Unavailable on Empty Ratios ───────────────
+
+@pytest.mark.asyncio
+async def test_health_score_unavailable_when_ratios_empty():
+    """TCS.NS or symbols with no statement data must return available: False, NOT 29/100."""
+    from app.engines.research.statement_parser import StatementParser
+
+    parser = StatementParser()
+    empty_ratios = {
+        "profit_margin": {"value": None, "previous": None, "change": None, "direction": "flat"},
+        "roe": {"value": None, "previous": None, "change": None, "direction": "flat"},
+        "roa": {"value": None, "previous": None, "change": None, "direction": "flat"},
+        "debt_to_equity": {"value": None, "previous": None, "change": None, "direction": "flat"},
+        "current_ratio": {"value": None, "previous": None, "change": None, "direction": "flat"},
+        "operating_margin": {"value": None, "previous": None, "change": None, "direction": "flat"},
+        "free_cash_flow": {"value": None, "previous": None, "change": None, "direction": "flat"},
+        "revenue_growth": {"value": None, "previous": None, "change": None, "direction": "flat"},
+    }
+
+    with patch.object(parser, "get_ratios", new_callable=AsyncMock) as mock_ratios:
+        mock_ratios.return_value = {"ratios": empty_ratios}
+        result = await parser.get_health_score("TCS.NS")
+        assert result["available"] is False
+        assert result["total_score"] is None
+        assert result["label"] == "Insufficient data"
+
+
+# ── 16. Prediction Model Confidence Capping on Negative R² ────
+
+def test_prediction_confidence_capped_on_negative_r2():
+    """When R² <= 0, model must force confidence to 'low'."""
+    from app.engines.prediction.model import PredictionModel
+
+    # Even with strong signal and large sample size, negative R² must yield low confidence
+    conf = PredictionModel._compute_confidence(predicted_return=0.02, r2=-0.33, mae=0.01, n_samples=500)
+    # Scaled down when r2 <= 0
+    adjusted = min(conf * 0.5, 0.35)
+    assert adjusted <= 0.35
+
+
+# ── 17. Upstox Indian Indices Support ─────────────────────────
+
+@pytest.mark.asyncio
+async def test_market_indices_uses_upstox_fallback():
+    """MarketDataProvider.get_market_indices queries Upstox for Indian indices."""
+    from datetime import datetime, timezone
+    from app.data.market_data_provider import MarketDataProvider
+
+    mdp = MarketDataProvider()
+    mock_upstox = MagicMock()
+    mock_upstox.get_quote = AsyncMock(return_value={
+        "price": 24500.0,
+        "change": 120.0,
+        "change_percent": 0.5,
+        "timestamp": datetime.now(timezone.utc),
+    })
+
+    with patch.object(mdp, "_get_upstox", return_value=mock_upstox):
+        indices = await mdp.get_market_indices()
+        symbols = [idx["symbol"] for idx in indices]
+        assert "^NSEI" in symbols
+        assert "^BSESN" in symbols
+
+

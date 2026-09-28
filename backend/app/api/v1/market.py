@@ -17,6 +17,7 @@ All responses include:
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import math
 
 from fastapi import APIRouter, Depends, Query
 
@@ -163,12 +164,62 @@ async def get_ohlcv(
     cache_key = cache.ohlcv_key(symbol, period, interval)
     cache_hit = False
 
+    def _normalize_ohlcv_bar(raw: dict) -> dict | None:
+        if not isinstance(raw, dict):
+            return None
+        dt_val = (
+            raw.get("date")
+            or raw.get("Datetime")
+            or raw.get("datetime")
+            or raw.get("time")
+            or raw.get("timestamp")
+            or raw.get("t")
+        )
+        if dt_val is None:
+            return None
+        date_str = dt_val.isoformat() if hasattr(dt_val, "isoformat") else str(dt_val)
+
+        def _val(*keys, fallback=0.0):
+            for k in keys:
+                v = raw.get(k)
+                if v is not None and v != "":
+                    try:
+                        f = float(v)
+                        if not (math.isnan(f) or math.isinf(f)):
+                            return f
+                    except (ValueError, TypeError):
+                        pass
+            return fallback
+
+        close = _val("close", "Close", "c")
+        if close <= 0:
+            return None
+
+        open_p = _val("open", "Open", "o", fallback=close)
+        high_p = _val("high", "High", "h", fallback=max(open_p, close))
+        low_p = _val("low", "Low", "l", fallback=min(open_p, close))
+        vol = int(_val("volume", "Volume", "v", "vol", fallback=0))
+
+        if open_p <= 0 or high_p <= 0 or low_p <= 0:
+            return None
+
+        return {
+            "date": date_str,
+            "open": round(open_p, 2),
+            "high": round(high_p, 2),
+            "low": round(low_p, 2),
+            "close": round(close, 2),
+            "volume": max(0, vol),
+            "adj_close": None,
+        }
+
     # Try cache first (stored as {"bars": [...], "_source": ...})
     cached = await cache.get(cache_key)
     if cached and "bars" in cached:
         cached.pop("_cache_hit", None)
         cached.pop("_cached_at", None)
-        bars = cached["bars"]
+        raw_bars = cached["bars"]
+        bars = [_normalize_ohlcv_bar(b) for b in raw_bars if _normalize_ohlcv_bar(b)] if isinstance(raw_bars, list) else []
         source_name = cached.get("_source")
         cache_hit = True
     else:
@@ -182,18 +233,22 @@ async def get_ohlcv(
         bars = []
         if isinstance(df, pd.DataFrame):
             for dt, row in df.iterrows():
-                bars.append({
-                    "date": dt.isoformat() if hasattr(dt, "isoformat") else str(dt),
-                    "open": float(row["Open"]),
-                    "high": float(row["High"]),
-                    "low": float(row["Low"]),
-                    "close": float(row["Close"]),
-                    "volume": int(row["Volume"]),
-                })
+                dt_str = dt.isoformat() if hasattr(dt, "isoformat") else str(dt)
+                bar_dict = {
+                    "date": dt_str,
+                    "open": row.get("Open") if "Open" in row else row.get("open"),
+                    "high": row.get("High") if "High" in row else row.get("high"),
+                    "low": row.get("Low") if "Low" in row else row.get("low"),
+                    "close": row.get("Close") if "Close" in row else row.get("close"),
+                    "volume": row.get("Volume") if "Volume" in row else row.get("volume"),
+                }
+                norm = _normalize_ohlcv_bar(bar_dict)
+                if norm:
+                    bars.append(norm)
         elif isinstance(df, dict) and "bars" in df:
-            bars = df["bars"]
+            bars = [_normalize_ohlcv_bar(b) for b in df["bars"] if _normalize_ohlcv_bar(b)]
         elif isinstance(df, list):
-            bars = df
+            bars = [_normalize_ohlcv_bar(b) for b in df if _normalize_ohlcv_bar(b)]
 
         # Cache as a dict wrapper so CacheManager can add metadata
         await cache.set(
@@ -204,10 +259,19 @@ async def get_ohlcv(
 
     source_label = market_data.get_source_label(symbol, source_name)
 
+    valid_bars = []
+    for b in bars:
+        norm = _normalize_ohlcv_bar(b)
+        if norm:
+            try:
+                valid_bars.append(OHLCVBar(**norm))
+            except Exception:
+                continue
+
     return OHLCVResponse(
         symbol=symbol.upper(),
         timeframe=interval,
-        data=[OHLCVBar(**bar) for bar in bars],
+        data=valid_bars,
         freshness=_make_freshness(source=source_label, cache_hit=cache_hit),
     )
 

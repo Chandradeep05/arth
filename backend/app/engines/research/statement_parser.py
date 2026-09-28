@@ -356,9 +356,8 @@ class StatementParser:
         ratios = ratios_data.get("ratios", {})
 
         # If no financial data is available, return unavailable instead of a fake score
-        # Keys must match what get_ratios() actually produces: roe, roa, free_cash_flow
         all_ratios_missing = all(
-            ratios.get(k) is None
+            self._val(ratios.get(k)) is None
             for k in ('profit_margin', 'roe', 'roa',
                       'debt_to_equity', 'current_ratio', 'operating_margin',
                       'free_cash_flow', 'revenue_growth')
@@ -366,9 +365,16 @@ class StatementParser:
         if all_ratios_missing:
             return {
                 'available': False,
+                'symbol': symbol.upper(),
                 'total_score': None,
                 'label': 'Insufficient data',
-                'reason': f'No financial ratio data available for this symbol.',
+                'reason': f'No financial ratio data available for {symbol.upper()}.',
+                'breakdown': {
+                    'profitability': {'score': None, 'factors': ['Financial statements unavailable']},
+                    'solvency': {'score': None, 'factors': ['Financial statements unavailable']},
+                    'efficiency': {'score': None, 'factors': ['Financial statements unavailable']},
+                    'growth': {'score': None, 'factors': ['Financial statements unavailable']},
+                },
                 'categories': [],
             }
 

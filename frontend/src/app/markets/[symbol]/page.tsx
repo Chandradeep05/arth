@@ -31,12 +31,14 @@ function formatNumber(n: number | null | undefined): string {
   return new Intl.NumberFormat('en-IN', { maximumFractionDigits: 2 }).format(n);
 }
 
-function formatMarketCap(n: number | null, currencySymbol = '$'): string {
-  if (!n) return 'N/A';
-  if (n >= 1e12) return `${currencySymbol}${(n / 1e12).toFixed(2)}T`;
-  if (n >= 1e9) return `${currencySymbol}${(n / 1e9).toFixed(2)}B`;
-  if (n >= 1e7) return `${currencySymbol}${(n / 1e7).toFixed(2)}Cr`;
-  return `${currencySymbol}${formatNumber(n)}`;
+function formatMarketCap(n: number | null | undefined, currencySymbol = '$'): string {
+  if (n == null || isNaN(Number(n)) || Number(n) <= 0) return 'N/A';
+  const val = Number(n);
+  if (val >= 1e12) return `${currencySymbol}${(val / 1e12).toFixed(2)}T`;
+  if (val >= 1e9) return `${currencySymbol}${(val / 1e9).toFixed(2)}B`;
+  if (val >= 1e7) return `${currencySymbol}${(val / 1e7).toFixed(2)}Cr`;
+  if (val >= 1e6) return `${currencySymbol}${(val / 1e6).toFixed(1)}M`;
+  return `${currencySymbol}${formatNumber(val)}`;
 }
 
 export default function StockDetailPage() {
@@ -233,7 +235,7 @@ export default function StockDetailPage() {
                 </div>
                 <div className="p-2 rounded-lg bg-white/[0.02] border border-white/[0.04]">
                   <span className="text-[10px] text-[var(--text-dim)] uppercase tracking-wider block">Mkt Cap</span>
-                  <span className="text-white font-medium">{formatMarketCap(quote.market_cap, currency)}</span>
+                  <span className="text-white font-medium">{formatMarketCap(quote.market_cap ?? company?.market_cap ?? company?.metrics?.market_cap, currency)}</span>
                 </div>
                 <div className="p-2 rounded-lg bg-white/[0.02] border border-white/[0.04]">
                   <span className="text-[10px] text-[var(--text-dim)] uppercase tracking-wider block">PE Ratio</span>

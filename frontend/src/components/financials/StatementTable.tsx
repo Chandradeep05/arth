@@ -14,9 +14,44 @@ export interface StatementTableProps {
   className?: string;
   /** Defaults to 'INR' to preserve existing behavior for existing callers. */
   currency?: 'INR' | 'USD';
+  /** 'statement' formats values as currency amounts; 'ratio' formats as % or multiples. */
+  mode?: 'statement' | 'ratio';
 }
 
 /* ── Number Formatting ── */
+function formatRatio(key: string, value: unknown, currency: 'INR' | 'USD' = 'INR'): string {
+  if (value === null || value === undefined || value === '') return '—';
+  const num = typeof value === 'string' ? parseFloat(value) : Number(value);
+  if (isNaN(num)) return String(value);
+
+  const k = key.toLowerCase();
+
+  // Currency amounts inside ratio tables (e.g. Free Cash Flow)
+  if (k.includes('cash flow') || k.includes('fcf') || Math.abs(num) >= 1e6) {
+    return formatNumber(num, currency);
+  }
+
+  // Percentage ratios (margins, growth, returns, yield)
+  if (
+    k.includes('margin') ||
+    k.includes('growth') ||
+    k.includes('roe') ||
+    k.includes('roa') ||
+    k.includes('roic') ||
+    k.includes('yield') ||
+    k.includes('payout') ||
+    k.includes('return')
+  ) {
+    // If represented as decimal fraction (0.65 for 65%), convert to percent
+    const pct = Math.abs(num) <= 2.0 && num !== 0 ? num * 100 : num;
+    const sign = pct > 0 ? '+' : '';
+    return `${sign}${pct.toFixed(1)}%`;
+  }
+
+  // Multiples (current ratio, quick ratio, debt/equity, turnover)
+  return `${num.toFixed(2)}x`;
+}
+
 function formatNumber(value: unknown, currency: 'INR' | 'USD' = 'INR'): string {
   if (value === null || value === undefined || value === '') return '—';
   const num = typeof value === 'string' ? parseFloat(value) : (value as number);
@@ -62,7 +97,7 @@ function ChangeCell({ change }: { change: number | null | undefined }) {
 }
 
 /* ── Component ── */
-export default function StatementTable({ data, title, className = '', currency = 'INR' }: StatementTableProps) {
+export default function StatementTable({ data, title, className = '', currency = 'INR', mode = 'statement' }: StatementTableProps) {
   if (!data || data.length === 0) {
     return (
       <div className={`card p-6 ${className}`}>
@@ -127,7 +162,9 @@ export default function StatementTable({ data, title, className = '', currency =
                       key={period.period}
                       className="text-right font-mono text-xs text-[var(--text)]"
                     >
-                      {formatNumber(period[key], currency)}
+                      {mode === 'ratio'
+                        ? formatRatio(key, period[key], currency)
+                        : formatNumber(period[key], currency)}
                     </td>
                   ))}
                   {periods.length >= 2 && (

@@ -152,11 +152,17 @@ class PredictionModel:
                 confidence_score = self._compute_confidence(
                     predicted_return, r2, mae, len(X_train)
                 )
-                confidence_label = (
-                    "high" if confidence_score > 0.65
-                    else "medium" if confidence_score > 0.4
-                    else "low"
-                )
+                # If R² is non-positive, model has no statistical edge over predicting the mean.
+                # Force confidence strictly to 'low' and scale down confidence score.
+                if r2 <= 0:
+                    confidence_label = "low"
+                    confidence_score = min(confidence_score * 0.5, 0.35)
+                else:
+                    confidence_label = (
+                        "high" if confidence_score > 0.65
+                        else "medium" if confidence_score > 0.4
+                        else "low"
+                    )
 
                 # Direction
                 if predicted_return > 0.005:
@@ -197,6 +203,7 @@ class PredictionModel:
                         "validation_samples": len(y_pred_val),
                         "r2_score": round(r2, 4),
                         "mae": round(mae, 6),
+                        "fit_quality": "poor" if r2 < 0 else "moderate" if r2 < 0.1 else "good",
                         "latest_close": latest_close,
                         "latest_close_timestamp": latest_close_ts,
                     },

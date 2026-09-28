@@ -99,6 +99,21 @@ export default function PriceChart({ data, symbol, height = 420, activeTimeframe
       })
       .filter((bar) => {
         if (isNaN(bar.time) || bar.time <= 0 || seenTimes.has(bar.time)) return false;
+        if (
+          !Number.isFinite(bar.open) ||
+          !Number.isFinite(bar.high) ||
+          !Number.isFinite(bar.low) ||
+          !Number.isFinite(bar.close) ||
+          bar.open <= 0 ||
+          bar.high <= 0 ||
+          bar.low <= 0 ||
+          bar.close <= 0
+        ) {
+          return false;
+        }
+        // Ensure high/low bound open/close correctly
+        bar.high = Math.max(bar.high, bar.open, bar.close);
+        bar.low = Math.min(bar.low, bar.open, bar.close);
         seenTimes.add(bar.time);
         return true;
       })

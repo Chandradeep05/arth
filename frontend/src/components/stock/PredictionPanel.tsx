@@ -220,19 +220,29 @@ export default function PredictionPanel({ symbol }: { symbol: string }) {
                     className="text-xs font-mono font-bold uppercase tracking-wider"
                     style={{ color: confidenceColor(data.prediction.confidence) }}
                   >
-                    {data.prediction.confidence} confidence
+                    {data.model_info && data.model_info.r2_score <= 0 ? 'low confidence' : `${data.prediction.confidence} confidence`}
                   </div>
                   <div className="w-24 h-1.5 bg-white/[0.06] rounded-full mt-1.5 overflow-hidden">
                     <div
                       className="h-full rounded-full transition-all"
                       style={{
-                        width: `${data.prediction.confidence_score * 100}%`,
+                        width: `${Math.min(data.prediction.confidence_score * 100, 35)}%`,
                         background: confidenceColor(data.prediction.confidence),
                       }}
                     />
                   </div>
                 </div>
               </div>
+
+              {/* Negative R² Warning Banner */}
+              {data.model_info && data.model_info.r2_score <= 0 && (
+                <div className="flex items-center gap-2 p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-300 text-xs">
+                  <AlertTriangle className="w-4 h-4 shrink-0 text-amber-400" />
+                  <span className="text-[11px] leading-relaxed">
+                    <strong>Low Predictive Fit (R² = {Number(data.model_info.r2_score).toFixed(4)}):</strong> Historical walk-forward fit is below baseline mean for this symbol. Consider this forecast exploratory and treat with caution.
+                  </span>
+                </div>
+              )}
 
               {/* Regime Badge */}
               {data.regime && (

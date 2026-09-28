@@ -88,14 +88,50 @@ export default function WatchlistPage() {
       
       if (items.length > 0) {
         const symbols = items.map(i => i.symbol);
-        const marketRes = await api.post<any>('/api/v1/market/batch-quotes', { symbols });
-        const quotesArray = marketRes?.data || marketRes || [];
         const quotesMap: Record<string, any> = {};
-        if (Array.isArray(quotesArray)) {
-          quotesArray.forEach((q: any) => {
-            if (q.symbol) quotesMap[q.symbol] = q;
-          });
+
+        // Primary: use /api/v1/watchlist/batch which supplies quote + risk + sentiment together
+        try {
+          const batchRes = await api.post<any>('/api/v1/watchlist/batch', { symbols });
+          const batchData = batchRes?.data || [];
+          if (Array.isArray(batchData)) {
+            batchData.forEach((entry: any) => {
+              if (entry.symbol) {
+                quotesMap[entry.symbol] = {
+                  ...(entry.quote || {}),
+                  risk_score: entry.risk_score,
+                  risk_label: entry.risk_label ? entry.risk_label.replace(/\s+Risk$/i, '') : undefined,
+                  sentiment_label: entry.sentiment_label,
+                  symbol: entry.symbol,
+                };
+              }
+            });
+          }
+        } catch (batchErr) {
+          console.warn('Watchlist batch failed, falling back to batch-quotes', batchErr);
         }
+
+        // Fallback: fill any missing quotes via /api/v1/market/batch-quotes
+        const missingSymbols = symbols.filter(s => !quotesMap[s] || quotesMap[s].price == null);
+        if (missingSymbols.length > 0) {
+          try {
+            const marketRes = await api.post<any>('/api/v1/market/batch-quotes', { symbols: missingSymbols });
+            const quotesArray = marketRes?.data || marketRes || [];
+            if (Array.isArray(quotesArray)) {
+              quotesArray.forEach((q: any) => {
+                if (q.symbol) {
+                  quotesMap[q.symbol] = {
+                    ...(quotesMap[q.symbol] || {}),
+                    ...q,
+                  };
+                }
+              });
+            }
+          } catch (mErr) {
+            console.warn('Market batch-quotes fallback failed', mErr);
+          }
+        }
+
         setMarketData(quotesMap);
       } else {
         setMarketData({});
@@ -126,6 +162,7 @@ export default function WatchlistPage() {
             ...(next[sym] || {}),
             price: update.price,
             change: update.change,
+            change_percent: update.change_percent,
             change_pct: update.change_percent,
             volume: update.volume,
             day_high: update.high,
@@ -200,16 +237,21 @@ export default function WatchlistPage() {
   const tableData: WatchlistItem[] = useMemo(() => {
     return apiItems.map(item => {
       const quote = marketData[item.symbol] || {};
+      const changePctVal = quote.change_percent ?? quote.change_pct ?? quote.changePercent;
       return {
         symbol: item.symbol,
         price: quote.price != null ? Number(quote.price) : 0,
         change: quote.change != null ? Number(quote.change) : undefined,
-        changePct: quote.change_pct != null ? Number(quote.change_pct) : undefined,
+        changePct: changePctVal != null ? Number(changePctVal) : undefined,
+        change_percent: changePctVal != null ? Number(changePctVal) : undefined,
         volume: quote.volume != null ? Number(quote.volume) : undefined,
         dayHigh: quote.day_high != null ? Number(quote.day_high) : undefined,
         dayLow: quote.day_low != null ? Number(quote.day_low) : undefined,
         marketCap: quote.market_cap != null ? Number(quote.market_cap) : undefined,
         prevClose: quote.prev_close != null ? Number(quote.prev_close) : undefined,
+        risk_score: quote.risk_score != null ? Number(quote.risk_score) : undefined,
+        risk_label: quote.risk_label || undefined,
+        sentiment: quote.sentiment_label || quote.sentiment || undefined,
         timestamp: quote.timestamp || new Date().toISOString()
       };
     });

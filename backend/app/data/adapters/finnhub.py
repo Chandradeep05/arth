@@ -129,7 +129,7 @@ class FinnhubAdapter(BaseDataAdapter):
             "country": raw.get("country", ""),
             "sector": industry,      # Best available mapping from Finnhub
             "industry": industry,
-            "market_cap": raw.get("marketCapitalization"),
+            "market_cap": (float(raw.get("marketCapitalization")) * 1_000_000) if raw.get("marketCapitalization") is not None else None,
             "share_outstanding": raw.get("shareOutstanding"),
             "description": "",       # Finnhub profile2 does not include description
             "weburl": raw.get("weburl", ""),

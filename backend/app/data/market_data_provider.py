@@ -395,7 +395,7 @@ class MarketDataProvider:
         return results
 
     async def get_market_indices(self) -> List[Dict[str, Any]]:
-        """Combine US indices (TwelveData) + Indian indices (NSE/Upstox)."""
+        """Combine US indices (TwelveData) + Indian indices (Upstox/NSE)."""
         results = []
         if self._twelve:
             try:
@@ -404,13 +404,34 @@ class MarketDataProvider:
                     results.extend(td_indices)
             except Exception as e:
                 logger.warning("market_data_twelve_indices_failed", error=str(e))
-        if self._nse:
+
+        indian_indices = []
+        upstox = self._get_upstox()
+        if upstox:
+            try:
+                for idx_sym, idx_name in [("^NSEI", "NIFTY 50"), ("^BSESN", "SENSEX")]:
+                    q = await upstox.get_quote(idx_sym)
+                    if q and q.get("price"):
+                        indian_indices.append({
+                            "symbol": idx_sym,
+                            "name": idx_name,
+                            "price": q.get("price"),
+                            "change": q.get("change"),
+                            "change_percent": q.get("change_percent"),
+                            "timestamp": q.get("timestamp"),
+                        })
+            except Exception as e:
+                logger.warning("market_data_upstox_indices_failed", error=str(e))
+
+        if not indian_indices and self._nse:
             try:
                 nse_indices = await self._nse.get_market_indices()
                 if nse_indices:
-                    results.extend(nse_indices)
+                    indian_indices.extend(nse_indices)
             except Exception as e:
                 logger.warning("market_data_nse_indices_failed", error=str(e))
+
+        results.extend(indian_indices)
         return results
 
     async def get_batch_quotes(self, symbols: List[str]) -> List[Dict[str, Any]]:

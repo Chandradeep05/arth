@@ -104,10 +104,19 @@ class RiskEngine:
             if not result.available or result.data is None:
                 return None
             df = result.data
-            # Serialize DataFrame to cache-safe dict-of-records
+            # Serialize DataFrame to cache-safe canonical dict-of-records matching OHLCVBar
             if isinstance(df, pd.DataFrame) and not df.empty:
-                records = df.reset_index().to_dict(orient="records")
-                return {"bars": records}
+                bars = []
+                for dt, row in df.iterrows():
+                    bars.append({
+                        "date": dt.isoformat() if hasattr(dt, "isoformat") else str(dt),
+                        "open": float(row["Open"]),
+                        "high": float(row["High"]),
+                        "low": float(row["Low"]),
+                        "close": float(row["Close"]),
+                        "volume": int(row["Volume"]),
+                    })
+                return {"bars": bars}
             return None
 
         company = await cache.get_or_fetch(
