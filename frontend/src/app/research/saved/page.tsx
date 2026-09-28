@@ -98,7 +98,7 @@ export default function SavedResearchPage() {
             Authentication is required to access your research portfolio.
           </p>
           <a
-            href="/auth/login"
+            href="/login"
             className="inline-block mt-4 px-5 py-2 rounded-lg bg-[var(--accent)] text-black font-bold text-xs hover:opacity-90 transition-opacity"
           >
             Sign In

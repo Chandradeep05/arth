@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { useState } from "react";
 import { supabase } from "@/lib/supabase/client";
@@ -11,6 +11,13 @@ export default function LoginPage() {
   async function handleGoogleSignIn() {
     setLoading(true);
     setError(null);
+    try {
+      const searchParams = new URLSearchParams(window.location.search);
+      const redirectParam = searchParams.get("redirect") || "/";
+      sessionStorage.setItem("auth_redirect", redirectParam);
+    } catch {
+      // ignore
+    }
     const { error } = await supabase.auth.signInWithOAuth({
       provider: "google",
       options: {

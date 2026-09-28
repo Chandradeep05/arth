@@ -121,36 +121,41 @@ class Backtester:
                     random_state=42,
                 )
 
-                for i in range(test_start, len(X)):
-                    # Purge gap: skip the last `horizon` rows to prevent
-                    # overlapping target leakage (y[i-1] shares future prices with y[i])
-                    X_train = X.iloc[:i - horizon]
-                    y_train = y.iloc[:i - horizon]
+                def _run_fits() -> List[Dict[str, Any]]:
+                    res = []
+                    for i in range(test_start, len(X)):
+                        # Purge gap: skip the last `horizon` rows to prevent
+                        # overlapping target leakage (y[i-1] shares future prices with y[i])
+                        X_train = X.iloc[:i - horizon]
+                        y_train = y.iloc[:i - horizon]
 
-                    model.fit(X_train, y_train, verbose=False)
+                        model.fit(X_train, y_train, verbose=False)
 
-                    pred = float(model.predict(X.iloc[[i]])[0])
-                    actual = float(y.iloc[i])
+                        pred = float(model.predict(X.iloc[[i]])[0])
+                        actual = float(y.iloc[i])
 
-                    # Directional accuracy
-                    correct = (pred > 0 and actual > 0) or (pred < 0 and actual < 0) or (abs(pred) < 0.001 and abs(actual) < 0.001)
+                        # Directional accuracy
+                        correct = (pred > 0 and actual > 0) or (pred < 0 and actual < 0) or (abs(pred) < 0.001 and abs(actual) < 0.001)
 
-                    # Confidence band
-                    abs_pred = abs(pred)
-                    if abs_pred > 0.02:
-                        band = "high"
-                    elif abs_pred > 0.005:
-                        band = "medium"
-                    else:
-                        band = "low"
+                        # Confidence band
+                        abs_pred = abs(pred)
+                        if abs_pred > 0.02:
+                            band = "high"
+                        elif abs_pred > 0.005:
+                            band = "medium"
+                        else:
+                            band = "low"
 
-                    results.append({
-                        "predicted": round(pred * 100, 4),
-                        "actual": round(actual * 100, 4),
-                        "correct_direction": correct,
-                        "confidence_band": band,
-                        "error_pct": round(abs(pred - actual) * 100, 4),
-                    })
+                        res.append({
+                            "predicted": round(pred * 100, 4),
+                            "actual": round(actual * 100, 4),
+                            "correct_direction": correct,
+                            "confidence_band": band,
+                            "error_pct": round(abs(pred - actual) * 100, 4),
+                        })
+                    return res
+
+                results = await asyncio.to_thread(_run_fits)
 
                 # Aggregate metrics
                 df = pd.DataFrame(results)

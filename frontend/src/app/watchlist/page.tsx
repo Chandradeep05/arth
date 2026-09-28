@@ -202,14 +202,14 @@ export default function WatchlistPage() {
       const quote = marketData[item.symbol] || {};
       return {
         symbol: item.symbol,
-        price: quote.price ?? 0,
-        change: quote.change ?? '-',
-        changePct: quote.change_pct ?? '-',
-        volume: quote.volume ?? '-',
-        dayHigh: quote.day_high ?? '-',
-        dayLow: quote.day_low ?? '-',
-        marketCap: quote.market_cap ?? '-',
-        prevClose: quote.prev_close ?? '-',
+        price: quote.price != null ? Number(quote.price) : 0,
+        change: quote.change != null ? Number(quote.change) : undefined,
+        changePct: quote.change_pct != null ? Number(quote.change_pct) : undefined,
+        volume: quote.volume != null ? Number(quote.volume) : undefined,
+        dayHigh: quote.day_high != null ? Number(quote.day_high) : undefined,
+        dayLow: quote.day_low != null ? Number(quote.day_low) : undefined,
+        marketCap: quote.market_cap != null ? Number(quote.market_cap) : undefined,
+        prevClose: quote.prev_close != null ? Number(quote.prev_close) : undefined,
         timestamp: quote.timestamp || new Date().toISOString()
       };
     });

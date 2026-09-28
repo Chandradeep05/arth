@@ -198,8 +198,10 @@ class FeatureEngineer:
         delta = close.diff()
         gain = delta.where(delta > 0, 0.0).rolling(period).mean()
         loss = (-delta.where(delta < 0, 0.0)).rolling(period).mean()
-        rs = gain / loss.replace(0, np.nan)
-        return 100 - (100 / (1 + rs))
+        # When loss is 0: if gain > 0 -> 100, if gain == 0 -> 50
+        rsi = 100.0 - (100.0 / (1.0 + (gain / loss.replace(0, np.nan))))
+        rsi = rsi.where(loss > 0, np.where(gain > 0, 100.0, 50.0))
+        return rsi.where(~(gain.isna() | loss.isna()), np.nan)
 
     @staticmethod
     def _compute_macd_signal(close: pd.Series) -> pd.Series:

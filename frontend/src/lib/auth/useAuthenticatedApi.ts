@@ -2,6 +2,7 @@
 
 import { useAuth } from './AuthProvider';
 import { useCallback, useMemo, useRef } from 'react';
+import { supabase } from '@/lib/supabase/client';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'https://arth-rdd5.onrender.com';
 
@@ -9,6 +10,7 @@ interface RequestOptions {
   method?: string;
   body?: unknown;
   headers?: Record<string, string>;
+  _retry?: boolean;
 }
 
 /**
@@ -43,6 +45,17 @@ export function useAuthenticatedApi() {
       });
 
       if (!resp.ok) {
+        if (resp.status === 401 && !options._retry) {
+          try {
+            const { data, error } = await supabase.auth.refreshSession();
+            if (!error && data.session?.access_token) {
+              tokenRef.current = data.session.access_token;
+              return await authFetch<T>(path, { ...options, _retry: true });
+            }
+          } catch {
+            // refresh failed, continue to throw 401
+          }
+        }
         const errorBody = await resp.json().catch(() => ({ detail: resp.statusText }));
         const error = new Error(errorBody.detail || `HTTP ${resp.status}`);
         (error as Error & { status: number }).status = resp.status;

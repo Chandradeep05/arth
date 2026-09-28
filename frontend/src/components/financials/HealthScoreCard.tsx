@@ -48,8 +48,9 @@ function getOverallLabel(score: number): string {
 /* ── Category Bar ── */
 function CategoryBar({ category, index }: { category: HealthCategory; index: number }) {
   const max = category.maxScore ?? 25;
-  const pct = Math.min((category.score / max) * 100, 100);
-  const color = getCategoryColor(category.score);
+  const scoreNum = category.score != null && !isNaN(Number(category.score)) ? Number(category.score) : 0;
+  const pct = Math.min((scoreNum / max) * 100, 100);
+  const color = getCategoryColor(scoreNum);
 
   return (
     <motion.div
@@ -61,7 +62,7 @@ function CategoryBar({ category, index }: { category: HealthCategory; index: num
       <div className="flex justify-between text-xs font-mono">
         <span className="text-[var(--text-muted)]">{category.name}</span>
         <span style={{ color }}>
-          {category.score.toFixed(1)}/{max}
+          {category.score != null && !isNaN(Number(category.score)) ? scoreNum.toFixed(1) : '—'}/{max}
         </span>
       </div>
       <div className="h-2 rounded-full bg-[var(--surface-2)] overflow-hidden">

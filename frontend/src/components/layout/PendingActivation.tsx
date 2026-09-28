@@ -1,11 +1,14 @@
 'use client';
 
 import React, { useState } from 'react';
+import Link from 'next/link';
+import { useAuth } from '@/lib/auth/AuthProvider';
 import { useAuthenticatedApi } from '@/lib/auth/useAuthenticatedApi';
 import { Key, Loader2, CheckCircle, AlertCircle } from 'lucide-react';
 
 export default function PendingActivation() {
   const api = useAuthenticatedApi();
+  const { signOut } = useAuth();
   const [code, setCode] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -79,6 +82,18 @@ export default function PendingActivation() {
             )}
           </button>
         </form>
+
+        <div className="mt-6 pt-4 border-t border-[var(--border)] flex items-center justify-between text-xs">
+          <Link href="/" className="text-[var(--text-muted)] hover:text-white transition-colors">
+            Return to Dashboard
+          </Link>
+          <button
+            onClick={() => signOut()}
+            className="text-[var(--text-muted)] hover:text-red-400 transition-colors cursor-pointer"
+          >
+            Sign Out
+          </button>
+        </div>
       </div>
     </div>
   );

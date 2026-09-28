@@ -35,19 +35,19 @@ function DimensionBar({ dim }: { dim: RiskDimension }) {
           {dim.dimension.replace('_', ' ')}
         </span>
         <span className="font-semibold" style={{ color }}>
-          {(dim.score ?? 50).toFixed(0)}/100 · {dim.label}
+          {Number(dim.score ?? 50).toFixed(0)}/100 · {dim.label}
         </span>
       </div>
       <div className="h-1.5 rounded-full bg-white/[0.06] overflow-hidden">
         <motion.div
           initial={{ width: 0 }}
-          animate={{ width: `${dim.score ?? 50}%` }}
+          animate={{ width: `${Number(dim.score ?? 50)}%` }}
           transition={{ duration: 0.8, ease: 'easeOut' }}
           className="h-full rounded-full"
           style={{ backgroundColor: color }}
         />
       </div>
-      {dim.factors.length > 0 && (
+      {dim.factors && dim.factors.length > 0 && (
         <ul className="space-y-0.5 pt-0.5">
           {dim.factors.slice(0, 2).map((f, i) => (
             <li key={i} className="text-[10px] text-[var(--text-dim)] pl-2 border-l border-white/[0.08] truncate">
@@ -101,7 +101,7 @@ export default function RiskScore({
           </h3>
         </div>
         <span className="text-[10px] font-mono text-[var(--text-dim)]">
-          Confidence: {(confidence ?? 80).toFixed(0)}%
+          Confidence: {Number(confidence ?? 80).toFixed(0)}%
         </span>
       </div>
 
@@ -128,7 +128,7 @@ export default function RiskScore({
               strokeDasharray={`${2 * Math.PI * 40}`}
               initial={{ strokeDashoffset: 2 * Math.PI * 40 }}
               animate={{
-                strokeDashoffset: 2 * Math.PI * 40 * (1 - (compositeScore ?? 30) / 100),
+                strokeDashoffset: 2 * Math.PI * 40 * (1 - Number(compositeScore ?? 30) / 100),
               }}
               transition={{ duration: 1, ease: 'easeOut' }}
               style={{ filter: `drop-shadow(0 0 6px ${color}80)` }}
@@ -136,7 +136,7 @@ export default function RiskScore({
           </svg>
           <div className="absolute inset-0 flex flex-col items-center justify-center">
             <span className="font-heading text-xl font-extrabold text-white">
-              {(compositeScore ?? 30).toFixed(0)}
+              {Number(compositeScore ?? 30).toFixed(0)}
             </span>
             <span className="text-[9px] font-mono text-[var(--text-dim)] uppercase">
               / 100
@@ -156,7 +156,7 @@ export default function RiskScore({
 
       {/* Dimension Bars */}
       <div className="space-y-2 mt-4 pt-4 border-t border-white/[0.06]">
-        {dimensions.map((dim) => (
+        {(dimensions || []).map((dim) => (
           <DimensionBar key={dim.dimension} dim={dim} />
         ))}
       </div>

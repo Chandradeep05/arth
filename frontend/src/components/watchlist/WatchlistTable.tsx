@@ -141,9 +141,10 @@ export default function WatchlistTable({
           </thead>
           <tbody className="divide-y divide-[rgba(255,255,255,0.03)]">
             {listItems.map((item, idx) => {
-              const chg = Number(item.change_percent ?? item.changePct ?? 0);
-              const isPositive = chg > 0;
-              const isNegative = chg < 0;
+              const rawChg = item.change_percent ?? item.changePct;
+              const chg = rawChg != null && !isNaN(Number(rawChg)) ? Number(rawChg) : null;
+              const isPositive = chg !== null && chg > 0;
+              const isNegative = chg !== null && chg < 0;
               const tickerClean = item.symbol.replace('.NS', '').replace('.BO', '');
               const avatarInitials = tickerClean.slice(0, 2).toUpperCase();
 
@@ -195,8 +196,7 @@ export default function WatchlistTable({
                           : 'bg-[rgba(255,255,255,0.04)] text-[var(--text-muted)] border border-[rgba(255,255,255,0.06)]'
                       }`}
                     >
-                      {isPositive ? '+' : ''}
-                      {chg.toFixed(2)}%
+                      {chg !== null ? `${isPositive ? '+' : ''}${chg.toFixed(2)}%` : '—'}
                     </span>
                   </td>
 

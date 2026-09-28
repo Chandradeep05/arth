@@ -40,7 +40,7 @@ export default function SystemPage() {
   const [health, setHealth] = useState<SystemHealthData | null>(null);
   const [adapterHealth, setAdapterHealth] = useState<any>(null);
   const [loading, setLoading] = useState(true);
-  const [lastFetched, setLastFetched] = useState<Date>(new Date());
+  const [lastFetched, setLastFetched] = useState<Date | null>(null);
 
   const fetchHealth = useCallback(async () => {
     try {
@@ -77,7 +77,7 @@ export default function SystemPage() {
         </div>
         <div className="flex items-center gap-3">
           <span className="text-[11px] font-mono text-[var(--text-dim)]">
-            {lastFetched.toLocaleTimeString()}
+            {lastFetched ? lastFetched.toLocaleTimeString() : '—'}
           </span>
           <button
             onClick={fetchHealth}

@@ -17,37 +17,9 @@ interface UserInfo {
 
 export default function UserMenu() {
   const [open, setOpen] = useState(false);
-  const [user, setUser] = useState<UserInfo | null>(null);
-  const [unreadCount, setUnreadCount] = useState(0);
-  const { isAdmin } = useAuth();
+  const { user, signOut, isAdmin, loading } = useAuth();
   const menuRef = useRef<HTMLDivElement>(null);
   const router = useRouter();
-
-  useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (session?.user) {
-        setUser({
-          email: session.user.email || "",
-          displayName: session.user.user_metadata?.full_name || null,
-          avatarUrl: session.user.user_metadata?.avatar_url || null,
-        });
-      }
-    });
-
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      if (session?.user) {
-        setUser({
-          email: session.user.email || "",
-          displayName: session.user.user_metadata?.full_name || null,
-          avatarUrl: session.user.user_metadata?.avatar_url || null,
-        });
-      } else {
-        setUser(null);
-      }
-    });
-
-    return () => subscription.unsubscribe();
-  }, []);
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -61,8 +33,12 @@ export default function UserMenu() {
   }, []);
 
   async function handleSignOut() {
-    await supabase.auth.signOut();
+    await signOut();
     router.replace("/login");
+  }
+
+  if (loading) {
+    return null;
   }
 
   if (!user) {
@@ -77,8 +53,18 @@ export default function UserMenu() {
     );
   }
 
-  const initials = (user.displayName || user.email)
-    .split(" ").map((s: string) => s[0]).join("").toUpperCase().slice(0, 2);
+  const email = user.email || "";
+  const displayName = (user.user_metadata?.full_name as string) || null;
+  const avatarUrl = (user.user_metadata?.avatar_url as string) || null;
+
+  const initials = (displayName || email || "U")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((s) => s[0])
+    .join("")
+    .toUpperCase()
+    .slice(0, 2);
 
   return (
     <div ref={menuRef} className="relative">
@@ -87,8 +73,8 @@ export default function UserMenu() {
         className="flex items-center gap-2 cursor-pointer p-0.5 rounded-full hover:ring-2 hover:ring-white/20 transition-all"
         aria-label="User menu"
       >
-        {user.avatarUrl ? (
-          <img src={user.avatarUrl} alt="Avatar" className="h-8 w-8 rounded-full ring-1 ring-emerald-500/30 object-cover" />
+        {avatarUrl ? (
+          <img src={avatarUrl} alt="Avatar" className="h-8 w-8 rounded-full ring-1 ring-emerald-500/30 object-cover" />
         ) : (
           <div className="h-8 w-8 rounded-full bg-emerald-950/60 border border-emerald-500/30 flex items-center justify-center text-emerald-300 font-semibold text-xs">
             <span>{initials}</span>
@@ -101,7 +87,7 @@ export default function UserMenu() {
           {/* User info */}
           <div className="px-4 py-3 border-b border-white/[0.06]">
             <p className="text-xs font-semibold text-white truncate">
-              {user.displayName || user.email}
+              {displayName || user.email}
             </p>
             <p className="text-[11px] text-[var(--text-dim)] truncate mt-0.5 font-mono">{user.email}</p>
           </div>

@@ -14,7 +14,7 @@ greenlet==3.2.2
 redis[hiredis]==6.2.0
 
 # ── Data Sources ──
-yfinance>=1.4.0  # 1.x has built-in 401 auth fix for cloud IPs (requires curl_cffi)
+yfinance>=1.4.0,<2.0.0  # 1.x has built-in 401 auth fix for cloud IPs (requires curl_cffi)
 httpx==0.28.1
 
 # ── Technical Analysis ──
@@ -24,12 +24,12 @@ numpy==1.26.4
 
 # ── ML / Prediction ──
 xgboost>=2.0.0,<3.0.0
-shap>=0.43.0
-scikit-learn>=1.4.0
+shap>=0.43.0,<1.0.0
+scikit-learn>=1.4.0,<2.0.0
 
 # ── AI / LLM ──
 groq==0.25.0
-chromadb>=0.4.0
+chromadb>=0.4.0,<2.0.0
 
 # ── Logging & Observability ──
 structlog==25.4.0
@@ -39,7 +39,7 @@ prometheus-client==0.22.1
 # PyJWT: verifies Supabase JWTs (supports both HS256 and ES256/JWKS)
 # python-jose is replaced — PyJWT is lighter and has JWKS support via PyJWKClient
 PyJWT[cryptography]==2.10.1
-cryptography>=43.0.0  # ES256 JWT verification — explicit because PyJWT[cryptography] can fail to resolve
+cryptography>=43.0.0,<51.0.0  # ES256 JWT verification — explicit because PyJWT[cryptography] can fail to resolve
 passlib[bcrypt]==1.7.4
 python-multipart==0.0.20
 

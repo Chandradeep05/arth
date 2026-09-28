@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import pandas as pd
+from datetime import datetime, timezone
 from enum import Enum
 from dataclasses import dataclass
-from typing import Any, Optional
-from typing import Any, Optional, List
+from typing import Any, Dict, List, Optional, Union
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -111,7 +111,7 @@ def normalize_ohlcv(data: Any, source: str) -> pd.DataFrame | None:
             elif clow in ['low', 'l']: col_map[c] = 'Low'
             elif clow in ['close', 'c']: col_map[c] = 'Close'
             elif clow in ['volume', 'v', 'vol']: col_map[c] = 'Volume'
-            elif clow in ['datetime', 'date', 't', 'timestamp']: col_map[c] = 'Datetime'
+            elif clow in ['datetime', 'date', 't', 'timestamp', 'time']: col_map[c] = 'Datetime'
             
         df = df.rename(columns=col_map)
         
@@ -121,7 +121,7 @@ def normalize_ohlcv(data: Any, source: str) -> pd.DataFrame | None:
             
         # Parse datetime if available
         if 'Datetime' in df.columns:
-            df['Datetime'] = pd.to_datetime(df['Datetime'])
+            df['Datetime'] = pd.to_datetime(df['Datetime'], utc=True)
             df = df.set_index('Datetime')
             
         # Sort ascending
@@ -221,8 +221,29 @@ class MarketDataProvider:
                 elif provider == "nse":
                     data = await self._nse.get_quote(symbol)
                 elif provider == "finnhub":
-                    raw = await self._finnhub._throttled_get("quote", {"symbol": symbol.split(".")[0]})
-                    data = {"price": raw.get("c"), "change": raw.get("d"), "percent_change": raw.get("dp")} if raw else None
+                    clean_sym = symbol.split(".")[0]
+                    raw = await self._finnhub._throttled_get("quote", {"symbol": clean_sym})
+                    if raw and raw.get("c"):
+                        data = {
+                            "symbol": symbol,
+                            "price": raw.get("c"),
+                            "change": raw.get("d"),
+                            "percent_change": raw.get("dp"),
+                            "change_percent": raw.get("dp"),
+                            "open": raw.get("o"),
+                            "high": raw.get("h"),
+                            "low": raw.get("l"),
+                            "previous_close": raw.get("pc"),
+                            "volume": None,
+                            "market_cap": None,
+                            "pe_ratio": None,
+                            "timestamp": datetime.now(timezone.utc),
+                            "exchange": "US",
+                            "market": "us",
+                            "currency": "USD",
+                        }
+                    else:
+                        data = None
                 elif provider == "upstox":
                     upstox = self._get_upstox()
                     data = await upstox.get_quote(symbol) if upstox else None

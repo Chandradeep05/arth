@@ -28,6 +28,7 @@ from datetime import datetime, timezone
 from typing import Optional
 from uuid import UUID
 
+import asyncio
 import hmac
 import jwt
 from fastapi import Depends, HTTPException, Request
@@ -322,7 +323,7 @@ async def get_current_user(
     Use on routes that need identity but not necessarily active status.
     """
     token = _extract_bearer_token(request)
-    payload = _decode_supabase_jwt(token, settings)
+    payload = await asyncio.to_thread(_decode_supabase_jwt, token, settings)
 
     try:
         user_id = UUID(payload["sub"])
@@ -332,10 +333,23 @@ async def get_current_user(
     user_meta = payload.get("user_metadata", {})
     display_name = user_meta.get("full_name") if isinstance(user_meta, dict) else None
 
-    db = request.state.db
-    access_status, role = await _resolve_or_create_profile(
-        user_id, email, display_name, db
-    )
+    db = getattr(request.state, "db", None)
+    if db is not None:
+        access_status, role = await _resolve_or_create_profile(
+            user_id, email, display_name, db
+        )
+    else:
+        # Route is in _NO_DB_PREFIXES; acquire a short-lived connection from pg_pool
+        pool = getattr(request.app.state, "pg_pool", None)
+        if pool is not None:
+            async with pool.acquire() as conn:
+                access_status, role = await _resolve_or_create_profile(
+                    user_id, email, display_name, conn
+                )
+        else:
+            # Fallback when pg_pool is not initialized (e.g. unit tests without DB)
+            access_status = "active" if not settings.invite_only_mode else "pending"
+            role = "admin" if email and email == settings.initial_admin_email else "user"
     return UserContext(
         user_id=user_id,
         email=email,

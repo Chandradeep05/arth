@@ -97,10 +97,11 @@ class PredictionModel:
                     features=len(X.columns),
                 )
 
-                # Chronological 80/20 split (NOT walk-forward — that's deferred architecture work)
+                # Chronological 80/20 split with 5-bar purge gap to prevent target overlap leakage
                 split_idx = int(len(X) * 0.8)
-                X_train, X_val = X.iloc[:split_idx], X.iloc[split_idx:]
-                y_train, y_val = y.iloc[:split_idx], y.iloc[split_idx:]
+                train_end = max(0, split_idx - 5)
+                X_train, y_train = X.iloc[:train_end], y.iloc[:train_end]
+                X_val, y_val = X.iloc[split_idx:], y.iloc[split_idx:]
 
                 # Train XGBoost
                 model = xgb.XGBRegressor(

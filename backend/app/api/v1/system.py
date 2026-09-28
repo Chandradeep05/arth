@@ -10,6 +10,7 @@ Provides:
 
 from __future__ import annotations
 
+import hmac
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Request
@@ -144,6 +145,8 @@ async def health_check():
 @router.get("/health/db")
 async def db_health():
     """Database-specific health check."""
+    from app.config import get_settings
+    settings = get_settings()
     try:
         from app.dependencies import _engine
         if _engine:
@@ -153,13 +156,17 @@ async def db_health():
                 )
                 version = result.scalar()
             return {"status": "healthy", "version": version}
+        return {"status": "unhealthy", "error": "Database engine not initialized"}
     except Exception as e:
-        return {"status": "unhealthy", "error": str(e)}
+        err_msg = str(e) if settings.is_development else "Database connection failed"
+        return {"status": "unhealthy", "error": err_msg}
 
 
 @router.get("/health/redis")
 async def redis_health():
     """Redis-specific health check."""
+    from app.config import get_settings
+    settings = get_settings()
     try:
         redis = await get_redis()
         if redis:
@@ -171,7 +178,8 @@ async def redis_health():
             }
         return {"status": "unhealthy", "error": "Redis client not available"}
     except Exception as e:
-        return {"status": "unhealthy", "error": str(e)}
+        err_msg = str(e) if settings.is_development else "Redis connection failed"
+        return {"status": "unhealthy", "error": err_msg}
 
 
 @router.get("/metrics")
@@ -201,7 +209,7 @@ async def get_debug(request: Request):
     # Gate behind admin key in non-development environments
     if not settings.is_development:
         provided_key = request.headers.get("x-admin-key", "")
-        if not settings.admin_api_key or provided_key != settings.admin_api_key:
+        if not settings.admin_api_key or not hmac.compare_digest(provided_key, settings.admin_api_key):
             return ORJSONResponse(
                 status_code=403,
                 content={

@@ -49,13 +49,14 @@ function computeYoYChange(current: unknown, previous: unknown): number | null {
   return ((cur - prev) / Math.abs(prev)) * 100;
 }
 
-function ChangeCell({ change }: { change: number | null }) {
-  if (change === null) return <span className="text-[var(--text-dim)]">—</span>;
-  const color = change > 0 ? 'var(--green)' : change < 0 ? 'var(--red)' : 'var(--text-muted)';
-  const prefix = change > 0 ? '+' : '';
+function ChangeCell({ change }: { change: number | null | undefined }) {
+  if (change == null || isNaN(change)) return <span className="text-[var(--text-dim)]">—</span>;
+  const num = Number(change);
+  const color = num > 0 ? 'var(--green)' : num < 0 ? 'var(--red)' : 'var(--text-muted)';
+  const prefix = num > 0 ? '+' : '';
   return (
     <span className="font-mono text-xs" style={{ color }}>
-      {prefix}{change.toFixed(1)}%
+      {prefix}{num.toFixed(1)}%
     </span>
   );
 }
@@ -72,9 +73,10 @@ export default function StatementTable({ data, title, className = '', currency =
   }
 
   // Extract line item keys (everything except 'period')
-  const lineItemKeys = Object.keys(data[0]).filter((k) => k !== 'period');
+  const firstRow = data.find((d) => d && typeof d === 'object');
+  const lineItemKeys = firstRow ? Object.keys(firstRow).filter((k) => k !== 'period') : [];
   // Periods are columns (most recent first)
-  const periods = data.map((d) => d.period);
+  const periods = data.filter((d) => d && d.period).map((d) => d.period);
 
   return (
     <motion.div
@@ -108,7 +110,7 @@ export default function StatementTable({ data, title, className = '', currency =
             {lineItemKeys.map((key, rowIdx) => {
               // Latest two periods for YoY
               const yoyChange =
-                periods.length >= 2
+                periods.length >= 2 && data[0] && data[1]
                   ? computeYoYChange(data[0][key], data[1][key])
                   : null;
 

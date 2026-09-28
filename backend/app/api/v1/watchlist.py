@@ -2,7 +2,7 @@
 Watchlist Batch API endpoint.
 
 Provides a single batch endpoint that fetches quotes, risk scores,
-and sentiment labels for multiple symbols in parallel using asyncio.gather.
+and sentiment labels for multiple symbols.
 
 Max 20 symbols per request to keep response times reasonable.
 """
@@ -16,6 +16,7 @@ from typing import Any, Dict, List
 from fastapi import APIRouter, Depends
 
 from app.config import Settings, get_settings
+from app.core.auth import UserContext, require_active_user
 from app.core.logging import get_logger
 from app.data.cache import CacheManager
 from app.data.market_data_provider import market_data
@@ -44,12 +45,17 @@ async def _fetch_symbol_data(
     Graceful degradation: if any fetch fails, its value is set to None.
     """
     # --- Quote ---
-    async def _get_quote() -> Dict[str, Any] | None:
+    async def _get_quote():
         try:
             async def _fetch(sym: str = None, symbol: str = None):
                 s = sym or symbol
                 res = await market_data.get_quote(s)
-                return res.data if res and res.available else None
+                if res and res.available:
+                    data = dict(res.data) if res.data else {}
+                    data["_source"] = res.source or "MarketDataProvider"
+                    data["_cached"] = getattr(res, "cached", False)
+                    return data
+                return None
 
             data = await cache.get_or_fetch(
                 key=CacheManager.quote_key(symbol),
@@ -58,13 +64,15 @@ async def _fetch_symbol_data(
                 sym=symbol,
             )
             if data:
-                data.pop("_cache_hit", None)
+                src = data.pop("_source", "MarketDataProvider")
+                was_cached = data.pop("_cache_hit", False) or data.pop("_cached", False)
                 data.pop("_cached_at", None)
                 data.pop("_validation", None)
-            return data
+                return data, src, was_cached
+            return None, "MarketDataProvider", False
         except Exception as e:
             logger.warning("watchlist_quote_failed", symbol=symbol, error=str(e))
-            return None
+            return None, "MarketDataProvider", False
 
     # --- Risk ---
     async def _get_risk() -> Dict[str, Any] | None:
@@ -101,15 +109,19 @@ async def _fetch_symbol_data(
             return None
 
     # Run all three concurrently
-    quote, risk, sentiment = await asyncio.gather(
+    quote_res, risk, sentiment = await asyncio.gather(
         _get_quote(),
         _get_risk(),
         _get_sentiment(),
     )
 
+    quote, quote_source, quote_cached = quote_res
+
     # Build combined summary
     return {
         "symbol": symbol.upper(),
+        "source": quote_source,
+        "quote_cached": quote_cached,
         "quote": {
             "price": quote.get("price") if quote else None,
             "change": quote.get("change") if quote else None,
@@ -133,14 +145,15 @@ async def _fetch_symbol_data(
 @router.post("/batch")
 async def batch_fetch(
     request: WatchlistBatchRequest,
+    user: UserContext = Depends(require_active_user),
     redis=Depends(get_redis),
     settings: Settings = Depends(get_settings),
 ):
     """Batch fetch quotes, risk scores, and sentiment for watchlist symbols.
 
-    Accepts up to 20 symbols.  For each symbol the endpoint fetches
-    quote data, risk score, and sentiment label **in parallel** using
-    ``asyncio.gather``, returning a consolidated list.
+    Accepts up to 20 symbols. For each symbol the endpoint fetches
+    quote data, risk score, and sentiment label. Circuit breakers and
+    fallbacks are handled by MarketDataProvider.
 
     Individual symbol failures are handled gracefully — the overall
     request still succeeds with ``data_available`` flags per symbol.
@@ -149,40 +162,32 @@ async def batch_fetch(
 
     logger.info(
         "watchlist_batch_request",
+        user_id=str(user.user_id),
         symbols=request.symbols,
         count=len(request.symbols),
     )
 
-    # Process symbols SEQUENTIALLY to avoid burst-triggering Yahoo rate limits.
-    # With asyncio.gather, 6 symbols × 3 data types = 18 concurrent Yahoo calls
-    # that immediately trip the rate limiter and cascade into circuit breaker opening.
     results: List[Dict[str, Any]] = []
     for sym in request.symbols:
-        # Check circuit breaker before each symbol — stop early if Yahoo is down
-        if not _yahoo._circuit.can_execute():
-            logger.warning("watchlist_circuit_open_skipping", symbol=sym)
-            results.append({
-                "symbol": sym.upper(),
-                "quote": None,
-                "risk_score": None,
-                "risk_label": None,
-                "sentiment_score": None,
-                "sentiment_label": None,
-                "data_available": {"quote": False, "risk": False, "sentiment": False},
-            })
-            continue
         result = await _fetch_symbol_data(sym, cache, settings)
         results.append(result)
+
+    sources = [
+        r.get("source") for r in results
+        if r.get("source") and r.get("source") not in ("unavailable", "error", "MarketDataProvider")
+    ]
+    primary_source = ", ".join(sorted(set(sources))) if sources else "MarketDataProvider"
+    any_cached = any(r.get("quote_cached", False) for r in results) if results else False
 
     return {
         "success": True,
         "data": results,
         "count": len(results),
         "freshness": FreshnessMetadata(
-            source="yahoo_finance",
+            source=primary_source,
             timestamp=datetime.now(timezone.utc),
             is_stale=False,
-            delay_label="~15s delayed",
-            cache_hit=False,
+            delay_label="Multi-provider real-time & intraday",
+            cache_hit=any_cached,
         ).model_dump(),
     }

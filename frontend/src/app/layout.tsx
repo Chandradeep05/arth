@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { usePathname } from 'next/navigation';
 import { Syne, DM_Mono, Inter } from 'next/font/google';
 import './globals.css';
 import Sidebar from '@/components/layout/Sidebar';
@@ -39,9 +40,14 @@ const inter = Inter({
 function AppContent({ children }: { children: React.ReactNode }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const { user, accessStatus, loading } = useAuth();
+  const pathname = usePathname();
 
-  // Gate: if user is authenticated but access is pending, show activation screen
-  if (!loading && user && accessStatus === 'pending') {
+  // Gate: if user is authenticated but access is pending, show activation screen only on protected routes
+  const isProtected = ['/watchlist', '/assistant', '/alerts', '/notifications', '/admin', '/settings', '/research/saved'].some(
+    (route) => pathname?.startsWith(route)
+  );
+
+  if (!loading && user && accessStatus === 'pending' && isProtected) {
     return <PendingActivation />;
   }
 

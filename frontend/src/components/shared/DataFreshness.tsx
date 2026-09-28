@@ -55,14 +55,27 @@ export default function DataFreshness({
   thresholdMs = 15_000,
   className = '',
 }: DataFreshnessProps) {
+  const [mounted, setMounted] = useState(false);
   const [now, setNow] = useState(Date.now());
 
   const tick = useCallback(() => setNow(Date.now()), []);
 
   useEffect(() => {
+    setMounted(true);
     const id = setInterval(tick, 1_000);
     return () => clearInterval(id);
   }, [tick]);
+
+  if (!mounted) {
+    return (
+      <span
+        className={`inline-flex items-center gap-1.5 font-mono text-xs text-[var(--text-dim)] ${className}`}
+      >
+        <span className="inline-block h-1.5 w-1.5 rounded-full bg-[var(--text-dim)]" />
+        —
+      </span>
+    );
+  }
 
   // Use `now` to keep age reactive
   const ageMs = getAgeMs(timestamp);

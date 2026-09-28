@@ -266,10 +266,12 @@ export default function FinancialsPage() {
           <HealthScoreCard
             data={{
               overall_score: healthData.total_score,
-              categories: Object.entries(healthData.breakdown).map(([name, d]) => ({
-                name: name.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
-                score: d.score,
-              })),
+              categories: healthData.breakdown && typeof healthData.breakdown === 'object'
+                ? Object.entries(healthData.breakdown).map(([name, d]) => ({
+                    name: name.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
+                    score: Number(d?.score ?? 0),
+                  }))
+                : [],
               symbol: healthData.symbol,
               summary: healthData.label,
             }}

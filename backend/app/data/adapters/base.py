@@ -163,20 +163,26 @@ class BaseDataAdapter(ABC):
                 result = await coro(*args, **kwargs)
                 latency = (time.monotonic() - start) * 1000
 
-                # Record success
-                self._circuit.record_success()
-                self._last_success = datetime.now(timezone.utc)
-                self._total_requests += 1
-                self._total_latency += latency
+                if result is not None:
+                    # Record success
+                    self._circuit.record_success()
+                    self._last_success = datetime.now(timezone.utc)
+                    self._total_requests += 1
+                    self._total_latency += latency
 
-                logger.debug(
-                    "adapter_request_success",
-                    adapter=self.adapter_name,
-                    attempt=attempt,
-                    latency_ms=round(latency, 2),
-                )
+                    logger.debug(
+                        "adapter_request_success",
+                        adapter=self.adapter_name,
+                        attempt=attempt,
+                        latency_ms=round(latency, 2),
+                    )
                 return result
 
+            except asyncio.CancelledError:
+                self._circuit.record_failure()
+                self._last_failure = datetime.now(timezone.utc)
+                self._last_error_message = "Task cancelled"
+                raise
             except Exception as e:
                 last_error = e
                 self._circuit.record_failure()

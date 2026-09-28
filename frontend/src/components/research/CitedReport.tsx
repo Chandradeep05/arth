@@ -154,7 +154,8 @@ export default function CitedReport({ content, sources, companyName }: CitedRepo
     return parts.length > 0 ? parts : text;
   };
 
-  const lines = content.split('\n');
+  const lines = (content || '').split('\n');
+  const safeSources = sources || [];
 
   return (
     <motion.div
@@ -172,7 +173,7 @@ export default function CitedReport({ content, sources, companyName }: CitedRepo
               Deep Research Report — {companyName}
             </span>
             <span className="badge badge-green text-[10px] font-mono ml-auto">
-              RAG · {sources.length} sources
+              RAG · {safeSources.length} sources
             </span>
           </div>
         )}
@@ -183,7 +184,7 @@ export default function CitedReport({ content, sources, companyName }: CitedRepo
       </div>
 
       {/* Sources Reference Section */}
-      {sources.length > 0 && (
+      {safeSources.length > 0 && (
         <motion.div
           ref={refsRef}
           initial={{ opacity: 0 }}
@@ -192,10 +193,10 @@ export default function CitedReport({ content, sources, companyName }: CitedRepo
           className="card p-5 mt-4"
         >
           <h3 className="font-heading text-xs font-bold uppercase tracking-wider text-[var(--text-muted)] mb-3">
-            Sources Referenced ({sources.length})
+            Sources Referenced ({safeSources.length})
           </h3>
           <div className="space-y-2">
-            {sources.map((source) => (
+            {safeSources.map((source) => (
               <div
                 key={source.id}
                 id={`source-ref-${source.id}`}

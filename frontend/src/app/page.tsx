@@ -328,6 +328,7 @@ export default function DashboardPage() {
   const [gainers, setGainers] = useState<StockMover[]>([]);
   const [losers, setLosers] = useState<StockMover[]>([]);
   const [sectors, setSectors] = useState<{ name: string; change: number }[]>([]);
+  const [marketSession, setMarketSession] = useState<string>('');
   const [loading, setLoading] = useState(true);
   const [quotesLoaded, setQuotesLoaded] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<Date>(new Date());
@@ -355,13 +356,14 @@ export default function DashboardPage() {
       const quotes = (batchRes.data || []) as StockMover[];
 
       if (quotes.length > 0) {
-        const sorted = [...quotes].sort((a, b) => b.change_percent - a.change_percent);
+        const validQuotes = quotes.filter(q => q && typeof q.change_percent === 'number' && !isNaN(q.change_percent));
+        const sorted = [...validQuotes].sort((a, b) => b.change_percent - a.change_percent);
         setGainers(sorted.filter(s => s.change_percent >= 0).slice(0, 5));
         setLosers(sorted.filter(s => s.change_percent < 0).reverse().slice(0, 5));
 
         const sectorData: { name: string; change: number }[] = [];
         for (const [sector, symbols] of Object.entries(SECTOR_MAP)) {
-          const sectorQuotes = quotes.filter(q => symbols.includes(q.symbol));
+          const sectorQuotes = validQuotes.filter(q => symbols.includes(q.symbol));
           if (sectorQuotes.length > 0) {
             const avgChange = sectorQuotes.reduce((sum, q) => sum + q.change_percent, 0) / sectorQuotes.length;
             sectorData.push({ name: sector, change: avgChange });
@@ -379,6 +381,7 @@ export default function DashboardPage() {
   }, []);
 
   useEffect(() => {
+    setMarketSession(getMarketSessionLabel());
     fetchDashboard();
     const interval = setInterval(fetchDashboard, REFRESH_INTERVALS.tick);
     return () => clearInterval(interval);
@@ -405,7 +408,7 @@ export default function DashboardPage() {
           </div>
 
           <div className="relative z-10 mt-2.5 pt-2 sm:mt-3 sm:pt-2.5 border-t border-white/[0.06] flex items-center justify-between text-[10px] sm:text-[11px] font-mono text-[var(--text-dim)]">
-            <span>{getMarketSessionLabel()}</span>
+            <span>{marketSession || 'US Market: Active'}</span>
             <span>Real-time Quote Pipeline</span>
           </div>
         </div>

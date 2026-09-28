@@ -192,8 +192,19 @@ export default function AlertsPage() {
                         </span>
                       </div>
                       <div className="text-xs font-mono text-[var(--text-dim)]">
-                        Trigger when {alert.alert_type === 'price_above' ? '≥' : '≤'} {(alert.symbol.endsWith('.NS') || alert.symbol.endsWith('.BO')) ? '₹' : '$'}{alert.threshold.toFixed(2)}
-                        {alert.last_evaluated_price && ` · Last: ${(alert.symbol.endsWith('.NS') || alert.symbol.endsWith('.BO')) ? '₹' : '$'}${alert.last_evaluated_price.toFixed(2)}`}
+                        {(() => {
+                          const sym = alert.symbol || '';
+                          const isINR = sym.endsWith('.NS') || sym.endsWith('.BO');
+                          const currency = isINR ? '₹' : '$';
+                          const thresh = Number(alert.threshold ?? 0);
+                          const lastPrice = alert.last_evaluated_price != null ? Number(alert.last_evaluated_price) : null;
+                          return (
+                            <>
+                              Trigger when {alert.alert_type === 'price_above' ? '≥' : '≤'} {currency}{!isNaN(thresh) ? thresh.toFixed(2) : '—'}
+                              {lastPrice != null && !isNaN(lastPrice) ? ` · Last: ${currency}${lastPrice.toFixed(2)}` : ''}
+                            </>
+                          );
+                        })()}
                       </div>
                     </div>
                   </div>

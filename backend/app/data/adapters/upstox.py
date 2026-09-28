@@ -84,6 +84,11 @@ class UpstoxAdapter(BaseDataAdapter):
                     _cache.pop(k, None)
         _cache[key] = (data, now + ttl)
 
+    @staticmethod
+    def _parse_instruments_gzip(content: bytes) -> List[dict]:
+        data = gzip.decompress(content)
+        return json.loads(data)
+
     async def _load_instruments(self, target_exchange: str = "NSE") -> None:
         now = time.time()
         if target_exchange in self._loaded_exchanges and (now - self._instruments_last_load.get(target_exchange, 0) < _CACHE_TTL_INSTRUMENTS):
@@ -100,8 +105,7 @@ class UpstoxAdapter(BaseDataAdapter):
                 url = f"https://assets.upstox.com/market-quote/instruments/exchange/{target_exchange}.json.gz"
                 resp = await client.get(url)
                 if resp.status_code == 200:
-                    data = gzip.decompress(resp.content)
-                    instruments = json.loads(data)
+                    instruments = await asyncio.to_thread(self._parse_instruments_gzip, resp.content)
                     for inst in instruments:
                         symbol = inst.get("trading_symbol") or inst.get("tradingsymbol")
                         if not symbol:
@@ -127,8 +131,10 @@ class UpstoxAdapter(BaseDataAdapter):
                     self._instruments_last_load[target_exchange] = now
                     logger.info("upstox_exchange_loaded", exchange=target_exchange, symbols=len(instruments))
                 else:
+                    self._instruments_last_load[target_exchange] = now - _CACHE_TTL_INSTRUMENTS + 300
                     logger.warning("upstox_instrument_download_failed", exchange=target_exchange, status=resp.status_code)
             except Exception as e:
+                self._instruments_last_load[target_exchange] = now - _CACHE_TTL_INSTRUMENTS + 300
                 logger.error("upstox_instrument_load_failed", exchange=target_exchange, error=str(e))
 
     async def _get_instrument_key(self, symbol: str) -> Optional[str]:

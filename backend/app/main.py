@@ -138,23 +138,27 @@ async def lifespan(app: FastAPI):
         logger.warning("assistant_engine_init_failed", error=str(e))
         app.state.assistant_engine = None
 
-    # Admin bootstrap — auto-promote INITIAL_ADMIN_EMAIL on first startup
+    # Admin bootstrap — auto-promote INITIAL_ADMIN_EMAIL on first startup if no admin exists
     if pg_pool and settings.initial_admin_email:
         try:
             async with pg_pool.acquire() as conn:
-                row = await conn.fetchrow(
-                    "SELECT id, role FROM profiles WHERE email = $1",
-                    settings.initial_admin_email,
+                existing_admin = await conn.fetchval(
+                    "SELECT 1 FROM profiles WHERE role = 'admin' LIMIT 1"
                 )
-                if row and row["role"] != "admin":
-                    await conn.execute(
-                        "UPDATE profiles SET role = 'admin', access_status = 'active' WHERE id = $1",
-                        row["id"],
+                if not existing_admin:
+                    row = await conn.fetchrow(
+                        "SELECT id, role FROM profiles WHERE email = $1",
+                        settings.initial_admin_email,
                     )
-                    logger.info("admin_bootstrap_promoted", email=settings.initial_admin_email)
-                elif not row:
-                    logger.info("admin_bootstrap_pending", email=settings.initial_admin_email,
-                                reason="Profile not yet created -- will promote on first login")
+                    if row and row["role"] != "admin":
+                        await conn.execute(
+                            "UPDATE profiles SET role = 'admin', access_status = 'active' WHERE id = $1",
+                            row["id"],
+                        )
+                        logger.info("admin_bootstrap_promoted", email=settings.initial_admin_email)
+                    elif not row:
+                        logger.info("admin_bootstrap_pending", email=settings.initial_admin_email,
+                                    reason="Profile not yet created -- will promote on first login")
         except Exception as e:
             logger.warning("admin_bootstrap_failed", error=str(e))
 

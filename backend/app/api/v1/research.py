@@ -110,6 +110,7 @@ async def generate_research(
 async def get_cached_report(
     symbol: str,
     depth: str = Query(default="standard"),
+    user: UserContext = Depends(require_active_user),
     redis=Depends(get_redis),
 ):
     """Get a previously generated research report from cache."""

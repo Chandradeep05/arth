@@ -291,7 +291,14 @@ export default function PredictionPanel({ symbol }: { symbol: string }) {
                           <span className="text-[11px] font-mono w-14 text-right font-medium" style={{
                             color: isPositive ? '#10b981' : '#ef4444',
                           }}>
-                            {isPositive ? '+' : ''}{(factor.shap_value ?? factor.importance * (isPositive ? 1 : -1)).toFixed(4)}
+                            {(() => {
+                              const shapVal = factor.shap_value != null
+                                ? Number(factor.shap_value)
+                                : factor.importance != null
+                                ? Number(factor.importance) * (isPositive ? 1 : -1)
+                                : 0;
+                              return `${isPositive ? '+' : ''}${shapVal.toFixed(4)}`;
+                            })()}
                           </span>
                         </div>
                       );

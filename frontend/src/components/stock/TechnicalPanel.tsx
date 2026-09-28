@@ -117,8 +117,8 @@ export default function TechnicalPanel({ indicators, loading }: TechnicalPanelPr
         <IndicatorRow
           label="BB Position"
           value={
-            indicators?.bollinger_bands
-              ? `${indicators.bollinger_bands.lower.toFixed(2)} — ${indicators.bollinger_bands.upper.toFixed(2)}`
+            indicators?.bollinger_bands?.lower != null && indicators?.bollinger_bands?.upper != null
+              ? `${Number(indicators.bollinger_bands.lower).toFixed(2)} — ${Number(indicators.bollinger_bands.upper).toFixed(2)}`
               : null
           }
           signal={indicators?.bb_position}

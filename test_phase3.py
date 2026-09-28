@@ -705,15 +705,14 @@ class TestConfigSecurity(unittest.TestCase):
     def test_all_api_keys_default_empty(self):
         """All API keys should default to empty strings — no hardcoded secrets."""
         from app.config import Settings
-        settings = Settings()
         key_fields = [
             "groq_api_key", "anthropic_api_key", "openai_api_key",
             "twelvedata_api_key", "alpha_vantage_api_key", "finnhub_api_key",
             "fmp_api_key", "newsapi_key",
         ]
         for field in key_fields:
-            value = getattr(settings, field)
-            self.assertEqual(value, "", f"{field} should default to empty string")
+            default_val = Settings.model_fields[field].default
+            self.assertEqual(default_val, "", f"{field} should default to empty string")
 
     def test_is_production_flag(self):
         """is_production should be True only for production env."""

@@ -84,8 +84,28 @@ export default function PriceChart({ data, symbol, height = 420, activeTimeframe
       wickUpColor: '#10b981',
     });
 
-    const candleData = data.map((bar) => ({
-      time: (new Date(bar.date).getTime() / 1000) as number,
+    const seenTimes = new Set<number>();
+    const sanitizedBars = (data || [])
+      .map((bar) => {
+        const timeSec = Math.floor(new Date(bar.date).getTime() / 1000);
+        return {
+          time: timeSec as any,
+          open: Number(bar.open),
+          high: Number(bar.high),
+          low: Number(bar.low),
+          close: Number(bar.close),
+          volume: Number(bar.volume || 0),
+        };
+      })
+      .filter((bar) => {
+        if (isNaN(bar.time) || bar.time <= 0 || seenTimes.has(bar.time)) return false;
+        seenTimes.add(bar.time);
+        return true;
+      })
+      .sort((a, b) => a.time - b.time);
+
+    const candleData = sanitizedBars.map((bar) => ({
+      time: bar.time,
       open: bar.open,
       high: bar.high,
       low: bar.low,
@@ -104,8 +124,8 @@ export default function PriceChart({ data, symbol, height = 420, activeTimeframe
       scaleMargins: { top: 0.82, bottom: 0 },
     });
 
-    const volumeData = data.map((bar) => ({
-      time: (new Date(bar.date).getTime() / 1000) as number,
+    const volumeData = sanitizedBars.map((bar) => ({
+      time: bar.time,
       value: bar.volume,
       color: bar.close >= bar.open
         ? 'rgba(16, 185, 129, 0.3)'

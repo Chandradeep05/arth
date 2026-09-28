@@ -207,7 +207,7 @@ export default function Sidebar({ isMobileOpen = false, onMobileClose }: Sidebar
         {/* Bottom User Card (Reference Layout with subtle amber finishing) */}
         <div className="p-3 border-t border-white/[0.06] relative z-10">
           <Link
-            href="/login"
+            href={user ? "/watchlist" : "/login"}
             className={`
               flex items-center gap-3 p-2 rounded-xl transition-all
               bg-white/[0.02] border border-amber-500/15 hover:border-amber-500/35 hover:bg-amber-500/[0.04]

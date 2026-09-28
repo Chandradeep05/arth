@@ -327,7 +327,7 @@ export default function AssistantPage() {
             Sign in to access the ARTH AI Assistant.
           </p>
           <a
-            href="/auth/login"
+            href="/login"
             className="inline-block px-6 py-2.5 rounded-lg bg-[var(--accent)] text-black font-bold text-sm hover:opacity-90 transition-opacity"
           >
             Sign In

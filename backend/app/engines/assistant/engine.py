@@ -132,7 +132,7 @@ class AssistantEngine:
 
     # ── Session management ──────────────────────────────────────
     SESSION_TTL_SECONDS = 1800  # 30 minutes of inactivity → evict
-    MAX_SESSIONS = 50           # Safety cap for Render 512MB RAM
+    MAX_SESSIONS = 500          # 10x safety headroom (each ~20KB, ~10MB total max)
 
     def _evict_stale_sessions(self) -> None:
         """Remove sessions inactive for longer than SESSION_TTL_SECONDS."""

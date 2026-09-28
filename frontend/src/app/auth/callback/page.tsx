@@ -19,6 +19,8 @@ function CallbackHandler() {
 
   useEffect(() => {
     const code = searchParams.get("code");
+    const targetRedirect = searchParams.get("redirect") || (typeof window !== "undefined" ? sessionStorage.getItem("auth_redirect") : null) || "/";
+    const destination = targetRedirect.startsWith("/") && !targetRedirect.startsWith("//") ? targetRedirect : "/";
 
     async function handleCallback() {
       if (code) {
@@ -31,7 +33,7 @@ function CallbackHandler() {
           // Check if session was already established (auto-exchange succeeded)
           const { data: { session } } = await supabase.auth.getSession();
           if (session) {
-            router.replace("/");
+            router.replace(destination);
             return;
           }
           setError(error.message);
@@ -42,12 +44,12 @@ function CallbackHandler() {
       // Check if we have a session (works for both PKCE and implicit flow)
       const { data: { session } } = await supabase.auth.getSession();
       if (session) {
-        router.replace("/");
+        router.replace(destination);
       } else if (!code) {
         // No code and no session — listen for auth state change (implicit flow)
         const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
           if (event === "SIGNED_IN" && session) {
-            router.replace("/");
+            router.replace(destination);
           }
         });
         // Timeout: if no session after 5 seconds, redirect to login

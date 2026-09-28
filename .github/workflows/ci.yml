@@ -15,10 +15,6 @@ jobs:
       PYTHONIOENCODING: "utf-8"
       ENVIRONMENT: development
       UPSTOX_ENABLED: "false"
-      TWELVEDATA_API_KEY: "dummy"
-      FINNHUB_API_KEY: "dummy"
-      FMP_API_KEY: "dummy"
-      GROQ_API_KEY: "dummy"
     steps:
       - name: Checkout code
         uses: actions/checkout@v4

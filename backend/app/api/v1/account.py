@@ -83,6 +83,15 @@ async def delete_account(
         logger.warning("supabase_auth_delete_skipped", reason="Supabase not configured (dev mode)")
 
     # Step 2: Delete profile + CASCADE all child tables
+    # First disassociate invite_codes where created_by or used_by matches to prevent FK violation
+    await db.execute(
+        "UPDATE invite_codes SET created_by = NULL WHERE created_by = $1",
+        user.user_id,
+    )
+    await db.execute(
+        "UPDATE invite_codes SET used_by = NULL WHERE used_by = $1",
+        user.user_id,
+    )
     await db.execute("DELETE FROM profiles WHERE id = $1", user.user_id)
 
     logger.info(
