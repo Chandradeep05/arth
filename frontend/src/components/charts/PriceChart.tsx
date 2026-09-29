@@ -149,7 +149,11 @@ export default function PriceChart({ data, symbol, height = 420, activeTimeframe
 
     volumeSeries.setData(volumeData as any);
 
-    chart.timeScale().fitContent();
+    if (candleData.length > 1) {
+      chart.timeScale().fitContent();
+    } else if (candleData.length === 1) {
+      chart.timeScale().applyOptions({ barSpacing: 16, rightOffset: 15 });
+    }
 
     // Resize handler
     const handleResize = () => {

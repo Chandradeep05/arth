@@ -379,6 +379,20 @@ class RiskEngine:
             elif pe > 50:
                 score += 10
                 factors.append(f"Very high P/E ({pe:.1f}) — may be overvalued")
+            else:
+                score -= 5
+                factors.append(f"Moderate valuation multiple (P/E: {pe:.1f})")
+
+        # ROE
+        roe = metrics.get("roe")
+        if roe is not None:
+            roe_pct = roe * 100.0 if abs(roe) < 2.0 else roe
+            if roe_pct > 15.0:
+                score -= 10
+                factors.append(f"Strong return on equity (ROE: {roe_pct:.1f}%)")
+            elif roe_pct < 0:
+                score += 15
+                factors.append(f"Negative return on equity (ROE: {roe_pct:.1f}%)")
 
         if not factors:
             factors.append("Limited fundamental data available")

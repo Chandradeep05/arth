@@ -8,6 +8,7 @@ Behavioral tests for V6.2.1 fixes:
 """
 
 import time
+from pathlib import Path
 import pytest
 import pandas as pd
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -339,7 +340,10 @@ async def test_prediction_cache_expiry_calculated_after_training():
 
 def test_render_yaml_has_pre_deploy_migration():
     """Verify render.yaml specifies preDeployCommand: alembic upgrade head."""
-    with open("render.yaml", "r", encoding="utf-8") as f:
+    render_yaml_path = Path(__file__).resolve().parents[2] / "render.yaml"
+    if not render_yaml_path.exists():
+        render_yaml_path = Path("render.yaml")
+    with open(render_yaml_path, "r", encoding="utf-8") as f:
         config = yaml.safe_load(f)
 
     web_service = next((s for s in config.get("services", []) if s.get("name") == "arth-api"), None)

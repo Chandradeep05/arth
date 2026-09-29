@@ -34,19 +34,48 @@ async def init_db(settings: Settings) -> None:
     """Initialize the async database engine and session factory."""
     global _engine, _session_factory
 
+    db_url = settings.database_url
+    if not db_url:
+        logger.warning("database_skipped", reason="DATABASE_URL not set")
+        return
+
+    # Normalize driver scheme for create_async_engine
+    if db_url.startswith("postgres://"):
+        db_url = "postgresql+asyncpg://" + db_url[len("postgres://"):]
+    elif db_url.startswith("postgresql://"):
+        db_url = "postgresql+asyncpg://" + db_url[len("postgresql://"):]
+    elif not db_url.startswith("postgresql+asyncpg://"):
+        import re
+        db_url = re.sub(r"^postgresql\+\w+://", "postgresql+asyncpg://", db_url)
+
+    # Supabase / cloud SSL options: SQLAlchemy + asyncpg expects ssl in connect_args
+    connect_args = {}
+    if "sslmode=" in db_url:
+        import urllib.parse
+        parsed = urllib.parse.urlsplit(db_url)
+        q_params = urllib.parse.parse_qs(parsed.query)
+        sslmode = q_params.pop("sslmode", ["require"])[0]
+        new_query = urllib.parse.urlencode(q_params, doseq=True)
+        db_url = urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, parsed.path, new_query, parsed.fragment))
+        if sslmode in ("require", "verify-ca", "verify-full"):
+            connect_args["ssl"] = "require"
+    elif "supabase.co" in db_url:
+        connect_args["ssl"] = "require"
+
     _engine = create_async_engine(
-        settings.database_url,
+        db_url,
         pool_size=settings.database_pool_size,
         max_overflow=settings.database_max_overflow,
         echo=settings.debug,
         pool_pre_ping=True,  # Verify connections before use
+        connect_args=connect_args,
     )
     _session_factory = async_sessionmaker(
         _engine,
         class_=AsyncSession,
         expire_on_commit=False,
     )
-    logger.info("database_initialized", url=settings.database_url.split("@")[-1])
+    logger.info("database_initialized", url=db_url.split("@")[-1] if "@" in db_url else "localhost")
 
 
 async def close_db() -> None:

@@ -177,7 +177,16 @@ async def get_ohlcv(
         )
         if dt_val is None:
             return None
-        date_str = dt_val.isoformat() if hasattr(dt_val, "isoformat") else str(dt_val)
+        if hasattr(dt_val, "isoformat"):
+            date_str = dt_val.isoformat()
+        elif isinstance(dt_val, (int, float)) and not isinstance(dt_val, bool):
+            ts_sec = dt_val / 1000.0 if dt_val > 1e11 else dt_val
+            try:
+                date_str = datetime.fromtimestamp(ts_sec, tz=timezone.utc).isoformat()
+            except Exception:
+                date_str = str(dt_val)
+        else:
+            date_str = str(dt_val)
 
         def _val(*keys, fallback=0.0):
             for k in keys:
@@ -301,11 +310,20 @@ async def get_indices(
         else:
             indices_list = []
 
-    # Parse indices safely — never let one bad index dict crash the whole response
     parsed_indices = []
     for idx in indices_list:
         try:
-            parsed_indices.append(MarketIndex(**idx))
+            if isinstance(idx, dict):
+                idx_copy = dict(idx)
+                if "value" not in idx_copy or idx_copy["value"] is None:
+                    idx_copy["value"] = idx_copy.get("price", 0.0)
+                if "change" not in idx_copy or idx_copy["change"] is None:
+                    idx_copy["change"] = 0.0
+                if "change_percent" not in idx_copy or idx_copy["change_percent"] is None:
+                    idx_copy["change_percent"] = 0.0
+                parsed_indices.append(MarketIndex(**idx_copy))
+            else:
+                parsed_indices.append(MarketIndex(**idx))
         except Exception as e:
             logger.warning("skipping_malformed_index", index_data=str(idx)[:200], error=str(e))
 

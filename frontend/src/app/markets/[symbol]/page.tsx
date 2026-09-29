@@ -240,7 +240,10 @@ export default function StockDetailPage() {
                 <div className="p-2 rounded-lg bg-white/[0.02] border border-white/[0.04]">
                   <span className="text-[10px] text-[var(--text-dim)] uppercase tracking-wider block">PE Ratio</span>
                   <span className="text-white font-medium">
-                    {quote.pe_ratio != null && !isNaN(Number(quote.pe_ratio)) ? Number(quote.pe_ratio).toFixed(1) : '—'}
+                    {(() => {
+                      const pe = quote.pe_ratio ?? company?.metrics?.pe_ratio ?? company?.pe_ratio;
+                      return pe != null && !isNaN(Number(pe)) && Number(pe) > 0 ? Number(pe).toFixed(1) : '—';
+                    })()}
                   </span>
                 </div>
               </div>

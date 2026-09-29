@@ -184,10 +184,25 @@ class FinnhubAdapter(BaseDataAdapter):
             return None
 
         m = raw["metric"]
+        pe = (
+            m.get("peTTM")
+            or m.get("peBasicExclExtraTTM")
+            or m.get("peNormalizedAnnual")
+            or m.get("peExclExtraTTM")
+        )
+        de = m.get("totalDebt/totalEquityQuarterly") or m.get("totalDebt/totalEquityAnnual")
+        cr = m.get("currentRatioQuarterly") or m.get("currentRatioAnnual")
+        pm = m.get("netProfitMarginTTM") or m.get("netProfitMarginAnnual")
+        if pm is not None and abs(pm) > 1.0:
+            pm = pm / 100.0
+
         return {
-            "pe_ratio": m.get("peBasicExclExtraTTM") or m.get("peNormalizedAnnual"),
+            "pe_ratio": pe,
             "pb_ratio": m.get("pbAnnual") or m.get("pbQuarterly"),
             "ps_ratio": m.get("psTTM"),
+            "debt_to_equity": de,
+            "current_ratio": cr,
+            "profit_margin": pm,
             "roe": m.get("roeTTM"),
             "roa": m.get("roaTTM"),
             "eps_ttm": m.get("epsTTM"),

@@ -222,10 +222,12 @@ class UpstoxAdapter(BaseDataAdapter):
                 return None
                 
             quote_data = None
+            clean_sym = symbol.split(".")[0].upper()
             for k, v in data["data"].items():
-                if isinstance(v, dict) and v.get("instrument_token") == key:
-                    quote_data = v
-                    break
+                if isinstance(v, dict):
+                    if v.get("instrument_token") == key or k == key or k.endswith(f":{clean_sym}"):
+                        quote_data = v
+                        break
                     
             if not quote_data:
                 # Fallback: try first value in data dict
@@ -235,19 +237,22 @@ class UpstoxAdapter(BaseDataAdapter):
                 return None
                 
             last_price = self._safe_num(quote_data.get("last_price")) or 0.0
-            ohlc = quote_data.get("ohlc", {})
-            if isinstance(ohlc, dict):
-                prev_close = self._safe_num(ohlc.get("close", quote_data.get("cp", quote_data.get("previous_close", last_price)))) or last_price
-                high = self._safe_num(ohlc.get("high", quote_data.get("high")))
-                low = self._safe_num(ohlc.get("low", quote_data.get("low")))
-                open_price = self._safe_num(ohlc.get("open", quote_data.get("open")))
-            else:
-                prev_close = self._safe_num(quote_data.get("cp", quote_data.get("previous_close", last_price))) or last_price
-                high = self._safe_num(quote_data.get("high"))
-                low = self._safe_num(quote_data.get("low"))
-                open_price = self._safe_num(quote_data.get("open"))
-            
-            volume = int(self._safe_num(quote_data.get("volume")) or 0)
+            live_ohlc = quote_data.get("live_ohlc") or {}
+            prev_ohlc = quote_data.get("prev_ohlc") or {}
+            raw_ohlc = quote_data.get("ohlc") or {}
+            ohlc = live_ohlc or raw_ohlc or prev_ohlc
+
+            prev_close = (
+                self._safe_num(prev_ohlc.get("close"))
+                or self._safe_num(quote_data.get("cp"))
+                or self._safe_num(quote_data.get("previous_close"))
+                or self._safe_num(raw_ohlc.get("close"))
+                or last_price
+            )
+            open_price = self._safe_num(ohlc.get("open", quote_data.get("open")))
+            high = self._safe_num(ohlc.get("high", quote_data.get("high")))
+            low = self._safe_num(ohlc.get("low", quote_data.get("low")))
+            volume = int(self._safe_num(ohlc.get("volume", quote_data.get("volume"))) or 0)
             
             if not last_price:
                 return None
@@ -315,7 +320,9 @@ class UpstoxAdapter(BaseDataAdapter):
             }
             unit, interval_str = interval_map.get(interval, ("days", "1"))
                 
-            endpoint = f"/v3/historical-candle/{key}/{unit}/{interval_str}/{to_date}/{from_date}"
+            import urllib.parse
+            encoded_key = urllib.parse.quote(key, safe="")
+            endpoint = f"/v3/historical-candle/{encoded_key}/{unit}/{interval_str}/{to_date}/{from_date}"
             
             data = await self._throttled_request(
                 "GET",
@@ -339,15 +346,18 @@ class UpstoxAdapter(BaseDataAdapter):
                     # Parse timestamp format (could be ISO format)
                     if isinstance(ts, str):
                         try:
-                            # 2024-03-22T00:00:00+05:30
                             ts_dt = datetime.fromisoformat(ts)
                             ts_int = int(ts_dt.timestamp())
+                            ts_iso = ts_dt.isoformat()
                         except ValueError:
                             ts_int = 0
+                            ts_iso = ts
                     else:
                         ts_int = int(ts)
+                        ts_iso = datetime.fromtimestamp(ts_int, tz=timezone.utc).isoformat()
                         
                     bars.append({
+                        "date": ts_iso,
                         "time": ts_int,
                         "open": float(c[1]),
                         "high": float(c[2]),

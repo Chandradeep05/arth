@@ -464,5 +464,102 @@ async def test_market_indices_uses_upstox_fallback():
         symbols = [idx["symbol"] for idx in indices]
         assert "^NSEI" in symbols
         assert "^BSESN" in symbols
+        for idx in indices:
+            assert "value" in idx
+            assert idx["value"] == 24500.0
+
+
+# ── 18. MarketIndex Schema Accepts Price and Fallback Defaults ──
+
+def test_market_index_schema_price_fallback():
+    """MarketIndex must accept 'price' when 'value' is omitted and default change to 0."""
+    from datetime import datetime, timezone
+    from app.models.schemas.market import MarketIndex
+
+    now = datetime.now(timezone.utc)
+    raw = {
+        "symbol": "^NSEI",
+        "name": "NIFTY 50",
+        "price": 22780.25,
+        "timestamp": now,
+    }
+    idx = MarketIndex(**raw)
+    assert idx.value == 22780.25
+    assert idx.change == 0.0
+    assert idx.change_percent == 0.0
+
+
+# ── 19. OHLCV Normalization on Numeric Timestamps (1970 Epoch Bug) ──
+
+def test_normalize_ohlcv_numeric_timestamps():
+    """normalize_ohlcv must interpret numeric seconds as unit='s', not nanoseconds."""
+    import pandas as pd
+    from app.data.market_data_provider import normalize_ohlcv
+
+    # Timestamps in seconds (March 2024)
+    bars = [
+        {"time": 1711065600, "open": 100.0, "high": 105.0, "low": 99.0, "close": 104.0, "volume": 1000},
+        {"time": 1711152000, "open": 104.0, "high": 108.0, "low": 103.0, "close": 107.0, "volume": 1200},
+    ]
+    df = normalize_ohlcv({"bars": bars}, "upstox")
+    assert df is not None
+    assert len(df) == 2
+    # Verify index year is 2024, NOT 1970
+    assert df.index[0].year == 2024
+    assert df.index[1].year == 2024
+
+
+# ── 20. Finnhub Fundamentals Enrichment ─────────────────────────
+
+@pytest.mark.asyncio
+async def test_finnhub_fundamentals_enrichment():
+    """FinnhubAdapter must extract debt_to_equity, current_ratio, profit_margin, and pe_ratio."""
+    from app.data.adapters.finnhub import FinnhubAdapter
+
+    adapter = FinnhubAdapter()
+    mock_metric = {
+        "metric": {
+            "peTTM": 32.5,
+            "totalDebt/totalEquityQuarterly": 45.2,
+            "currentRatioQuarterly": 1.85,
+            "netProfitMarginTTM": 26.5,  # Percentage format from Finnhub
+            "roeTTM": 40.0,
+            "roaTTM": 18.0,
+            "epsTTM": 6.8,
+            "52WeekHigh": 240.0,
+            "52WeekLow": 160.0,
+            "beta": 1.2,
+        }
+    }
+
+    with patch.object(adapter, "_throttled_get", new_callable=AsyncMock) as mock_get:
+        mock_get.return_value = mock_metric
+        res = await adapter.get_fundamentals("NVDA")
+        assert res is not None
+        assert res["pe_ratio"] == 32.5
+        assert res["debt_to_equity"] == 45.2
+        assert res["current_ratio"] == 1.85
+        assert res["profit_margin"] == 0.265  # Normalized from 26.5%
+        assert res["roe"] == 40.0
+
+
+# ── 21. RiskEngine Financial Health on Healthy P/E ─────────────
+
+def test_risk_engine_financial_health_on_healthy_pe():
+    """Companies with healthy PE multiples (0 < pe <= 50) must not be marked unavailable."""
+    from app.engines.risk.engine import RiskEngine
+
+    engine = RiskEngine()
+    metrics = {
+        "pe_ratio": 32.5,
+        "debt_to_equity": 25.0,
+        "current_ratio": 1.85,
+        "profit_margin": 0.25,
+    }
+    score, factors, available = engine._compute_financial_risk(metrics, sector="Technology")
+    assert available is True
+    assert score < 50.0  # Low risk given strong fundamentals
+    assert any("Moderate valuation multiple" in f for f in factors)
+
 
 

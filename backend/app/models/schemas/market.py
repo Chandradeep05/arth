@@ -11,7 +11,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 # ── Response Metadata ──
@@ -131,9 +131,22 @@ class MarketIndex(BaseModel):
     symbol: str
     name: str
     value: float
-    change: float
-    change_percent: float
+    change: float = 0.0
+    change_percent: float = 0.0
     timestamp: datetime
+    price: Optional[float] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def populate_value(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            if "value" not in data or data["value"] is None:
+                data["value"] = data.get("price", 0.0)
+            if "change" not in data or data["change"] is None:
+                data["change"] = 0.0
+            if "change_percent" not in data or data["change_percent"] is None:
+                data["change_percent"] = 0.0
+        return data
 
 
 class MarketOverviewResponse(BaseModel):

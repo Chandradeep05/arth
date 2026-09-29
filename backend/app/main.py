@@ -113,7 +113,14 @@ async def lifespan(app: FastAPI):
             # Supabase requires SSL for external connections
             if 'supabase.co' in dsn and 'sslmode' not in dsn:
                 dsn += ('&' if '?' in dsn else '?') + 'sslmode=require'
-            pg_pool = await asyncpg.create_pool(dsn, min_size=1, max_size=5)
+            pg_pool = await asyncpg.create_pool(
+                dsn,
+                min_size=1,
+                max_size=5,
+                statement_cache_size=0,
+                max_inactive_connection_lifetime=60.0,
+                command_timeout=30.0,
+            )
             logger.info("asyncpg_pool_created", dsn_host=dsn.split("@")[-1][:40] if "@" in dsn else "localhost")
         except Exception as e:
             logger.error("asyncpg_pool_failed", error=str(e))
@@ -285,8 +292,18 @@ def create_app() -> FastAPI:
     async def db_connection_middleware(request: Request, call_next):
         pool = getattr(app.state, "pg_pool", None)
         if pool and not request.url.path.startswith(_NO_DB_PREFIXES):
-            async with pool.acquire() as conn:
-                request.state.db = conn
+            try:
+                async with pool.acquire(timeout=5.0) as conn:
+                    request.state.db = conn
+                    return await call_next(request)
+            except (asyncpg.PostgresError, OSError, ConnectionResetError, asyncio.TimeoutError) as db_err:
+                logger.error("db_connection_middleware_failed", error=str(db_err), path=request.url.path)
+                if request.url.path.startswith(("/api/v1/auth", "/api/v1/user", "/api/v1/invite", "/api/v1/admin")):
+                    return ORJSONResponse(
+                        status_code=503,
+                        content={"detail": "Database connection temporarily unavailable. Please retry in a few moments."},
+                    )
+                request.state.db = None
                 return await call_next(request)
         return await call_next(request)
 

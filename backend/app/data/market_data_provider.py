@@ -121,7 +121,14 @@ def normalize_ohlcv(data: Any, source: str) -> pd.DataFrame | None:
             
         # Parse datetime if available
         if 'Datetime' in df.columns:
-            df['Datetime'] = pd.to_datetime(df['Datetime'], utc=True)
+            import numpy as np
+            valid_dt = df['Datetime'].dropna()
+            sample = valid_dt.iloc[0] if not valid_dt.empty else None
+            if isinstance(sample, (int, float, np.integer, np.floating)):
+                unit = 'ms' if sample > 1e11 else 's'
+                df['Datetime'] = pd.to_datetime(df['Datetime'], unit=unit, utc=True)
+            else:
+                df['Datetime'] = pd.to_datetime(df['Datetime'], utc=True)
             df = df.set_index('Datetime')
             
         # Sort ascending
@@ -412,12 +419,14 @@ class MarketDataProvider:
                 for idx_sym, idx_name in [("^NSEI", "NIFTY 50"), ("^BSESN", "SENSEX")]:
                     q = await upstox.get_quote(idx_sym)
                     if q and q.get("price"):
+                        p = round(float(q.get("price", 0)), 2)
                         indian_indices.append({
                             "symbol": idx_sym,
                             "name": idx_name,
-                            "price": q.get("price"),
-                            "change": q.get("change"),
-                            "change_percent": q.get("change_percent"),
+                            "value": p,
+                            "price": p,
+                            "change": round(float(q.get("change", 0)), 2),
+                            "change_percent": round(float(q.get("change_percent", 0)), 2),
                             "timestamp": q.get("timestamp"),
                         })
             except Exception as e:
