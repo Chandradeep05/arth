@@ -323,6 +323,41 @@ class StatementParser:
             _safe_float(fcf_curr), _safe_float(fcf_prev)
         )
 
+        # Enrich missing ratios from market_data fundamentals (Upstox / Finnhub / FMP key-ratios)
+        if any(self._val(ratios.get(k)) is None for k in ('roe', 'roa', 'debt_to_equity', 'current_ratio', 'profit_margin')):
+            try:
+                from app.data.market_data_provider import market_data
+                fund_res = await market_data.get_fundamentals(symbol)
+                fund_data = fund_res.data if fund_res and fund_res.available and isinstance(fund_res.data, dict) else {}
+                if not fund_data:
+                    comp_res = await market_data.get_company_info(symbol)
+                    if comp_res and comp_res.available and isinstance(comp_res.data, dict):
+                        fund_data = comp_res.data.get("metrics") or {}
+
+                if fund_data:
+                    def _enrich(ratio_key: str, fund_keys: List[str], is_pct: bool = False):
+                        if self._val(ratios.get(ratio_key)) is None:
+                            for fk in fund_keys:
+                                v = fund_data.get(fk)
+                                val_f = _safe_float(v)
+                                if val_f is not None:
+                                    # Normalize percentage to decimal ratio if > 1.0 (e.g. 15.5% -> 0.155)
+                                    if is_pct and abs(val_f) > 1.0:
+                                        val_f = round(val_f / 100.0, 4)
+                                    ratios[ratio_key] = _trend(val_f, None)
+                                    break
+
+                    _enrich("roe", ["roe", "return_on_equity", "returnOnEquity"], is_pct=True)
+                    _enrich("roa", ["roa", "return_on_assets", "returnOnAssets"], is_pct=True)
+                    _enrich("debt_to_equity", ["debt_to_equity", "debtToEquity", "totalDebtToEquity"])
+                    _enrich("current_ratio", ["current_ratio", "currentRatio"])
+                    _enrich("profit_margin", ["profit_margin", "net_margin", "profitMargin", "netProfitMargin"], is_pct=True)
+                    _enrich("operating_margin", ["operating_margin", "operatingMargin"], is_pct=True)
+                    _enrich("pe_ratio", ["pe_ratio", "trailingPE", "peRatio"])
+                    _enrich("pb_ratio", ["pb_ratio", "priceToBook", "pbRatio"])
+            except Exception as e:
+                logger.debug("ratios_enrich_fundamentals_error", symbol=symbol, error=str(e))
+
         return {
             "symbol": symbol.upper(),
             "ratios": ratios,

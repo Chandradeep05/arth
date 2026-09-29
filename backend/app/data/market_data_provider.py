@@ -102,33 +102,53 @@ def normalize_ohlcv(data: Any, source: str) -> pd.DataFrame | None:
             
         df = pd.DataFrame(bars)
         
-        # Standardize column names (map lowercase or variation to TitleCase)
+        # Select best datetime column among candidates to avoid duplicate 'Datetime' columns
+        dt_candidates = ['datetime', 'timestamp', 'date', 'time', 't']
+        best_dt_col = None
+        for cand in dt_candidates:
+            for c in df.columns:
+                if str(c).lower() == cand:
+                    best_dt_col = c
+                    break
+            if best_dt_col is not None:
+                break
+
         col_map = {}
         for c in df.columns:
             clow = str(c).lower()
-            if clow in ['open', 'o']: col_map[c] = 'Open'
-            elif clow in ['high', 'h']: col_map[c] = 'High'
-            elif clow in ['low', 'l']: col_map[c] = 'Low'
-            elif clow in ['close', 'c']: col_map[c] = 'Close'
-            elif clow in ['volume', 'v', 'vol']: col_map[c] = 'Volume'
-            elif clow in ['datetime', 'date', 't', 'timestamp', 'time']: col_map[c] = 'Datetime'
-            
+            if c == best_dt_col:
+                col_map[c] = 'Datetime'
+            elif clow in ['open', 'o']:
+                col_map[c] = 'Open'
+            elif clow in ['high', 'h']:
+                col_map[c] = 'High'
+            elif clow in ['low', 'l']:
+                col_map[c] = 'Low'
+            elif clow in ['close', 'c']:
+                col_map[c] = 'Close'
+            elif clow in ['volume', 'v', 'vol']:
+                col_map[c] = 'Volume'
+
         df = df.rename(columns=col_map)
-        
+        df = df.loc[:, ~df.columns.duplicated()]
+
         required = ['Open', 'High', 'Low', 'Close', 'Volume']
         if not all(col in df.columns for col in required):
             return None
-            
+
         # Parse datetime if available
         if 'Datetime' in df.columns:
+            dt_series = df['Datetime']
+            if isinstance(dt_series, pd.DataFrame):
+                dt_series = dt_series.iloc[:, 0]
             import numpy as np
-            valid_dt = df['Datetime'].dropna()
+            valid_dt = dt_series.dropna()
             sample = valid_dt.iloc[0] if not valid_dt.empty else None
             if isinstance(sample, (int, float, np.integer, np.floating)):
                 unit = 'ms' if sample > 1e11 else 's'
-                df['Datetime'] = pd.to_datetime(df['Datetime'], unit=unit, utc=True)
+                df['Datetime'] = pd.to_datetime(dt_series, unit=unit, utc=True)
             else:
-                df['Datetime'] = pd.to_datetime(df['Datetime'], utc=True)
+                df['Datetime'] = pd.to_datetime(dt_series, utc=True)
             df = df.set_index('Datetime')
             
         # Sort ascending
@@ -458,7 +478,7 @@ class MarketDataProvider:
                 logger.warning("market_data_batch_us_failed", error=str(e))
 
         upstox = self._get_upstox()
-        for sym in indian_symbols:
+        async def _fetch_indian(sym: str):
             quote = None
             if upstox:
                 try:
@@ -470,8 +490,16 @@ class MarketDataProvider:
                     quote = await self._nse.get_quote(sym)
                 except Exception:
                     quote = None
-            if quote:
-                results.append(quote)
+            return quote
+
+        if indian_symbols:
+            indian_quotes = await asyncio.gather(
+                *[_fetch_indian(s) for s in indian_symbols],
+                return_exceptions=True,
+            )
+            for q in indian_quotes:
+                if q and isinstance(q, dict):
+                    results.append(q)
 
         return results
 

@@ -227,14 +227,22 @@ class RiskEngine:
         """Volatility risk from 30-day price standard deviation."""
         factors = []
 
-        if ohlcv is None or (hasattr(ohlcv, "empty") and ohlcv.empty) or len(ohlcv) < 20:
+        if ohlcv is None or (hasattr(ohlcv, "empty") and ohlcv.empty) or len(ohlcv) < 5:
             return 50.0, ["Insufficient data for volatility calculation"], False
 
         if isinstance(ohlcv, pd.DataFrame):
             closes = ohlcv["Close"].tail(30).values
         else:
             closes = [bar.get("Close", bar.get("close")) for bar in ohlcv[-30:]]
+
+        closes = pd.to_numeric(pd.Series(closes), errors='coerce').dropna().values
+        closes = closes[closes > 0]
+        if len(closes) < 5:
+            return 50.0, ["Insufficient data for volatility calculation"], False
+
         returns = np.diff(np.log(closes))
+        if len(returns) == 0:
+            return 50.0, ["Insufficient data for volatility calculation"], False
 
         daily_vol = float(np.std(returns))
         annualized_vol = daily_vol * np.sqrt(252) * 100
@@ -267,13 +275,19 @@ class RiskEngine:
         """Liquidity risk from average trading volume."""
         factors = []
 
-        if ohlcv is None or (hasattr(ohlcv, "empty") and ohlcv.empty) or len(ohlcv) < 10:
+        if ohlcv is None or (hasattr(ohlcv, "empty") and ohlcv.empty) or len(ohlcv) < 5:
             return 50.0, ["Insufficient data for liquidity analysis"], False
 
         if isinstance(ohlcv, pd.DataFrame):
             volumes = ohlcv["Volume"].tail(20).values
         else:
             volumes = [bar.get("Volume", bar.get("volume")) for bar in ohlcv[-20:]]
+
+        volumes = pd.to_numeric(pd.Series(volumes), errors='coerce').dropna().values
+        volumes = volumes[volumes >= 0]
+        if len(volumes) == 0:
+            return 50.0, ["Insufficient data for liquidity analysis"], False
+
         avg_vol = float(np.mean(volumes))
 
         # Higher volume = lower liquidity risk

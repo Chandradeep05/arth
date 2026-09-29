@@ -75,7 +75,7 @@ async def init_db(settings: Settings) -> None:
         class_=AsyncSession,
         expire_on_commit=False,
     )
-    logger.info("database_initialized", url=db_url.split("@")[-1] if "@" in db_url else "localhost")
+    logger.info("database_initialized", url=settings.database_url.split("@")[-1] if "@" in settings.database_url else "localhost")
 
 
 async def close_db() -> None:

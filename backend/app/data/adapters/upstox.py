@@ -242,23 +242,37 @@ class UpstoxAdapter(BaseDataAdapter):
             raw_ohlc = quote_data.get("ohlc") or {}
             ohlc = live_ohlc or raw_ohlc or prev_ohlc
 
+            # Prioritize official closing price of previous day ("cp", "prev_close_price", "previous_close")
             prev_close = (
-                self._safe_num(prev_ohlc.get("close"))
-                or self._safe_num(quote_data.get("cp"))
+                self._safe_num(quote_data.get("cp"))
+                or self._safe_num(quote_data.get("prev_close_price"))
                 or self._safe_num(quote_data.get("previous_close"))
+                or self._safe_num(prev_ohlc.get("close"))
                 or self._safe_num(raw_ohlc.get("close"))
-                or last_price
             )
+            net_change = self._safe_num(quote_data.get("net_change"))
+
+            # If net_change is available from Upstox, derive prev_close if needed
+            if net_change is not None and (prev_close is None or prev_close == last_price):
+                prev_close = round(last_price - net_change, 2)
+            elif prev_close is None:
+                prev_close = last_price
+
+            if net_change is not None:
+                change = round(net_change, 2)
+            else:
+                change = round(last_price - prev_close, 2) if prev_close else 0.0
+
+            pct_change = self._safe_num(quote_data.get("percentage_change"))
+            if pct_change is not None:
+                change_percent = round(pct_change, 2)
+            else:
+                change_percent = round((change / prev_close) * 100, 2) if prev_close else 0.0
+
             open_price = self._safe_num(ohlc.get("open", quote_data.get("open")))
             high = self._safe_num(ohlc.get("high", quote_data.get("high")))
             low = self._safe_num(ohlc.get("low", quote_data.get("low")))
             volume = int(self._safe_num(ohlc.get("volume", quote_data.get("volume"))) or 0)
-            
-            if not last_price:
-                return None
-            
-            change = round(last_price - prev_close, 2) if prev_close else 0.0
-            change_percent = round((change / prev_close) * 100, 2) if prev_close else 0.0
             
             return {
                 "symbol": symbol,
@@ -358,7 +372,6 @@ class UpstoxAdapter(BaseDataAdapter):
                         
                     bars.append({
                         "date": ts_iso,
-                        "time": ts_int,
                         "open": float(c[1]),
                         "high": float(c[2]),
                         "low": float(c[3]),
@@ -533,63 +546,128 @@ class UpstoxAdapter(BaseDataAdapter):
 
         periods_map: Dict[str, Dict[str, Optional[float]]] = {}
 
+        _CANONICAL_ALIASES = {
+            "revenue from operations": "Total Revenue",
+            "total operating revenue": "Total Revenue",
+            "gross sales": "Total Revenue",
+            "revenue": "Total Revenue",
+            "net sales": "Total Revenue",
+            "profit after tax": "Net Income",
+            "net profit": "Net Income",
+            "profit / (loss) for the period": "Net Income",
+            "profit for the period": "Net Income",
+            "pat": "Net Income",
+            "operating profit": "Operating Income",
+            "ebit": "Operating Income",
+            "profit before interest and tax": "Operating Income",
+            "pbit": "Operating Income",
+            "total equity": "Total Stockholders Equity",
+            "total shareholders funds": "Total Stockholders Equity",
+            "total shareholder funds": "Total Stockholders Equity",
+            "shareholders funds": "Total Stockholders Equity",
+            "net worth": "Total Stockholders Equity",
+            "equity share capital": "Common Stock",
+            "share capital": "Common Stock",
+            "total current assets": "Current Assets",
+            "total current liabilities": "Current Liabilities",
+            "total assets": "Total Assets",
+            "total liabilities": "Total Liabilities Net Minority Interest",
+            "total debt": "Total Debt",
+            "long term borrowings": "Long Term Debt",
+            "cash flow from operating activities": "Operating Cash Flow",
+            "net cash flow from operating activities": "Operating Cash Flow",
+            "cash flow from investing activities": "Investing Cash Flow",
+            "net cash flow from investing activities": "Investing Cash Flow",
+            "cash flow from financing activities": "Financing Cash Flow",
+            "net cash flow from financing activities": "Financing Cash Flow",
+            "capital expenditures": "Capital Expenditure",
+            "purchase of fixed assets": "Capital Expenditure",
+        }
+
+        def _record_item(p_str: str, name: str, val: Optional[float]):
+            if not p_str or not name or val is None:
+                return
+            p_clean = p_str.strip()
+            if p_clean not in periods_map:
+                periods_map[p_clean] = {}
+            periods_map[p_clean][name] = val
+            alias = _CANONICAL_ALIASES.get(name.lower().strip())
+            if alias and alias not in periods_map[p_clean]:
+                periods_map[p_clean][alias] = val
+
         # 1. Parse `full_statement` (Upstox primary documentation)
         full_statement = data.get("full_statement") or []
+        fs_rows = []
         if isinstance(full_statement, list):
-            for row in full_statement:
-                if not isinstance(row, dict):
-                    continue
-                particular = (row.get("particular") or row.get("category") or "").strip()
-                if not particular:
-                    continue
-                history = row.get("history") or []
-                if isinstance(history, list):
-                    for entry in history:
-                        if isinstance(entry, dict):
-                            period = str(entry.get("period") or entry.get("year") or "").strip()
-                            if period:
-                                val = self._safe_num(entry.get("value"))
-                                if period not in periods_map:
-                                    periods_map[period] = {}
-                                periods_map[period][particular] = val
+            fs_rows.extend(full_statement)
+        elif isinstance(full_statement, dict):
+            for sec_items in full_statement.values():
+                if isinstance(sec_items, list):
+                    fs_rows.extend(sec_items)
 
-        # 2. Parse summary `income_statement` or `history` (summary records)
-        summary_records = data.get("income_statement") or data.get("history") or []
+        for row in fs_rows:
+            if not isinstance(row, dict):
+                continue
+            particular = (
+                row.get("particular")
+                or row.get("category")
+                or row.get("line_item")
+                or row.get("name")
+                or ""
+            ).strip()
+            history = row.get("history") or []
+            if isinstance(history, list) and particular:
+                for entry in history:
+                    if isinstance(entry, dict):
+                        period = str(entry.get("period") or entry.get("year") or "").strip()
+                        val = self._safe_num(entry.get("value"))
+                        _record_item(period, particular, val)
+
+            # Check nested sub_items / items
+            sub_items = row.get("sub_items") or row.get("items") or []
+            if isinstance(sub_items, list):
+                for sub in sub_items:
+                    if isinstance(sub, dict):
+                        sub_part = (
+                            sub.get("particular")
+                            or sub.get("category")
+                            or sub.get("name")
+                            or ""
+                        ).strip()
+                        sub_hist = sub.get("history") or []
+                        if isinstance(sub_hist, list) and sub_part:
+                            for entry in sub_hist:
+                                if isinstance(entry, dict):
+                                    period = str(entry.get("period") or entry.get("year") or "").strip()
+                                    val = self._safe_num(entry.get("value"))
+                                    _record_item(period, sub_part, val)
+
+        # 2. Parse summary records (income_statement, balance_sheet, cash_flow, history)
+        summary_records = (
+            data.get("income_statement")
+            or data.get("balance_sheet")
+            or data.get("cash_flow")
+            or data.get("history")
+            or []
+        )
         if isinstance(summary_records, list):
             for row in summary_records:
                 if not isinstance(row, dict):
                     continue
-                # If row has "category" and "history" (e.g. category="revenue")
-                cat = (row.get("category") or "").strip()
+                cat = (row.get("category") or row.get("particular") or "").strip()
                 hist = row.get("history")
                 if cat and isinstance(hist, list):
                     for entry in hist:
                         if isinstance(entry, dict):
                             period = str(entry.get("period") or entry.get("year") or "").strip()
-                            if period:
-                                val = self._safe_num(entry.get("value"))
-                                if period not in periods_map:
-                                    periods_map[period] = {}
-                                if cat not in periods_map[period]:
-                                    periods_map[period][cat] = val
-                # If row is a direct summary dict with "period" (e.g. balance sheet summary)
+                            val = self._safe_num(entry.get("value"))
+                            _record_item(period, cat, val)
                 period = str(row.get("period") or row.get("year") or "").strip()
                 if period and not hist:
-                    if period not in periods_map:
-                        periods_map[period] = {}
                     for k, v in row.items():
                         if k not in ("period", "year", "time_period", "type"):
                             val = self._safe_num(v)
-                            periods_map[period][k] = val
-                            _name_map = {
-                                "total_asset": "Total Assets",
-                                "total_liability": "Total Liabilities Net Minority Interest",
-                                "total_equity": "Total Stockholders Equity",
-                                "revenue": "Total Revenue",
-                                "net_profit": "Net Income",
-                            }
-                            if k in _name_map and _name_map[k] not in periods_map[period]:
-                                periods_map[period][_name_map[k]] = val
+                            _record_item(period, k, val)
 
         periods_list = [{"period": p, "items": items} for p, items in periods_map.items()]
 
@@ -626,19 +704,26 @@ class UpstoxAdapter(BaseDataAdapter):
             isin = await self._get_isin(symbol)
             if not isin:
                 return None
-                
+
             async def fetch_stmt(stmt_type: str, time_period: str = "yearly"):
-                try:
-                    return await self._throttled_request(
-                        "GET",
-                        f"/v2/fundamentals/{isin}/{stmt_type}",
-                        params={"time_period": time_period},
-                        cache_key=f"upstox:stmt:{stmt_type}:{time_period}:{symbol}",
-                        cache_ttl=_CACHE_TTL_FUNDAMENTALS,
-                    )
-                except Exception as e:
-                    logger.debug("upstox_stmt_fetch_error", stmt=stmt_type, time_period=time_period, error=str(e))
-                    return None
+                # Try consolidated with fs=true first, fallback to standalone
+                for stmt_mode in ("consolidated", "standalone"):
+                    try:
+                        params = {"fs": "true", "type": stmt_mode}
+                        if stmt_type == "income-statement":
+                            params["time_period"] = time_period
+                        res = await self._throttled_request(
+                            "GET",
+                            f"/v2/fundamentals/{isin}/{stmt_type}",
+                            params=params,
+                            cache_key=f"upstox:stmt:{stmt_type}:{time_period}:{stmt_mode}:{symbol}",
+                            cache_ttl=_CACHE_TTL_FUNDAMENTALS,
+                        )
+                        if res and isinstance(res, dict) and res.get("data"):
+                            return res
+                    except Exception as e:
+                        logger.debug("upstox_stmt_fetch_error", stmt=stmt_type, time_period=time_period, mode=stmt_mode, error=str(e))
+                return None
                 
             inc_yr, inc_qtr, bs_yr, bs_qtr, cf_yr, cf_qtr = await asyncio.gather(
                 fetch_stmt("income-statement", "yearly"),

@@ -20,12 +20,17 @@ import type { MarketIndex } from '@/types/market';
 import { useStockAtmosphere } from '@/lib/atmosphere';
 
 /* ── Tracked stocks for movers section ── */
-/* 25 cross-sector stocks (US market via Twelve Data). */
-/* Batched in chunks of 8 by the backend to stay within free-tier credits. */
-const MARKET_STOCKS = [
-  // 8 stocks = 1 batch = instant load (free tier: 8 credits/min)
+/* Curated cross-market basket (US + Indian Nifty leaders). */
+const US_STOCKS = [
   'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'TSLA', 'META', 'JPM',
 ];
+
+const INDIA_STOCKS = [
+  'RELIANCE.NS', 'TCS.NS', 'HDFCBANK.NS', 'INFY.NS', 'ICICIBANK.NS',
+  'BHARTIARTL.NS', 'SBIN.NS', 'ITC.NS', 'LT.NS', 'TATAMOTORS.NS',
+];
+
+const MARKET_STOCKS = [...US_STOCKS, ...INDIA_STOCKS];
 
 interface StockMover {
   symbol: string;
@@ -105,33 +110,38 @@ function formatVolume(v: number): string {
   return v.toString();
 }
 
-/* ── Market session status (NYSE hours: Mon-Fri 9:30-16:00 ET) ── */
+/* ── Market session status (NSE hours: Mon-Fri 9:15-15:30 IST; NYSE hours: Mon-Fri 9:30-16:00 ET) ── */
 function getMarketSessionLabel(): string {
   const now = new Date();
-  // Convert to ET (Eastern Time)
-  const et = new Date(now.toLocaleString('en-US', { timeZone: 'America/New_York' }));
-  const day = et.getDay(); // 0=Sun, 6=Sat
-  const hour = et.getHours();
-  const min = et.getMinutes();
-  const time = hour * 60 + min; // minutes since midnight
 
-  if (day === 0 || day === 6) return 'US Market: Closed (Weekend)';
-  if (time >= 570 && time < 960) return 'US Market: Open'; // 9:30-16:00
-  if (time >= 240 && time < 570) return 'US Market: Pre-Market';
-  if (time >= 960 && time < 1200) return 'US Market: After-Hours';
-  return 'US Market: Closed';
+  // IST time
+  const istStr = now.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' });
+  const ist = new Date(istStr);
+  const istDay = ist.getDay();
+  const istMinutes = ist.getHours() * 60 + ist.getMinutes();
+  const isIndiaOpen = (istDay >= 1 && istDay <= 5) && (istMinutes >= 555 && istMinutes <= 930);
+
+  // ET time
+  const etStr = now.toLocaleString('en-US', { timeZone: 'America/New_York' });
+  const et = new Date(etStr);
+  const etDay = et.getDay();
+  const etMinutes = et.getHours() * 60 + et.getMinutes();
+  const isUSOpen = (etDay >= 1 && etDay <= 5) && (etMinutes >= 570 && etMinutes <= 960);
+
+  const indiaStatus = isIndiaOpen ? 'NSE: Open' : 'NSE: Closed';
+  const usStatus = isUSOpen ? 'NYSE: Open' : 'NYSE: Closed';
+
+  return `${indiaStatus} · ${usStatus}`;
 }
 
-/* ── Sector heatmap: US sectors mapped to tracked stocks ── */
+/* ── Sector heatmap: cross-market sectors mapped to tracked stocks ── */
 const SECTOR_MAP: Record<string, string[]> = {
-  Tech: ['AAPL', 'MSFT', 'GOOGL', 'META', 'CRM'],
-  Semis: ['NVDA', 'AMD', 'AVGO'],
-  Consumer: ['AMZN', 'WMT', 'COST'],
-  Finance: ['JPM', 'GS', 'V', 'MA'],
-  Health: ['JNJ', 'UNH', 'PFE'],
-  Energy: ['XOM', 'CVX'],
-  Industrial: ['BA', 'CAT', 'TSLA'],
-  Media: ['DIS', 'NFLX'],
+  'Tech (US)': ['AAPL', 'MSFT', 'GOOGL', 'META'],
+  'IT (India)': ['TCS.NS', 'INFY.NS'],
+  'Finance': ['JPM'],
+  'Banking (India)': ['HDFCBANK.NS', 'ICICIBANK.NS', 'SBIN.NS'],
+  'Auto & Energy': ['RELIANCE.NS', 'TATAMOTORS.NS', 'TSLA', 'NVDA'],
+  'Consumer': ['AMZN', 'ITC.NS'],
 };
 
 /* ── Index Card Component ── */
@@ -327,6 +337,7 @@ export default function DashboardPage() {
   const [indices, setIndices] = useState<MarketIndex[]>([]);
   const [gainers, setGainers] = useState<StockMover[]>([]);
   const [losers, setLosers] = useState<StockMover[]>([]);
+  const [marketFilter, setMarketFilter] = useState<'all' | 'india' | 'us'>('all');
   const [sectors, setSectors] = useState<{ name: string; change: number }[]>([]);
   const [marketSession, setMarketSession] = useState<string>('');
   const [loading, setLoading] = useState(true);
@@ -477,9 +488,45 @@ export default function DashboardPage() {
       {sectors.length > 0 && <SectorHeatmap sectors={sectors} />}
 
       {/* Tracked Stock Movers */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 sm:gap-3.5">
-        <MoversTable title="Movers Up · Tracked Stocks" movers={gainers} type="gainers" />
-        <MoversTable title="Movers Down · Tracked Stocks" movers={losers} type="losers" />
+      <div className="space-y-2.5">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-1.5 p-1 bg-white/[0.03] border border-white/[0.06] rounded-lg">
+            {(['all', 'india', 'us'] as const).map((m) => (
+              <button
+                key={m}
+                onClick={() => setMarketFilter(m)}
+                className={`px-3 py-1 rounded-md text-[11px] font-mono font-medium transition-all cursor-pointer ${
+                  marketFilter === m
+                    ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
+                    : 'text-[var(--text-muted)] hover:text-white'
+                }`}
+              >
+                {m === 'all' ? 'All Markets' : m === 'india' ? 'India (NSE)' : 'US (NYSE)'}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 sm:gap-3.5">
+          <MoversTable
+            title={`Movers Up · ${marketFilter === 'all' ? 'All Markets' : marketFilter === 'india' ? 'India' : 'US'}`}
+            movers={gainers.filter(s => {
+              if (marketFilter === 'india') return s.symbol.endsWith('.NS') || s.symbol.endsWith('.BO');
+              if (marketFilter === 'us') return !s.symbol.endsWith('.NS') && !s.symbol.endsWith('.BO');
+              return true;
+            })}
+            type="gainers"
+          />
+          <MoversTable
+            title={`Movers Down · ${marketFilter === 'all' ? 'All Markets' : marketFilter === 'india' ? 'India' : 'US'}`}
+            movers={losers.filter(s => {
+              if (marketFilter === 'india') return s.symbol.endsWith('.NS') || s.symbol.endsWith('.BO');
+              if (marketFilter === 'us') return !s.symbol.endsWith('.NS') && !s.symbol.endsWith('.BO');
+              return true;
+            })}
+            type="losers"
+          />
+        </div>
       </div>
     </div>
   );
