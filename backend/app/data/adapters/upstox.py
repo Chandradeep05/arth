@@ -209,23 +209,40 @@ class UpstoxAdapter(BaseDataAdapter):
             if not key:
                 return None
                 
-            # Use OHLC endpoint which provides genuine OHLC, last_price, and previous close
-            data = await self._throttled_request(
-                "GET",
-                "/v3/market-quote/ohlc",
-                params={"instrument_key": key, "interval": "1d"},
-                cache_key=f"upstox:quote:{symbol}",
-                cache_ttl=_CACHE_TTL_QUOTE,
-            )
+            # Query full quotes endpoint first (returns net_change, cp, ohlc, etc.)
+            data = None
+            try:
+                data = await self._throttled_request(
+                    "GET",
+                    "/v3/market-quote/quotes",
+                    params={"instrument_key": key},
+                    cache_key=f"upstox:quotes:{symbol}",
+                    cache_ttl=_CACHE_TTL_QUOTE,
+                )
+            except Exception as e:
+                logger.debug("upstox_quotes_endpoint_failed", symbol=symbol, error=str(e))
+
+            # Fallback to OHLC endpoint if full quotes fails or returns empty data
+            if not data or "data" not in data or not data["data"]:
+                try:
+                    data = await self._throttled_request(
+                        "GET",
+                        "/v3/market-quote/ohlc",
+                        params={"instrument_key": key, "interval": "1d"},
+                        cache_key=f"upstox:quote:{symbol}",
+                        cache_ttl=_CACHE_TTL_QUOTE,
+                    )
+                except Exception as e:
+                    logger.debug("upstox_ohlc_endpoint_failed", symbol=symbol, error=str(e))
             
-            if not data or "data" not in data:
+            if not data or "data" not in data or not data["data"]:
                 return None
                 
             quote_data = None
             clean_sym = symbol.split(".")[0].upper()
             for k, v in data["data"].items():
                 if isinstance(v, dict):
-                    if v.get("instrument_token") == key or k == key or k.endswith(f":{clean_sym}"):
+                    if v.get("instrument_token") == key or k == key or k.endswith(f":{clean_sym}") or f":{clean_sym}" in k:
                         quote_data = v
                         break
                     
@@ -243,31 +260,70 @@ class UpstoxAdapter(BaseDataAdapter):
             ohlc = live_ohlc or raw_ohlc or prev_ohlc
 
             # Prioritize official closing price of previous day ("cp", "prev_close_price", "previous_close")
+            # Note: Do NOT fall back to raw_ohlc["close"] because that is the current day's closing price
             prev_close = (
                 self._safe_num(quote_data.get("cp"))
                 or self._safe_num(quote_data.get("prev_close_price"))
                 or self._safe_num(quote_data.get("previous_close"))
-                or self._safe_num(prev_ohlc.get("close"))
-                or self._safe_num(raw_ohlc.get("close"))
             )
             net_change = self._safe_num(quote_data.get("net_change"))
 
+            # If prev_close is missing or equals last_price, try LTP endpoint which explicitly supplies 'cp'
+            if (prev_close is None or prev_close == last_price or prev_close <= 0) and net_change is None:
+                try:
+                    ltp_data = await self._throttled_request(
+                        "GET",
+                        "/v3/market-quote/ltp",
+                        params={"instrument_key": key},
+                        cache_key=f"upstox:ltp:{symbol}",
+                        cache_ttl=_CACHE_TTL_QUOTE,
+                    )
+                    if ltp_data and "data" in ltp_data:
+                        for ltp_val in ltp_data["data"].values():
+                            if isinstance(ltp_val, dict) and self._safe_num(ltp_val.get("cp")):
+                                cp_val = self._safe_num(ltp_val.get("cp"))
+                                if cp_val and cp_val > 0:
+                                    prev_close = cp_val
+                                    break
+                except Exception:
+                    pass
+
+            # If still missing or equal to last_price, derive from recent daily OHLCV candles
+            if (prev_close is None or prev_close == last_price or prev_close <= 0) and net_change is None:
+                try:
+                    hist = await self.get_ohlcv(symbol, period="5d", interval="1d")
+                    if hist and hist.get("bars"):
+                        bars = hist["bars"]
+                        if len(bars) >= 2:
+                            candidate = self._safe_num(bars[-2].get("close"))
+                            if candidate and candidate > 0:
+                                prev_close = candidate
+                        elif len(bars) == 1:
+                            candidate = self._safe_num(bars[0].get("open"))
+                            if candidate and candidate > 0:
+                                prev_close = candidate
+                except Exception as e:
+                    logger.debug("upstox_prev_close_history_failed", symbol=symbol, error=str(e))
+
             # If net_change is available from Upstox, derive prev_close if needed
-            if net_change is not None and (prev_close is None or prev_close == last_price):
+            if net_change is not None and net_change != 0.0 and (prev_close is None or prev_close == last_price):
                 prev_close = round(last_price - net_change, 2)
-            elif prev_close is None:
+
+            if net_change is not None and net_change != 0.0:
+                change = round(net_change, 2)
+            elif prev_close is not None and prev_close != 0.0:
+                change = round(last_price - prev_close, 2)
+            else:
+                change = 0.0
                 prev_close = last_price
 
-            if net_change is not None:
-                change = round(net_change, 2)
-            else:
-                change = round(last_price - prev_close, 2) if prev_close else 0.0
-
             pct_change = self._safe_num(quote_data.get("percentage_change"))
-            if pct_change is not None:
+            if pct_change is not None and pct_change != 0.0:
                 change_percent = round(pct_change, 2)
+            elif prev_close and prev_close > 0:
+                change_percent = round((change / prev_close) * 100, 2)
             else:
-                change_percent = round((change / prev_close) * 100, 2) if prev_close else 0.0
+                change_percent = 0.0
 
             open_price = self._safe_num(ohlc.get("open", quote_data.get("open")))
             high = self._safe_num(ohlc.get("high", quote_data.get("high")))

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import pandas as pd
 from datetime import datetime, timezone
 from enum import Enum
@@ -75,6 +76,18 @@ CAPABILITIES = {
         "holders": False,
         "financials": True,
     },
+}
+
+_COMMON_INDIAN_SYMBOLS = {
+    "RELIANCE", "TCS", "HDFCBANK", "INFY", "ICICIBANK", "SBIN", "BHARTIARTL",
+    "ITC", "KOTAKBANK", "LT", "HINDUNILVR", "AXISBANK", "BAJFINANCE", "MARUTI",
+    "ASIANPAINT", "TITAN", "TATAMOTORS", "SUNPHARMA", "ULTRACEMCO", "NTPC",
+    "ONGC", "POWERGRID", "JSWSTEEL", "ADANIENT", "ADANIPORTS", "COALINDIA",
+    "TATASTEEL", "M&M", "BAJAJFINSV", "WIPRO", "HCLTECH", "NESTLEIND", "BPCL",
+    "EICHERMOT", "GRASIM", "HEROMOTOCO", "HINDALCO", "CIPLA", "APOLLOHOSP",
+    "DRREDDY", "DIVISLAB", "TATACONSUM", "BRITANNIA", "BAJAJ-AUTO", "SBILIFE",
+    "HDFCLIFE", "SHRIRAMFIN", "INDUSINDBK", "BEL", "VEDL", "ZOMATO", "PAYTM",
+    "JIOFIN", "TRENT", "HAL", "VBL", "NIFTY", "BANKNIFTY"
 }
 
 def normalize_ohlcv(data: Any, source: str) -> pd.DataFrame | None:
@@ -202,7 +215,18 @@ class MarketDataProvider:
                 self._upstox = None
         return self._upstox
 
+    def _normalize_symbol(self, symbol: str) -> str:
+        if not symbol or not isinstance(symbol, str):
+            return symbol or ""
+        s = symbol.strip().upper()
+        if s.endswith((".NS", ".BO")):
+            return s
+        if s in _COMMON_INDIAN_SYMBOLS:
+            return f"{s}.NS"
+        return s
+
     def _check_capability(self, symbol: str, capability: str) -> DataResult | None:
+        symbol = self._normalize_symbol(symbol)
         provider = self._get_provider(symbol)
         cap = CAPABILITIES.get(provider, {}).get(capability, False)
         if not cap:
@@ -215,7 +239,8 @@ class MarketDataProvider:
         return None
 
     def _get_chain(self, symbol: str, capability: str) -> List[str]:
-        is_indian = symbol.upper().endswith(('.NS', '.BO'))
+        s = self._normalize_symbol(symbol)
+        is_indian = s.endswith(('.NS', '.BO'))
         if is_indian:
             chain = []
             upstox = self._get_upstox()
@@ -240,6 +265,7 @@ class MarketDataProvider:
         return chains.get(capability, ["twelvedata"])
 
     async def get_quote(self, symbol: str) -> DataResult:
+        symbol = self._normalize_symbol(symbol)
         chain = self._get_chain(symbol, "quote")
         for provider in chain:
             try:
@@ -285,6 +311,7 @@ class MarketDataProvider:
         return DataResult(None, DataStatus.UNAVAILABLE_PROVIDER, chain[0] if chain else None, "No quote available")
 
     async def get_history(self, symbol: str, period: str = '1y', interval: str = '1d') -> DataResult:
+        symbol = self._normalize_symbol(symbol)
         chain = self._get_chain(symbol, "history")
         for provider in chain:
             try:
@@ -311,6 +338,7 @@ class MarketDataProvider:
         return await self.get_history(symbol, period=period, interval=interval)
 
     async def get_company_info(self, symbol: str) -> DataResult:
+        symbol = self._normalize_symbol(symbol)
         chain = self._get_chain(symbol, "company_info")
         for provider in chain:
             try:
@@ -332,6 +360,7 @@ class MarketDataProvider:
         return DataResult(None, DataStatus.UNAVAILABLE_PROVIDER, chain[0] if chain else None, "No company info available")
 
     async def get_fundamentals(self, symbol: str) -> DataResult:
+        symbol = self._normalize_symbol(symbol)
         chain = self._get_chain(symbol, "fundamentals")
         for provider in chain:
             try:
@@ -356,6 +385,7 @@ class MarketDataProvider:
         return DataResult(None, DataStatus.UNAVAILABLE_PROVIDER, chain[0] if chain else None, "No fundamentals available")
 
     async def get_news(self, symbol: str, count: int = 15) -> DataResult:
+        symbol = self._normalize_symbol(symbol)
         chain = self._get_chain(symbol, "news")
         for provider in chain:
             try:
@@ -374,6 +404,7 @@ class MarketDataProvider:
         return DataResult([], DataStatus.UNSUPPORTED_CAPABILITY, chain[0] if chain else None, "News unsupported or empty")
 
     async def get_financial_statements(self, symbol: str) -> DataResult:
+        symbol = self._normalize_symbol(symbol)
         chain = self._get_chain(symbol, "financials")
         for provider in chain:
             try:
@@ -466,8 +497,9 @@ class MarketDataProvider:
     async def get_batch_quotes(self, symbols: List[str]) -> List[Dict[str, Any]]:
         """Batch quotes — route Indian symbols to Upstox/NSE, US to TwelveData."""
         results = []
-        us_symbols = [s for s in symbols if not s.upper().endswith(('.NS', '.BO'))]
-        indian_symbols = [s for s in symbols if s.upper().endswith(('.NS', '.BO'))]
+        normalized_symbols = [self._normalize_symbol(s) for s in symbols]
+        us_symbols = [s for s in normalized_symbols if not s.upper().endswith(('.NS', '.BO'))]
+        indian_symbols = [s for s in normalized_symbols if s.upper().endswith(('.NS', '.BO'))]
 
         if us_symbols and self._twelve:
             try:
@@ -542,7 +574,8 @@ class MarketDataProvider:
         return labels.get(prov, prov)
 
     def _get_provider(self, symbol: str) -> str:
-        if symbol.upper().endswith(('.NS', '.BO')):
+        s = self._normalize_symbol(symbol)
+        if s.endswith(('.NS', '.BO')):
             return 'upstox' if self._get_upstox() else 'nse'
         return 'twelvedata'
 

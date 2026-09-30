@@ -34,6 +34,7 @@ export default function AlertsPage() {
   const [symbol, setSymbol] = useState('');
   const [alertType, setAlertType] = useState<'price_above' | 'price_below'>('price_above');
   const [threshold, setThreshold] = useState('');
+  const [formError, setFormError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   const fetchAlertsAndNotifications = async () => {
@@ -61,6 +62,7 @@ export default function AlertsPage() {
   const handleCreateAlert = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!symbol || !threshold) return;
+    setFormError(null);
     try {
       await api.post('/api/v1/user/alerts', {
         symbol: symbol.toUpperCase(),
@@ -70,8 +72,16 @@ export default function AlertsPage() {
       setSymbol('');
       setThreshold('');
       fetchAlertsAndNotifications();
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to create alert', error);
+      const msg = error?.message || error?.detail || '';
+      if (msg.includes('Duplicate') || msg.includes('409') || error?.status === 409) {
+        setFormError('An active alert with this threshold already exists for this symbol.');
+      } else if (msg.includes('Max 50') || msg.includes('429')) {
+        setFormError('Maximum 50 active alerts reached. Please remove an alert to add a new one.');
+      } else {
+        setFormError(msg || 'Failed to create alert. Please check your inputs.');
+      }
     }
   };
 
@@ -159,6 +169,18 @@ export default function AlertsPage() {
             <Plus className="w-3.5 h-3.5" /> Set Alert
           </button>
         </form>
+        {formError && (
+          <div className="mt-3 p-3 bg-red-500/10 border border-red-500/20 rounded-xl text-red-400 text-xs font-mono flex items-center justify-between animate-fadeIn">
+            <span>{formError}</span>
+            <button
+              type="button"
+              onClick={() => setFormError(null)}
+              className="text-red-400/60 hover:text-red-400 text-sm font-bold ml-2 cursor-pointer"
+            >
+              ×
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Active Alerts */}

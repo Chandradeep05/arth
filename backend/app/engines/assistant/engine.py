@@ -34,7 +34,7 @@ logger = get_logger(__name__)
 
 ASSISTANT_SYSTEM_PROMPT = """You are ARTH, an AI financial research assistant. You help users analyze Indian and US stocks with data-driven insights.
 
-CONTEXT: You have access to financial data from MarketDataProvider (Twelve Data, Finnhub, FMP, NSE India). When the user asks about a specific stock, the system will inject market data into the conversation for you to analyze.
+CONTEXT: You have access to financial data from MarketDataProvider (Upstox, NSE India, Twelve Data, Finnhub, FMP). When the user asks about a specific stock, the system will inject market data into the conversation for you to analyze.
 
 YOUR PERSONALITY:
 - Professional but conversational
@@ -57,7 +57,7 @@ When the user mentions a stock symbol or company name, the system automatically 
 - Recent sentiment if available
 
 CRITICAL RULES:
-1. ONLY use data provided in the [MARKET DATA] sections. Never make up numbers.
+1. ONLY use data provided in the [MARKET DATA] sections. Never make up numbers. Always state the Source exactly as indicated in [MARKET DATA] (e.g. Upstox, Twelve Data, Finnhub). If no [MARKET DATA] is provided for a stock, state that real-time market data is currently unavailable rather than estimating.
 2. Use probabilistic language: "suggests", "indicates", "approximately"
 3. NEVER say: "buy", "sell", "guaranteed", "will go up/down"
 4. Always include: "This is not financial advice"
@@ -199,11 +199,35 @@ class AssistantEngine:
         'SEEN', 'HELD' etc. that are valid English words matching [A-Z]{1,5}.
         """
         import re
-        symbols = []
-        # Match explicit Indian symbols (e.g. TCS.NS) FIRST, then 1-5 char uppercase US tickers
-        # Indian pattern must come first so TCS.NS matches as TCS.NS, not just TCS
-        pattern = r'\b([A-Z]{2,15}\.(?:NS|BO)|[A-Z]{1,5})\b'
-        candidates = re.findall(pattern, message.upper())
+
+        COMMON_INDIAN_SYMBOLS = {
+            "RELIANCE", "TCS", "HDFCBANK", "INFY", "ICICIBANK", "SBIN", "BHARTIARTL",
+            "ITC", "KOTAKBANK", "LT", "HINDUNILVR", "AXISBANK", "BAJFINANCE", "MARUTI",
+            "ASIANPAINT", "TITAN", "TATAMOTORS", "SUNPHARMA", "ULTRACEMCO", "NTPC",
+            "ONGC", "POWERGRID", "JSWSTEEL", "ADANIENT", "ADANIPORTS", "COALINDIA",
+            "TATASTEEL", "M&M", "BAJAJFINSV", "WIPRO", "HCLTECH", "NESTLEIND", "BPCL",
+            "EICHERMOT", "GRASIM", "HEROMOTOCO", "HINDALCO", "CIPLA", "APOLLOHOSP",
+            "DRREDDY", "DIVISLAB", "TATACONSUM", "BRITANNIA", "BAJAJ-AUTO", "SBILIFE",
+            "HDFCLIFE", "SHRIRAMFIN", "INDUSINDBK", "BEL", "VEDL", "ZOMATO", "PAYTM",
+            "JIOFIN", "TRENT", "HAL", "VBL", "NIFTY", "BANKNIFTY"
+        }
+
+        COMPANY_ALIASES = {
+            "APPLE": "AAPL",
+            "GOOGLE": "GOOGL",
+            "ALPHABET": "GOOGL",
+            "MICROSOFT": "MSFT",
+            "AMAZON": "AMZN",
+            "TESLA": "TSLA",
+            "FACEBOOK": "META",
+            "NVIDIA": "NVDA",
+            "NETFLIX": "NFLX",
+        }
+
+        KNOWN_US_TICKERS = {
+            "AAPL", "MSFT", "GOOGL", "GOOG", "AMZN", "META", "TSLA", "NVDA",
+            "AMD", "NFLX", "INTC", "SPY", "QQQ", "DIA", "IWM", "JPM", "BAC", "V", "MA", "DIS"
+        }
 
         stop_words = {
             # 2-letter common words
@@ -231,7 +255,6 @@ class AssistantEngine:
             "WILL", "WITH", "WORK", "YEAR", "GOING", "WHICH", "BETTER",
             "EXPECT", "FUTURE", "SHOULD", "PERFORM", "TARGET",
             # Common verbs/words that are 2-5 chars and match ticker pattern
-            # These caused false positives in production (e.g. "DOING" parsed as ticker)
             "DOING", "BEING", "SEEN", "HELD", "SOLD", "TOLD", "SAID",
             "USED", "GAVE", "TOOK", "CAME", "LEFT", "HELP", "MOVE",
             "REAL", "SAME", "TURN", "NEED", "FEEL", "THINK", "STILL",
@@ -252,21 +275,34 @@ class AssistantEngine:
             "OPEN", "BUY", "WHY",
         }
 
-        # Structural heuristic: if a candidate appears as lowercase in the
-        # original message, it's almost certainly an English word, not a ticker.
-        # Real tickers are written in uppercase by users (AAPL, GOOGL, TCS.NS).
-        original_words = set(re.findall(r'\b[a-z]{2,}\b', message))
+        symbols: List[str] = []
 
-        for sym in candidates:
-            if sym in stop_words:
+        # 1. Match explicit Indian exchange suffixed symbols (e.g. RELIANCE.NS, TCS.BO)
+        suffixed = re.findall(r'\b([A-Za-z0-9_-]{1,15}\.(?:NS|BO))\b', message, re.IGNORECASE)
+        for s in suffixed:
+            u = s.upper()
+            if u not in symbols:
+                symbols.append(u)
+
+        # 2. Extract word tokens and check aliases, common Indian symbols, and known US tickers
+        tokens = re.findall(r'\b[A-Za-z0-9_&-]{2,15}\b', message)
+        for token in tokens:
+            u = token.upper()
+            if u in stop_words:
                 continue
-            if len(sym) < 2:
-                continue
-            # If the word appears in lowercase in the original message,
-            # treat it as a regular word, not a ticker symbol
-            if sym.lower() in original_words:
-                continue
-            symbols.append(sym)
+            if u in COMPANY_ALIASES:
+                target = COMPANY_ALIASES[u]
+                if target not in symbols:
+                    symbols.append(target)
+            elif u in COMMON_INDIAN_SYMBOLS:
+                target = f"{u}.NS"
+                if target not in symbols and u not in symbols:
+                    symbols.append(target)
+            elif u in KNOWN_US_TICKERS:
+                if u not in symbols:
+                    symbols.append(u)
+            elif token.isupper() and 2 <= len(token) <= 5 and u not in symbols:
+                symbols.append(u)
 
         return symbols[:3]  # Max 3 symbols per query
 
@@ -282,6 +318,7 @@ class AssistantEngine:
             if quote:
                 has_data = True
                 quote.pop("_validation", None)
+                source_label = self._data.get_source_label(symbol, quote_result.source)
                 price = quote.get('price')
                 prev_close = quote.get('previous_close')
                 raw_change = quote.get('change')
@@ -313,8 +350,10 @@ class AssistantEngine:
                 p_str = f"{p_val:+.2f}%" if p_val is not None else "0.00%"
 
                 parts.append(
+                    f"Source: {source_label} | "
                     f"Price: {price if price is not None else 'N/A'} | "
                     f"Change: {c_str} ({p_str}) | "
+                    f"Previous Close: {prev_close if prev_close is not None else 'N/A'} | "
                     f"Volume: {quote.get('volume', 'N/A')} | "
                     f"High: {quote.get('high', 'N/A')} | Low: {quote.get('low', 'N/A')} | "
                     f"Market Cap: {self._fmt_market_cap(quote.get('market_cap'))} | "
