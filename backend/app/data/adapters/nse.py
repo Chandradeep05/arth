@@ -207,6 +207,18 @@ class NSEAdapter:
         if not price:
             return None
 
+        security_info = data.get("securityInfo", {})
+        issued_size = security_info.get("issuedSize")
+        market_cap = None
+        if issued_size and price:
+            try:
+                clean_size = float(str(issued_size).replace(",", "").strip())
+                clean_price = float(price)
+                if clean_size > 0 and clean_price > 0:
+                    market_cap = round(clean_price * clean_size, 2)
+            except (ValueError, TypeError):
+                market_cap = None
+
         return {
             "symbol": symbol.upper(),
             "name": info.get("companyName", metadata.get("companyName", clean)),
@@ -218,7 +230,7 @@ class NSEAdapter:
             "low": round(float(price_info.get("intraDayHighLow", {}).get("min", 0) or 0), 2),
             "open": round(float(price_info.get("open", 0) or 0), 2),
             "previous_close": round(float(prev_close or 0), 2),
-            "market_cap": None,
+            "market_cap": market_cap,
             "pe_ratio": float(str(metadata.get("pdSymbolPe")).replace(",", "").strip()) if metadata.get("pdSymbolPe") not in (None, "", "-", "NA") else None,
             "timestamp": datetime.now(timezone.utc),
             "exchange": "NSE",
@@ -344,6 +356,28 @@ class NSEAdapter:
         info = data.get("info", {})
         metadata = data.get("metadata", {})
         security_info = data.get("securityInfo", {})
+        price_info = data.get("priceInfo", {})
+
+        price = price_info.get("lastPrice", 0)
+        issued_size = security_info.get("issuedSize")
+
+        market_cap = None
+        if issued_size and price:
+            try:
+                clean_size = float(str(issued_size).replace(",", "").strip())
+                clean_price = float(price)
+                if clean_size > 0 and clean_price > 0:
+                    market_cap = round(clean_price * clean_size, 2)
+            except (ValueError, TypeError):
+                market_cap = None
+
+        pe_raw = metadata.get("pdSymbolPe")
+        pe_ratio = None
+        if pe_raw not in (None, "", "-", "NA"):
+            try:
+                pe_ratio = float(str(pe_raw).replace(",", "").strip())
+            except (ValueError, TypeError):
+                pe_ratio = None
 
         return {
             "symbol": symbol.upper(),
@@ -354,9 +388,11 @@ class NSEAdapter:
             "market": "india",
             "description": None,  # NSE doesn't provide descriptions
             "website": None,
+            "market_cap": market_cap,
+            "pe_ratio": pe_ratio,
             "metrics": {
-                "market_cap": None,
-                "pe_ratio": metadata.get("pdSymbolPe"),
+                "market_cap": market_cap,
+                "pe_ratio": pe_ratio,
                 "eps": None,
                 "revenue": None,
                 "revenue_growth": None,

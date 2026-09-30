@@ -43,8 +43,8 @@ CAPABILITIES = {
     "nse": {
         "quote": True,
         "history": True,
-        "company_info": "partial",
-        "fundamentals": "partial",
+        "company_info": True,
+        "fundamentals": True,
         "news": False,
         "holders": False,
         "financials": False,
@@ -247,8 +247,8 @@ class MarketDataProvider:
             # Upstox is primary if enabled and has capability
             if upstox and CAPABILITIES.get("upstox", {}).get(capability):
                 chain.append("upstox")
-            # NSE as fallback for quote/history
-            if capability in ["quote", "history"]:
+            # NSE as fallback for quote, history, company_info, fundamentals
+            if capability in ["quote", "history", "company_info", "fundamentals"]:
                 chain.append("nse")
             return chain
 
@@ -266,6 +266,7 @@ class MarketDataProvider:
 
     async def get_quote(self, symbol: str) -> DataResult:
         symbol = self._normalize_symbol(symbol)
+        is_indian = symbol.endswith(('.NS', '.BO'))
         chain = self._get_chain(symbol, "quote")
         for provider in chain:
             try:
@@ -304,6 +305,17 @@ class MarketDataProvider:
                     data = None
 
                 if data:
+                    # Enrich Indian quotes with market_cap and pe_ratio from NSE if missing
+                    if is_indian and data.get("market_cap") is None:
+                        try:
+                            nse_quote = await self._nse.get_quote(symbol)
+                            if nse_quote:
+                                if nse_quote.get("market_cap"):
+                                    data["market_cap"] = nse_quote["market_cap"]
+                                if not data.get("pe_ratio") and nse_quote.get("pe_ratio"):
+                                    data["pe_ratio"] = nse_quote["pe_ratio"]
+                        except Exception:
+                            pass
                     return DataResult(data, DataStatus.SUCCESS, provider)
             except Exception as e:
                 logger.warning("quote_provider_failed", provider=provider, symbol=symbol, error=str(e))
@@ -339,6 +351,7 @@ class MarketDataProvider:
 
     async def get_company_info(self, symbol: str) -> DataResult:
         symbol = self._normalize_symbol(symbol)
+        is_indian = symbol.endswith(('.NS', '.BO'))
         chain = self._get_chain(symbol, "company_info")
         for provider in chain:
             try:
@@ -349,10 +362,27 @@ class MarketDataProvider:
                 elif provider == "upstox":
                     upstox = self._get_upstox()
                     data = await upstox.get_company_info(symbol) if upstox else None
+                elif provider == "nse":
+                    data = await self._nse.get_company_info(symbol)
                 else:
                     data = None
 
                 if data:
+                    # Enrich Indian company info with market_cap from NSE if missing
+                    if is_indian and (data.get("market_cap") is None or (data.get("metrics") or {}).get("market_cap") is None):
+                        try:
+                            nse_info = await self._nse.get_company_info(symbol)
+                            if nse_info:
+                                mcap = nse_info.get("market_cap") or (nse_info.get("metrics") or {}).get("market_cap")
+                                if mcap:
+                                    data["market_cap"] = mcap
+                                    if "metrics" in data and isinstance(data["metrics"], dict):
+                                        data["metrics"]["market_cap"] = mcap
+                                pe = nse_info.get("pe_ratio") or (nse_info.get("metrics") or {}).get("pe_ratio")
+                                if pe and ("metrics" in data and isinstance(data["metrics"], dict) and not data["metrics"].get("pe_ratio")):
+                                    data["metrics"]["pe_ratio"] = pe
+                        except Exception:
+                            pass
                     return DataResult(data, DataStatus.SUCCESS, provider)
             except Exception as e:
                 logger.warning("company_info_failed", provider=provider, symbol=symbol, error=str(e))
@@ -374,6 +404,9 @@ class MarketDataProvider:
                 elif provider == "upstox":
                     upstox = self._get_upstox()
                     data = await upstox.get_fundamentals(symbol) if upstox else None
+                elif provider == "nse":
+                    raw = await self._nse.get_company_info(symbol)
+                    data = raw.get('metrics', {}) if isinstance(raw, dict) else {}
                 else:
                     data = None
 

@@ -460,7 +460,26 @@ class UpstoxAdapter(BaseDataAdapter):
         elif isinstance(ratios, dict):
             ratio_map = ratios
 
+        mcap_val = (
+            ratio_map.get("Market Cap") or 
+            ratio_map.get("Market Capitalization") or 
+            ratio_map.get("MCAP") or 
+            ratio_map.get("M-Cap") or
+            ratio_map.get("MarketCap")
+        )
+        mcap_num = None
+        if mcap_val is not None:
+            try:
+                clean_mcap = float(str(mcap_val).replace(",", "").replace("%", "").replace("Cr", "").strip())
+                if 0 < clean_mcap < 1e9:
+                    mcap_num = clean_mcap * 1e7
+                elif clean_mcap >= 1e9:
+                    mcap_num = clean_mcap
+            except (ValueError, TypeError):
+                mcap_num = None
+
         return {
+            "market_cap": mcap_num,
             "pe_ratio": ratio_map.get("P/E"),
             "pb_ratio": ratio_map.get("P/B"),
             "roe": ratio_map.get("ROE"),
@@ -517,6 +536,7 @@ class UpstoxAdapter(BaseDataAdapter):
                 "market": "india",
                 "description": profile.get("company_profile"),
                 "website": None,
+                "market_cap": metrics.get("market_cap"),
                 "metrics": metrics,
                 # Direct canonical fields for DocumentProcessor / RAG
                 "trailingPE": metrics.get("pe_ratio"),

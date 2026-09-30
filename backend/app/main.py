@@ -109,7 +109,15 @@ async def lifespan(app: FastAPI):
         try:
             # Convert any SQLAlchemy URL to plain asyncpg DSN
             import re as _re
-            dsn = _re.sub(r'^postgresql\+\w+://', 'postgresql://', settings.database_url)
+            import urllib.parse as _urlparse
+            raw_url = settings.database_url.strip()
+            dsn = _re.sub(r'^postgresql\+\w+://', 'postgresql://', raw_url)
+            try:
+                parsed = _urlparse.urlsplit(dsn)
+                clean_path = parsed.path.rstrip()
+                dsn = _urlparse.urlunsplit((parsed.scheme, parsed.netloc, clean_path, parsed.query, parsed.fragment))
+            except Exception:
+                pass
             # Supabase requires SSL for external connections
             if 'supabase.co' in dsn and 'sslmode' not in dsn:
                 dsn += ('&' if '?' in dsn else '?') + 'sslmode=require'

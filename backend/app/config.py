@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from enum import Enum
 from functools import lru_cache
-from typing import List
+from typing import Any, List
 
 from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -61,6 +61,26 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://localhost:5432/arth"
     database_pool_size: int = 10
     database_max_overflow: int = 20
+
+    @field_validator("database_url", mode="before")
+    @classmethod
+    def _validate_database_url(cls, v: Any) -> Any:
+        if isinstance(v, str):
+            v = v.strip()
+            try:
+                import urllib.parse
+                parsed = urllib.parse.urlsplit(v)
+                clean_path = parsed.path.rstrip()
+                v = urllib.parse.urlunsplit((
+                    parsed.scheme.strip(),
+                    parsed.netloc.strip(),
+                    clean_path,
+                    parsed.query.strip(),
+                    parsed.fragment.strip()
+                ))
+            except Exception:
+                pass
+        return v
 
     @property
     def database_url_sync(self) -> str:

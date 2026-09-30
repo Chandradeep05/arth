@@ -34,7 +34,7 @@ async def init_db(settings: Settings) -> None:
     """Initialize the async database engine and session factory."""
     global _engine, _session_factory
 
-    db_url = settings.database_url
+    db_url = settings.database_url.strip() if settings.database_url else ""
     if not db_url:
         logger.warning("database_skipped", reason="DATABASE_URL not set")
         return
@@ -50,16 +50,19 @@ async def init_db(settings: Settings) -> None:
 
     # Supabase / cloud SSL options: SQLAlchemy + asyncpg expects ssl in connect_args
     connect_args = {}
+    import urllib.parse
+    parsed = urllib.parse.urlsplit(db_url)
+    clean_path = parsed.path.rstrip()
     if "sslmode=" in db_url:
-        import urllib.parse
-        parsed = urllib.parse.urlsplit(db_url)
         q_params = urllib.parse.parse_qs(parsed.query)
         sslmode = q_params.pop("sslmode", ["require"])[0]
         new_query = urllib.parse.urlencode(q_params, doseq=True)
-        db_url = urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, parsed.path, new_query, parsed.fragment))
+        db_url = urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, clean_path, new_query, parsed.fragment))
         if sslmode in ("require", "verify-ca", "verify-full"):
             connect_args["ssl"] = "require"
-    elif "supabase.co" in db_url:
+    else:
+        db_url = urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, clean_path, parsed.query, parsed.fragment))
+    if "supabase.co" in db_url:
         connect_args["ssl"] = "require"
 
     _engine = create_async_engine(

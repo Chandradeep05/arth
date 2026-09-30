@@ -72,27 +72,9 @@ async def list_alerts(request: Request, user: UserContext = Depends(require_acti
 async def create_alert(body: CreateAlertRequest, request: Request, user: UserContext = Depends(require_active_user)) -> dict:
     db = request.state.db
     
-    # Check redis cache to determine initial trigger_state
-    redis = getattr(request.app.state, "redis", None)
+    # Always initialize to 'armed'. The evaluator will evaluate against current/live price,
+    # trigger if threshold is met, and reliably insert the corresponding notification.
     initial_state = "armed"
-    if redis:
-        import json
-        for key in [f"quote:{body.symbol}", f"market:quote:{body.symbol}", f"tick:{body.symbol}"]:
-            raw = await redis.get(key)
-            if raw:
-                try:
-                    data = json.loads(raw)
-                    price = (data.get("price") or data.get("close") or
-                             data.get("last_price") or
-                             (data.get("data") or {}).get("price"))
-                    if price:
-                        price = float(price)
-                        condition = (body.alert_type == "price_above" and price >= body.threshold) or (body.alert_type == "price_below" and price <= body.threshold)
-                        if condition:
-                            initial_state = "triggered"
-                        break
-                except Exception:
-                    continue
 
     # Serialized within transaction: lock user's profile row, then count, then insert.
     # This prevents concurrent requests from exceeding the 50-cap.

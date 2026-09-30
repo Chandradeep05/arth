@@ -91,6 +91,31 @@ async def _run_eval(db, redis, now: datetime) -> dict:
         if symbol not in prices:
             cache_miss += 1
 
+    # For any symbols that missed the cache (or if Redis is not configured), fetch quote via MarketDataProvider
+    if cache_miss > 0:
+        try:
+            from app.data.market_data_provider import get_market_data_provider
+            provider = get_market_data_provider()
+            for symbol in symbols:
+                if symbol not in prices:
+                    try:
+                        res = await provider.get_quote(symbol)
+                        quote_data = res.data if hasattr(res, "data") else res
+                        if quote_data and isinstance(quote_data, dict):
+                            p = quote_data.get("price") or quote_data.get("close") or quote_data.get("last_price")
+                            if p is not None:
+                                prices[symbol] = float(p)
+                                cache_miss = max(0, cache_miss - 1)
+                                if redis:
+                                    try:
+                                        await redis.set(f"quote:{symbol}", json.dumps(quote_data), ex=300)
+                                    except Exception:
+                                        pass
+                    except Exception as sym_err:
+                        logger.warning("alert_eval_quote_fetch_failed", symbol=symbol, error=str(sym_err))
+        except Exception as prov_err:
+            logger.warning("alert_eval_provider_fallback_failed", error=str(prov_err))
+
     evaluated = 0
     triggered = 0
 
