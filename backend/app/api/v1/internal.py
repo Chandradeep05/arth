@@ -5,15 +5,17 @@ POST /internal/jobs/evaluate-alerts:
   Called by GitHub Actions cron every 5 minutes.
   Protected by X-Internal-Secret header (INTERNAL_JOB_SECRET env var).
 
-Alert evaluation reads Redis quote cache ONLY.
-Zero fresh provider API calls -- respects credit budget.
-Symbols with no cached price are skipped that cycle.
+Alert evaluation reads the Redis quote cache first. For symbols with no cached
+price (or when Redis is not configured) it falls back to MarketDataProvider,
+one quote call per distinct symbol per run. Symbols that still have no valid
+price are skipped that cycle and reported in `unpriced_symbols`.
 """
 from __future__ import annotations
 
 import asyncio
 import json
 import secrets
+import time
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Request
@@ -67,11 +69,13 @@ async def evaluate_alerts(
 
 
 async def _run_eval(db, redis, now: datetime) -> dict:
+    run_id = secrets.token_hex(6)
+    started = time.monotonic()
     alerts = await db.fetch(
         "SELECT id, user_id, symbol, alert_type, threshold, trigger_state FROM alerts WHERE is_active = true ORDER BY symbol"
     )
     if not alerts:
-        return {"evaluated": 0, "triggered": 0, "skipped_no_cache": 0}
+        return {"run_id": run_id, "evaluated": 0, "triggered": 0, "skipped_no_cache": 0}
 
     symbols = list({row["symbol"] for row in alerts})
     prices = {}
@@ -97,29 +101,28 @@ async def _run_eval(db, redis, now: datetime) -> dict:
             cache_miss += 1
 
     # For any symbols that missed the cache (or if Redis is not configured), fetch quote via MarketDataProvider
+    provider_errors = 0
     if cache_miss > 0:
-        try:
-            from app.data.market_data_provider import get_market_data_provider
-            provider = get_market_data_provider()
-            for symbol in symbols:
-                if symbol not in prices:
-                    try:
-                        res = await provider.get_quote(symbol)
-                        quote_data = res.data if hasattr(res, "data") else res
-                        if quote_data and isinstance(quote_data, dict):
-                            p = quote_data.get("price") or quote_data.get("close") or quote_data.get("last_price")
-                            if p is not None:
-                                prices[symbol] = float(p)
-                                cache_miss = max(0, cache_miss - 1)
-                                if redis:
-                                    try:
-                                        await redis.set(f"quote:{symbol}", json.dumps(quote_data), ex=300)
-                                    except Exception:
-                                        pass
-                    except Exception as sym_err:
-                        logger.warning("alert_eval_quote_fetch_failed", symbol=symbol, error=str(sym_err))
-        except Exception as prov_err:
-            logger.warning("alert_eval_provider_fallback_failed", error=str(prov_err))
+        from app.data.market_data_provider import market_data as provider
+        for symbol in symbols:
+            if symbol in prices:
+                continue
+            try:
+                res = await provider.get_quote(symbol)
+                quote_data = res.data if hasattr(res, "data") else res
+                if quote_data and isinstance(quote_data, dict):
+                    p = quote_data.get("price") or quote_data.get("close") or quote_data.get("last_price")
+                    if p is not None and float(p) > 0:
+                        prices[symbol] = float(p)
+                        cache_miss = max(0, cache_miss - 1)
+                        if redis:
+                            try:
+                                await redis.set(f"quote:{symbol}", json.dumps(quote_data, default=str), ex=300)
+                            except Exception as cache_err:
+                                logger.warning("alert_eval_cache_write_failed", symbol=symbol, error=str(cache_err))
+            except Exception as sym_err:
+                provider_errors += 1
+                logger.warning("alert_eval_quote_fetch_failed", symbol=symbol, error=str(sym_err))
 
     evaluated = 0
     triggered = 0
@@ -165,14 +168,25 @@ async def _run_eval(db, redis, now: datetime) -> dict:
             )
 
     unpriced = sorted(s for s in symbols if s not in prices)
+    duration_ms = int((time.monotonic() - started) * 1000)
     logger.info(
         "alert_eval_complete",
-        active_alerts=len(alerts), symbols=len(symbols), priced=len(prices),
+        run_id=run_id, active_alerts=len(alerts), symbols=len(symbols), priced=len(prices),
         unpriced=unpriced, evaluated=evaluated, triggered=triggered,
+        provider_errors=provider_errors, duration_ms=duration_ms,
     )
     return {
-        "evaluated": evaluated, "triggered": triggered, "skipped_no_cache": cache_miss,
-        "unpriced_symbols": unpriced, "at": now.isoformat(),
+        "run_id": run_id,
+        "symbols_requested": len(symbols),
+        "quotes_obtained": len(prices),
+        "evaluated": evaluated,
+        "triggered": triggered,
+        "notifications_created": triggered,
+        "provider_errors": provider_errors,
+        "skipped_no_cache": cache_miss,
+        "unpriced_symbols": unpriced,
+        "duration_ms": duration_ms,
+        "at": now.isoformat(),
     }
 
 
@@ -253,7 +267,7 @@ async def warm_alert_symbols(
             if res.available and res.data:
                 await redis.set(
                     f"quote:{symbol}",
-                    json.dumps(res.data),
+                    json.dumps(res.data, default=str),
                     ex=1860,  # 31 minutes — survives between 30-min warmup cycles
                 )
                 warmed += 1
