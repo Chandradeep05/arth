@@ -8,23 +8,43 @@ on:
 jobs:
   evaluate-alerts:
     runs-on: ubuntu-latest
-    timeout-minutes: 2
+    timeout-minutes: 4
     steps:
       - name: Evaluate price alerts
+        env:
+          BACKEND_URL: ${{ secrets.BACKEND_URL }}
+          INTERNAL_JOB_SECRET: ${{ secrets.INTERNAL_JOB_SECRET }}
         run: |
-          response=$(curl -s -o /dev/null -w "%{http_code}" \
-            -X POST \
-            -H "X-Internal-Secret: ${{ secrets.INTERNAL_JOB_SECRET }}" \
-            -H "Content-Type: application/json" \
-            "${{ secrets.BACKEND_URL }}/api/v1/internal/jobs/evaluate-alerts" \
-            || echo "000")
-          echo "Response: $response"
-          if [ "$response" = "000" ]; then
-            echo "Network error -- backend unreachable"
+          if [ -z "$BACKEND_URL" ] || [ -z "$INTERNAL_JOB_SECRET" ]; then
+            echo "::error::BACKEND_URL or INTERNAL_JOB_SECRET secret is not set in GitHub repo secrets"
             exit 1
           fi
-          if [ "$response" != "200" ]; then
-            echo "Unexpected status $response"
+          BASE="${BACKEND_URL%/}"
+
+          # Wake the backend first (Render free tier may be asleep; cold start can take ~60s)
+          curl -s -o /dev/null --max-time 90 "$BASE/health" || true
+
+          http_code=$(curl -s -o body.json -w "%{http_code}" --max-time 120 \
+            -X POST \
+            -H "X-Internal-Secret: $INTERNAL_JOB_SECRET" \
+            -H "Content-Type: application/json" \
+            "$BASE/api/v1/internal/jobs/evaluate-alerts" || echo "000")
+
+          echo "HTTP status: $http_code"
+          echo "Response body:"
+          cat body.json 2>/dev/null || true
+          echo
+
+          if [ "$http_code" = "000" ]; then
+            echo "::error::Network error -- backend unreachable"
+            exit 1
+          fi
+          if [ "$http_code" = "401" ] || [ "$http_code" = "403" ]; then
+            echo "::error::Auth rejected -- INTERNAL_JOB_SECRET in GitHub does not match Render env var"
+            exit 1
+          fi
+          if [ "$http_code" != "200" ]; then
+            echo "::error::Unexpected status $http_code"
             exit 1
           fi
           echo "Alert evaluation completed."

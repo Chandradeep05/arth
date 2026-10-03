@@ -37,7 +37,12 @@ async def evaluate_alerts(
     redis = getattr(request.app.state, "redis", None)
     db = getattr(request.state, "db", None)
     if db is None:
-        return {"skipped": True, "reason": "Database pool unavailable — check asyncpg connection"}
+        logger.error("alert_eval_no_db", reason="request.state.db is None")
+        from fastapi.responses import JSONResponse
+        return JSONResponse(
+            status_code=503,
+            content={"skipped": True, "reason": "Database pool unavailable — check asyncpg connection"},
+        )
     now = datetime.now(timezone.utc)
 
     if redis:
@@ -159,7 +164,16 @@ async def _run_eval(db, redis, now: datetime) -> dict:
                 "armed", current, alert["id"],
             )
 
-    return {"evaluated": evaluated, "triggered": triggered, "skipped_no_cache": cache_miss, "at": now.isoformat()}
+    unpriced = sorted(s for s in symbols if s not in prices)
+    logger.info(
+        "alert_eval_complete",
+        active_alerts=len(alerts), symbols=len(symbols), priced=len(prices),
+        unpriced=unpriced, evaluated=evaluated, triggered=triggered,
+    )
+    return {
+        "evaluated": evaluated, "triggered": triggered, "skipped_no_cache": cache_miss,
+        "unpriced_symbols": unpriced, "at": now.isoformat(),
+    }
 
 
 @router.post("/jobs/warm-alert-symbols")

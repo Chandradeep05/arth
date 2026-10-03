@@ -312,10 +312,13 @@ class MarketDataProvider:
                             if nse_quote:
                                 if nse_quote.get("market_cap"):
                                     data["market_cap"] = nse_quote["market_cap"]
+                                    logger.debug("nse_enrichment_market_cap", symbol=symbol, market_cap=nse_quote["market_cap"])
                                 if not data.get("pe_ratio") and nse_quote.get("pe_ratio"):
                                     data["pe_ratio"] = nse_quote["pe_ratio"]
-                        except Exception:
-                            pass
+                            else:
+                                logger.debug("nse_enrichment_no_data", symbol=symbol)
+                        except Exception as enrich_err:
+                            logger.warning("nse_enrichment_failed", symbol=symbol, error=str(enrich_err))
                     return DataResult(data, DataStatus.SUCCESS, provider)
             except Exception as e:
                 logger.warning("quote_provider_failed", provider=provider, symbol=symbol, error=str(e))
@@ -381,8 +384,8 @@ class MarketDataProvider:
                                 pe = nse_info.get("pe_ratio") or (nse_info.get("metrics") or {}).get("pe_ratio")
                                 if pe and ("metrics" in data and isinstance(data["metrics"], dict) and not data["metrics"].get("pe_ratio")):
                                     data["metrics"]["pe_ratio"] = pe
-                        except Exception:
-                            pass
+                        except Exception as enrich_err:
+                            logger.warning("nse_company_enrichment_failed", symbol=symbol, error=str(enrich_err))
                     return DataResult(data, DataStatus.SUCCESS, provider)
             except Exception as e:
                 logger.warning("company_info_failed", provider=provider, symbol=symbol, error=str(e))
@@ -555,6 +558,16 @@ class MarketDataProvider:
                     quote = await self._nse.get_quote(sym)
                 except Exception:
                     quote = None
+            # Enrich with NSE market_cap if missing (mirrors get_quote enrichment)
+            if quote and quote.get("market_cap") is None and self._nse:
+                try:
+                    nse_quote = await self._nse.get_quote(sym)
+                    if nse_quote and nse_quote.get("market_cap"):
+                        quote["market_cap"] = nse_quote["market_cap"]
+                    if nse_quote and not quote.get("pe_ratio") and nse_quote.get("pe_ratio"):
+                        quote["pe_ratio"] = nse_quote["pe_ratio"]
+                except Exception:
+                    pass
             return quote
 
         if indian_symbols:

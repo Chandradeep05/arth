@@ -9,6 +9,7 @@ import Header from '@/components/layout/Header';
 import StatusBar from '@/components/layout/StatusBar';
 import { AuthProvider, useAuth } from '@/lib/auth/AuthProvider';
 import PendingActivation from '@/components/layout/PendingActivation';
+import { useBackendKeepAlive } from '@/hooks/useBackendKeepAlive';
 
 const syne = Syne({
   variable: '--font-syne',
@@ -41,6 +42,7 @@ function AppContent({ children }: { children: React.ReactNode }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const { user, accessStatus, loading } = useAuth();
   const pathname = usePathname();
+  useBackendKeepAlive(); // Ping backend /health every 4min to prevent Render cold starts
 
   // Gate: if user is authenticated but access is pending, show activation screen only on protected routes
   const isProtected = ['/watchlist', '/assistant', '/alerts', '/notifications', '/admin', '/settings', '/research/saved'].some(

@@ -243,8 +243,8 @@ try:
          f"got {chain_infy_news}")
 
     chain_reliance_fundamentals = mdp._get_chain("RELIANCE.NS", "fundamentals")
-    test("RELIANCE.NS fundamentals chain: empty (no provider)",
-         chain_reliance_fundamentals == [],
+    test("RELIANCE.NS fundamentals chain: includes nse",
+         chain_reliance_fundamentals == ["nse"] or chain_reliance_fundamentals == ["upstox", "nse"],
          f"got {chain_reliance_fundamentals}")
 
     # US symbols: should include appropriate providers

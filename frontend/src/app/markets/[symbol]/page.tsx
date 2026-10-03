@@ -34,9 +34,14 @@ function formatNumber(n: number | null | undefined): string {
 function formatMarketCap(n: number | null | undefined, currencySymbol = '$'): string {
   if (n == null || isNaN(Number(n)) || Number(n) <= 0) return 'N/A';
   const val = Number(n);
+  if (currencySymbol === '₹') {
+    // Indian convention: Lakh Crore (1e12) and Crore (1e7)
+    if (val >= 1e12) return `₹${(val / 1e12).toFixed(2)} L Cr`;
+    if (val >= 1e7) return `₹${(val / 1e7).toLocaleString('en-IN', { maximumFractionDigits: 0 })} Cr`;
+    return `₹${formatNumber(val)}`;
+  }
   if (val >= 1e12) return `${currencySymbol}${(val / 1e12).toFixed(2)}T`;
   if (val >= 1e9) return `${currencySymbol}${(val / 1e9).toFixed(2)}B`;
-  if (val >= 1e7) return `${currencySymbol}${(val / 1e7).toFixed(2)}Cr`;
   if (val >= 1e6) return `${currencySymbol}${(val / 1e6).toFixed(1)}M`;
   return `${currencySymbol}${formatNumber(val)}`;
 }
