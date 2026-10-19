@@ -460,13 +460,12 @@ class UpstoxAdapter(BaseDataAdapter):
         elif isinstance(ratios, dict):
             ratio_map = ratios
 
-        mcap_val = (
-            ratio_map.get("Market Cap") or 
-            ratio_map.get("Market Capitalization") or 
-            ratio_map.get("MCAP") or 
-            ratio_map.get("M-Cap") or
-            ratio_map.get("MarketCap")
-        )
+        mcap_val = None
+        for k, v in ratio_map.items():
+            k_clean = str(k).lower().replace(" ", "").replace("_", "").replace("-", "").replace(".", "")
+            if "marketcap" in k_clean or "marketcapital" in k_clean or k_clean == "mcap":
+                mcap_val = v
+                break
         mcap_num = None
         if mcap_val is not None:
             try:

@@ -65,7 +65,7 @@ class NSESession:
         self._circuit_state = _CircuitState.CLOSED
         self._circuit_opened_at: float = 0.0
         self._consecutive_failures: int = 0
-        self._circuit_cooldown: float = 300.0  # 5 minutes
+        self._circuit_cooldown: float = 3600.0  # 1 hour cooldown when blocked by cloud WAF
         self._failure_threshold: int = 3  # Open after 3 consecutive 403s
 
     async def _ensure_client(self):

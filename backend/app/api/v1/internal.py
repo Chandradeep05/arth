@@ -153,11 +153,13 @@ async def _run_eval(db, redis, now: datetime) -> dict:
                 )
                 # Only insert notification if we actually flipped the state
                 if updated and updated != "UPDATE 0":
+                    curr_sym = "₹" if symbol.endswith((".NS", ".BO")) else "$"
+                    dir_sym = "≥" if direction == "above" else "≤"
                     await db.execute(
                         "INSERT INTO notifications (user_id, alert_id, title, body) VALUES ($1, $2, $3, $4)",
                         alert["user_id"], alert["id"],
-                        f"{symbol} {direction} {threshold}",
-                        f"Price: {current:.2f} | Threshold: {threshold:.2f}",
+                        f"{symbol} crossed {direction} {curr_sym}{threshold:.2f}",
+                        f"Price: {curr_sym}{current:.2f} | Target: {dir_sym} {curr_sym}{threshold:.2f}",
                     )
                     triggered += 1
                     logger.info("alert_triggered", symbol=symbol, price=current, threshold=threshold)

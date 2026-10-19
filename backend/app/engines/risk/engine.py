@@ -330,10 +330,10 @@ class RiskEngine:
         # Debt-to-Equity — sector-aware scoring
         de = metrics.get("debt_to_equity")
         if de is not None:
-            # Some providers return debtToEquity as percentage.
-            # e.g., Reliance → 36.65 (means 0.3665x), HDFCBANK → 700+ (means 7x)
-            # We unconditionally divide by 100.
-            de_ratio = de / 100.0
+            # Providers differ: yfinance returns percentage (e.g. 36.65 for 0.3665x),
+            # while Upstox and Finnhub return direct ratio (e.g. 0.40).
+            # If value > 20, it is represented as percentage -> divide by 100.
+            de_ratio = float(de) / 100.0 if float(de) > 20.0 else float(de)
 
             # Get sector-appropriate thresholds
             low_max, mod_max, high_max = _get_de_thresholds(sector)

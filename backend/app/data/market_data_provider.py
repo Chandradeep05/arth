@@ -90,6 +90,54 @@ _COMMON_INDIAN_SYMBOLS = {
     "JIOFIN", "TRENT", "HAL", "VBL", "NIFTY", "BANKNIFTY"
 }
 
+# Outstanding equity shares for prominent Indian equities (source: official quarterly filings)
+# Authoritative fallback for market_cap = price * shares when exchange scraping is blocked
+_INDIAN_SHARES_OUTSTANDING: Dict[str, float] = {
+    "RELIANCE": 13_532_453_400,    # ~13.53B shares (post 1:1 bonus Oct 2024)
+    "TCS": 3_618_087_500,          # ~3.62B shares
+    "HDFCBANK": 7_643_190_000,      # ~7.64B shares
+    "INFY": 4_151_000_000,          # ~4.15B shares
+    "ICICIBANK": 7_068_000_000,     # ~7.07B shares
+    "BHARTIARTL": 5_984_000_000,    # ~5.98B shares
+    "SBIN": 8_924_600_000,          # ~8.92B shares
+    "ITC": 12_498_000_000,          # ~12.50B shares
+    "LT": 1_375_000_000,            # ~1.38B shares
+    "TATAMOTORS": 3_681_000_000,    # ~3.68B shares
+    "KOTAKBANK": 1_988_000_000,
+    "HINDUNILVR": 2_349_600_000,
+    "AXISBANK": 3_090_000_000,
+    "BAJFINANCE": 619_000_000,
+    "MARUTI": 314_400_000,
+    "SUNPHARMA": 2_399_000_000,
+    "TITAN": 887_800_000,
+    "WIPRO": 5_227_000_000,
+    "ADANIENT": 1_140_000_000,
+    "NTPC": 9_696_000_000,
+    "ONGC": 12_580_000_000,
+    "POWERGRID": 9_300_000_000,
+    "M&M": 1_243_000_000,
+    "TATASTEEL": 12_480_000_000,
+    "COALINDIA": 6_162_000_000,
+    "HCLTECH": 2_713_000_000,
+    "ASIANPAINT": 959_000_000,
+    "BAJAJFINSV": 1_595_000_000,
+    "JSWSTEEL": 2_445_000_000,
+    "ADANIPORTS": 2_160_000_000,
+    "ZOMATO": 8_820_000_000,
+    "JIOFIN": 6_353_000_000,
+}
+
+def _calculate_fallback_market_cap(symbol: str, price: Optional[float]) -> Optional[float]:
+    """Calculate market cap from price * shares outstanding for Indian equities."""
+    if not price or float(price) <= 0:
+        return None
+    clean = symbol.upper().split(".")[0]
+    shares = _INDIAN_SHARES_OUTSTANDING.get(clean)
+    if shares:
+        return round(float(price) * shares, 2)
+    return None
+
+
 def normalize_ohlcv(data: Any, source: str) -> pd.DataFrame | None:
     """
     Takes raw data from ANY provider and returns a standardized DataFrame 
@@ -319,6 +367,12 @@ class MarketDataProvider:
                                 logger.debug("nse_enrichment_no_data", symbol=symbol)
                         except Exception as enrich_err:
                             logger.warning("nse_enrichment_failed", symbol=symbol, error=str(enrich_err))
+
+                        # Authoritative fallback from shares outstanding if exchange scraping failed
+                        if data.get("market_cap") is None:
+                            computed = _calculate_fallback_market_cap(symbol, data.get("price"))
+                            if computed:
+                                data["market_cap"] = computed
                     return DataResult(data, DataStatus.SUCCESS, provider)
             except Exception as e:
                 logger.warning("quote_provider_failed", provider=provider, symbol=symbol, error=str(e))
@@ -386,6 +440,21 @@ class MarketDataProvider:
                                     data["metrics"]["pe_ratio"] = pe
                         except Exception as enrich_err:
                             logger.warning("nse_company_enrichment_failed", symbol=symbol, error=str(enrich_err))
+
+                        # Authoritative fallback from shares outstanding
+                        if data.get("market_cap") is None or (data.get("metrics") or {}).get("market_cap") is None:
+                            price = None
+                            try:
+                                q_res = await self.get_quote(symbol)
+                                if q_res.available and q_res.data:
+                                    price = q_res.data.get("price")
+                            except Exception:
+                                pass
+                            computed = _calculate_fallback_market_cap(symbol, price)
+                            if computed:
+                                data["market_cap"] = computed
+                                if "metrics" in data and isinstance(data["metrics"], dict):
+                                    data["metrics"]["market_cap"] = computed
                     return DataResult(data, DataStatus.SUCCESS, provider)
             except Exception as e:
                 logger.warning("company_info_failed", provider=provider, symbol=symbol, error=str(e))
@@ -568,6 +637,12 @@ class MarketDataProvider:
                         quote["pe_ratio"] = nse_quote["pe_ratio"]
                 except Exception:
                     pass
+
+            # Authoritative fallback from shares outstanding
+            if quote and quote.get("market_cap") is None:
+                computed = _calculate_fallback_market_cap(sym, quote.get("price"))
+                if computed:
+                    quote["market_cap"] = computed
             return quote
 
         if indian_symbols:
