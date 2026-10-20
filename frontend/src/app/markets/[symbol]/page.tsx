@@ -174,7 +174,11 @@ export default function StockDetailPage() {
         </div>
 
         <div className="flex items-center gap-3">
-          <DataFreshness timestamp={lastUpdated} thresholdMs={60000} />
+          <DataFreshness
+            timestamp={quote?.timestamp ?? lastUpdated}
+            thresholdMs={60000}
+            delayLabel={quote?.exchange ? undefined : undefined}
+          />
           <button
             onClick={fetchAll}
             className="p-2 rounded-xl bg-white/[0.03] border border-white/[0.06] text-[var(--text-muted)] hover:text-white hover:bg-white/[0.08] transition-all cursor-pointer"

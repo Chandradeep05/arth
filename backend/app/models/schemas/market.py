@@ -23,6 +23,7 @@ class FreshnessMetadata(BaseModel):
     is_stale: bool = Field(default=False, description="True if data exceeds freshness threshold")
     delay_label: str = Field(default="~15s delayed", description="Human-readable delay description")
     cache_hit: bool = Field(default=False, description="Whether this was served from cache")
+    market_state: Optional[str] = Field(default=None, description="Market session state ('open', 'closed')")
 
 
 class APIResponse(BaseModel):

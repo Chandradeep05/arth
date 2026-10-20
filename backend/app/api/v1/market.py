@@ -17,6 +17,7 @@ All responses include:
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 import math
 
 from fastapi import APIRouter, Depends, Query
@@ -88,18 +89,112 @@ def _raise_data_error(symbol: str):
     raise SymbolNotFoundError(symbol)
 
 
+def get_market_state(market_or_symbol: str = "us", dt: datetime | None = None) -> tuple[str, str]:
+    """
+    Determine if the market for a given symbol or market identifier is open or closed,
+    and return (market_state, session_label).
+    market_state: 'open' or 'closed'
+    session_label: 'Regular Trading', 'Closed', 'Weekend', 'After Hours'
+    """
+    now_utc = dt or datetime.now(timezone.utc)
+    s = str(market_or_symbol or "").upper()
+    is_indian = s.endswith((".NS", ".BO")) or s in ("INDIA", "NSE", "BSE")
+
+    if is_indian:
+        tz = ZoneInfo("Asia/Kolkata")
+        local_time = now_utc.astimezone(tz)
+        if local_time.weekday() >= 5:
+            return "closed", "Weekend"
+        market_open = local_time.replace(hour=9, minute=15, second=0, microsecond=0)
+        market_close = local_time.replace(hour=15, minute=30, second=0, microsecond=0)
+        if market_open <= local_time <= market_close:
+            return "open", "Regular Trading"
+        return "closed", "After Hours"
+    else:
+        tz = ZoneInfo("America/New_York")
+        local_time = now_utc.astimezone(tz)
+        if local_time.weekday() >= 5:
+            return "closed", "Weekend"
+        market_open = local_time.replace(hour=9, minute=30, second=0, microsecond=0)
+        market_close = local_time.replace(hour=16, minute=0, second=0, microsecond=0)
+        if market_open <= local_time <= market_close:
+            return "open", "Regular Trading"
+        return "closed", "After Hours"
+
+
 def _make_freshness(
     source: str = "MarketDataProvider",
     cache_hit: bool = False,
+    quote_timestamp: datetime | str | None = None,
+    market_or_symbol: str = "us",
     settings: Settings | None = None,
 ) -> FreshnessMetadata:
-    """Build freshness metadata for a response."""
+    """Build freshness metadata for a response, evaluating authentic quote age and market session."""
+    now_utc = datetime.now(timezone.utc)
+    market_state, _ = get_market_state(market_or_symbol, now_utc)
+
+    # When exchange is closed, data represents the final closing price (never falsely marked stale)
+    if market_state == "closed":
+        ts = quote_timestamp
+        if isinstance(ts, str):
+            try:
+                ts = datetime.fromisoformat(ts)
+            except Exception:
+                ts = None
+        return FreshnessMetadata(
+            source=source,
+            timestamp=ts or now_utc,
+            is_stale=False,
+            delay_label="last close",
+            cache_hit=cache_hit,
+            market_state="closed",
+        )
+
+    # During market hours: evaluate actual provider age
+    source_lower = source.lower()
+    is_delayed_source = any(k in source_lower for k in ("twelvedata", "twelve data", "finnhub", "yahoo"))
+
+    if quote_timestamp is not None:
+        ts = quote_timestamp
+        if isinstance(ts, str):
+            try:
+                ts = datetime.fromisoformat(ts)
+            except Exception:
+                ts = None
+
+        if ts is not None:
+            if ts.tzinfo is None:
+                quote_ts = ts.replace(tzinfo=timezone.utc)
+            else:
+                quote_ts = ts.astimezone(timezone.utc)
+
+            age_seconds = max(0.0, (now_utc - quote_ts).total_seconds())
+            threshold_seconds = 1800.0 if is_delayed_source else 300.0
+            is_stale = age_seconds > threshold_seconds
+
+            if is_stale:
+                delay_label = f"~{int(age_seconds // 60)}m delayed (stale)"
+            else:
+                delay_label = "~15s delayed" if is_delayed_source else "real-time"
+
+            return FreshnessMetadata(
+                source=source,
+                timestamp=quote_ts,
+                is_stale=is_stale,
+                delay_label=delay_label,
+                cache_hit=cache_hit,
+                market_state="open",
+            )
+
+    # Fallback when quote_timestamp not supplied
+    delay_label = "~15s delayed" if is_delayed_source else "real-time"
     return FreshnessMetadata(
         source=source,
-        timestamp=datetime.now(timezone.utc),
+        timestamp=now_utc,
         is_stale=False,
-        delay_label="~15s delayed" if source.lower() in ("yahoo_finance", "twelvedata", "twelve data") else "real-time",
+        delay_label=delay_label,
         cache_hit=cache_hit,
+        market_state="open",
     )
 
 
@@ -144,10 +239,16 @@ async def get_quote(
     data.pop("_validation", None)  # Validation metadata from DataQualityValidator
 
     source_label = market_data.get_source_label(symbol, source_name)
+    quote_ts = data.get("timestamp")
 
     return StockQuoteResponse(
         data=StockQuote(**data),
-        freshness=_make_freshness(source=source_label, cache_hit=cache_hit),
+        freshness=_make_freshness(
+            source=source_label,
+            cache_hit=cache_hit,
+            quote_timestamp=quote_ts,
+            market_or_symbol=symbol,
+        ),
     )
 
 
@@ -281,7 +382,7 @@ async def get_ohlcv(
         symbol=symbol.upper(),
         timeframe=interval,
         data=valid_bars,
-        freshness=_make_freshness(source=source_label, cache_hit=cache_hit),
+        freshness=_make_freshness(source=source_label, cache_hit=cache_hit, market_or_symbol=symbol),
     )
 
 
@@ -383,7 +484,7 @@ async def get_company_info(
     return {
         "success": True,
         "data": data,
-        "freshness": _make_freshness(source=source_label, cache_hit=cache_hit).model_dump(),
+        "freshness": _make_freshness(source=source_label, cache_hit=cache_hit, market_or_symbol=symbol).model_dump(),
     }
 
 
@@ -447,7 +548,7 @@ async def get_indicators(
     return {
         "success": True,
         "data": {"symbol": symbol.upper(), **indicators},
-        "freshness": _make_freshness(source=source_label, cache_hit=was_cached).model_dump(),
+        "freshness": _make_freshness(source=source_label, cache_hit=was_cached, market_or_symbol=symbol).model_dump(),
     }
 
 
@@ -478,11 +579,12 @@ async def batch_quotes(
     if cached and "quotes" in cached:
         cached.pop("_cache_hit", None)
         cached.pop("_cached_at", None)
+        first_sym = symbols[0] if symbols else "us"
         return {
             "success": True,
             "data": cached["quotes"],
             "count": len(cached["quotes"]),
-            "freshness": _make_freshness(source="MarketDataProvider", cache_hit=True).model_dump(),
+            "freshness": _make_freshness(source="MarketDataProvider", cache_hit=True, market_or_symbol=first_sym).model_dump(),
         }
 
     # Fetch fresh via market_data
@@ -491,17 +593,18 @@ async def batch_quotes(
     if quotes:
         await cache.set(cache_key, {"quotes": quotes}, ttl=30)
 
+    first_sym = symbols[0] if symbols else "us"
     return {
         "success": True,
         "data": quotes,
         "count": len(quotes),
-        "freshness": _make_freshness(source="MarketDataProvider", cache_hit=False).model_dump(),
+        "freshness": _make_freshness(source="MarketDataProvider", cache_hit=False, market_or_symbol=first_sym).model_dump(),
     }
 
 
 @router.get("/health")
 async def market_health():
-    """Health check for the market data subsystem."""
+    """Health check for the market data subsystem with market states and active sources."""
     health_dict = market_data.get_health()
     all_healthy = any(
         h.get("is_healthy", False) if isinstance(h, dict) else getattr(h, "is_healthy", False)
@@ -509,8 +612,22 @@ async def market_health():
     ) if health_dict else False
 
     primary_health = health_dict.get("upstox") or health_dict.get("twelvedata") or {}
+    india_state, india_label = get_market_state("india")
+    us_state, us_label = get_market_state("us")
+
+    active_sources = []
+    for name, h in health_dict.items():
+        is_up = h.get("is_healthy", False) if isinstance(h, dict) else getattr(h, "is_healthy", False)
+        if is_up:
+            active_sources.append(market_data.get_source_label("", name))
+
     return {
         "adapter": primary_health,
         "providers": health_dict,
+        "active_sources": active_sources,
         "status": "healthy" if all_healthy else "degraded",
+        "markets": {
+            "india": {"state": india_state, "session": india_label, "exchange": "NSE"},
+            "us": {"state": us_state, "session": us_label, "exchange": "NYSE/NASDAQ"},
+        },
     }

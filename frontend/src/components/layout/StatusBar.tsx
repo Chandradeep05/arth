@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
+import { apiClient } from '@/lib/api';
 
 type ConnectionStatus = 'connected' | 'reconnecting' | 'disconnected';
 
@@ -19,19 +20,52 @@ function formatTime(date: Date): string {
   });
 }
 
+interface MarketHealthData {
+  status: string;
+  active_sources?: string[];
+  markets?: {
+    india?: { state: string; session: string; exchange: string };
+    us?: { state: string; session: string; exchange: string };
+  };
+}
+
 export default function StatusBar() {
-  const [connectionStatus] = useState<ConnectionStatus>('connected');
+  const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('connected');
   const [lastUpdated, setLastUpdated] = useState<string>('');
+  const [marketInfo, setMarketInfo] = useState<string>('Connecting to market feed...');
 
   const updateTime = useCallback(() => {
     setLastUpdated(formatTime(new Date()));
   }, []);
 
+  const fetchHealth = useCallback(async () => {
+    try {
+      const data = await apiClient.get<MarketHealthData>('/api/v1/market/health');
+      setConnectionStatus(data?.status === 'healthy' ? 'connected' : 'reconnecting');
+
+      const sources = data?.active_sources?.length
+        ? data.active_sources.join(' / ')
+        : 'Upstox / Twelve Data';
+      const indiaState = data?.markets?.india?.state === 'open' ? 'NSE Open' : 'NSE Closed';
+      const usState = data?.markets?.us?.state === 'open' ? 'US Open' : 'US Closed';
+
+      setMarketInfo(`Sources: ${sources} \u00a0|\u00a0 ${indiaState} \u00a0|\u00a0 ${usState}`);
+    } catch {
+      setConnectionStatus('disconnected');
+      setMarketInfo('Offline \u00a0|\u00a0 Retrying connection...');
+    }
+  }, []);
+
   useEffect(() => {
     updateTime();
-    const interval = setInterval(updateTime, 1_000);
-    return () => clearInterval(interval);
-  }, [updateTime]);
+    fetchHealth();
+    const timeInterval = setInterval(updateTime, 1_000);
+    const healthInterval = setInterval(fetchHealth, 30_000);
+    return () => {
+      clearInterval(timeInterval);
+      clearInterval(healthInterval);
+    };
+  }, [updateTime, fetchHealth]);
 
   const { dot, label } = statusConfig[connectionStatus];
 
@@ -55,9 +89,9 @@ export default function StatusBar() {
         <span className="text-[var(--text-dim)]">{label}</span>
       </div>
 
-      {/* Center: Data source info */}
-      <div className="text-[var(--text-dim)] hidden sm:block">
-        Data delayed ~15s &nbsp;|&nbsp; Sources: Upstox / Twelve Data / NSE
+      {/* Center: Dynamic market and provider info */}
+      <div className="text-[var(--text-dim)] hidden sm:block truncate max-w-[60%] text-center">
+        {marketInfo}
       </div>
 
       {/* Right: Last updated */}

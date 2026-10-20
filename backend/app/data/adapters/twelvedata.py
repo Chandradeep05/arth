@@ -228,7 +228,11 @@ class TwelveDataAdapter(BaseDataAdapter):
                 "previous_close": round(prev_close, 2),
                 "market_cap": None,  # Not in /quote, needs /statistics (paid)
                 "pe_ratio": None,    # Not in /quote
-                "timestamp": datetime.now(timezone.utc),
+                "timestamp": (
+                    datetime.fromtimestamp(int(data["timestamp"]), tz=timezone.utc)
+                    if data.get("timestamp") and str(data["timestamp"]).isdigit()
+                    else datetime.now(timezone.utc)
+                ),
                 "exchange": data.get("exchange", "NASDAQ"),
                 "market": "us",
                 "currency": data.get("currency", "USD"),
@@ -428,7 +432,11 @@ class TwelveDataAdapter(BaseDataAdapter):
                             "previous_close": round(prev_close, 2),
                             "market_cap": None,
                             "pe_ratio": None,
-                            "timestamp": datetime.now(timezone.utc),
+                            "timestamp": (
+                    datetime.fromtimestamp(int(data["timestamp"]), tz=timezone.utc)
+                    if data.get("timestamp") and str(data["timestamp"]).isdigit()
+                    else datetime.now(timezone.utc)
+                ),
                             "exchange": item.get("exchange", "NASDAQ"),
                             "market": "us",
                             "currency": item.get("currency", "USD"),

@@ -446,7 +446,7 @@ export default function DashboardPage() {
               Active Feeds
             </div>
             <p className="text-xs text-[var(--text-dim)] font-mono">
-              Live market quotes via Twelve Data &amp; NSE
+              Live market quotes via Upstox &amp; Twelve Data
             </p>
           </div>
 

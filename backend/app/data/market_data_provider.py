@@ -339,7 +339,11 @@ class MarketDataProvider:
                             "volume": None,
                             "market_cap": None,
                             "pe_ratio": None,
-                            "timestamp": datetime.now(timezone.utc),
+                            "timestamp": (
+                                datetime.fromtimestamp(int(raw["t"]), tz=timezone.utc)
+                                if raw.get("t") and str(raw["t"]).isdigit()
+                                else datetime.now(timezone.utc)
+                            ),
                             "exchange": "US",
                             "market": "us",
                             "currency": "USD",

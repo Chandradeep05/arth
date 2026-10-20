@@ -9,6 +9,7 @@ export interface FreshnessMetadata {
   is_stale: boolean;
   delay_label: string;
   cache_hit: boolean;
+  market_state?: string;
 }
 
 export interface StockQuote {
