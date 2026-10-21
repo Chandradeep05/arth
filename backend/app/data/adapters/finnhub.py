@@ -190,7 +190,21 @@ class FinnhubAdapter(BaseDataAdapter):
             or m.get("peNormalizedAnnual")
             or m.get("peExclExtraTTM")
         )
-        de = m.get("totalDebt/totalEquityQuarterly") or m.get("totalDebt/totalEquityAnnual")
+        # Finnhub metric contract:
+        # 'totalDebt/totalEquityQuarterly' or 'totalDebt/totalEquityAnnual' is returned as percentage (e.g. 45.2 for 0.452x)
+        # 'debtToEquityAnnual' or 'debtToEquityQuarterly' is returned as direct ratio (e.g. 1.45)
+        raw_de = m.get("totalDebt/totalEquityQuarterly") or m.get("totalDebt/totalEquityAnnual")
+        if raw_de is not None:
+            try:
+                de = round(float(raw_de) / 100.0, 4)
+            except (ValueError, TypeError):
+                de = None
+        else:
+            raw_de_ratio = m.get("debtToEquityQuarterly") or m.get("debtToEquityAnnual")
+            try:
+                de = round(float(raw_de_ratio), 4) if raw_de_ratio is not None else None
+            except (ValueError, TypeError):
+                de = None
         cr = m.get("currentRatioQuarterly") or m.get("currentRatioAnnual")
         pm = m.get("netProfitMarginTTM") or m.get("netProfitMarginAnnual")
         if pm is not None and abs(pm) > 1.0:

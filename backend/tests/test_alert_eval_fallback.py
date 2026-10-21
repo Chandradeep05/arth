@@ -196,10 +196,11 @@ def test_risk_de_ratio_normalization():
     # Should say "D/E: 0.40", not "D/E: 0.00"
     assert any("D/E: 0.40" in f for f in factors)
 
-    # Legacy yfinance percentage (e.g. 36.65) should still be divided by 100 -> 0.37
-    score_yf, factors_yf, ok_yf = engine._compute_financial_risk({"debt_to_equity": 36.65}, sector="Technology")
-    assert ok_yf is True
-    assert any("D/E: 0.37" in f for f in factors_yf)
+    # Strict normalized ratio contract: Low-debt company with 0.08x (e.g. TCS) is correctly classified as low leverage
+    score_tcs, factors_tcs, ok_tcs = engine._compute_financial_risk({"debt_to_equity": 0.08}, sector="Technology")
+    assert ok_tcs is True
+    assert any("D/E: 0.08" in f for f in factors_tcs)
+    assert score_tcs < 40.0
 
 
 def test_edit_alert_request_validation():

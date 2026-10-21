@@ -78,17 +78,46 @@ class TestFinancialRatiosContractNormalization:
         # AAPL has higher financial leverage (1.45), so financial risk is moderate
         assert score >= 40.0
 
-    def test_legacy_percentage_conversion_equivalence(self):
-        """Values > 20.0 must be converted from percentage to ratio (/ 100.0) with identical scores."""
-        direct_ratio_data = {"debt_to_equity": 0.37, "current_ratio": 1.5, "profit_margin": 10.0}
-        percentage_data = {"debt_to_equity": 37.0, "current_ratio": 1.5, "profit_margin": 10.0}
+    def test_low_debt_and_contract_semantics(self):
+        """Verify low-debt ratios (8% = 0.08, 15% = 0.15) are strictly evaluated as low leverage."""
+        low_debt_8 = {"debt_to_equity": 0.08, "current_ratio": 2.0}
+        low_debt_15 = {"debt_to_equity": 0.15, "current_ratio": 2.0}
+        normal_debt_37 = {"debt_to_equity": 0.37, "current_ratio": 1.5}
+        distressed_800 = {"debt_to_equity": 8.0, "current_ratio": 0.6}
 
-        score_direct, factors_direct, avail_direct = self.risk_engine._compute_financial_risk(direct_ratio_data)
-        score_pct, factors_pct, avail_pct = self.risk_engine._compute_financial_risk(percentage_data)
+        score_8, factors_8, ok_8 = self.risk_engine._compute_financial_risk(low_debt_8, sector="Technology")
+        score_15, factors_15, ok_15 = self.risk_engine._compute_financial_risk(low_debt_15, sector="Technology")
+        score_37, factors_37, ok_37 = self.risk_engine._compute_financial_risk(normal_debt_37, sector="Technology")
+        score_800, factors_800, ok_800 = self.risk_engine._compute_financial_risk(distressed_800, sector="Technology")
 
-        assert avail_direct is True and avail_pct is True
-        assert score_direct == score_pct
-        assert factors_direct == factors_pct
+        assert ok_8 and ok_15 and ok_37 and ok_800
+        # 0.08 is lowest risk, 8.0 is highest risk
+        assert score_8 <= score_15 <= score_37 < score_800
+        assert any("Low leverage" in f for f in factors_8)
+        assert any("Very high leverage" in f for f in factors_800)
+
+    def test_market_holidays(self):
+        """Verify known NSE and US exchange holidays are recognized as closed."""
+        tz_nse = ZoneInfo("Asia/Kolkata")
+        tz_us = ZoneInfo("America/New_York")
+
+        # Christmas 2026 (Friday Dec 25)
+        xmas_nse = datetime(2026, 12, 25, 11, 0, 0, tzinfo=tz_nse).astimezone(timezone.utc)
+        state_nse, label_nse = get_market_state("RELIANCE.NS", dt=xmas_nse)
+        assert state_nse == "closed"
+        assert label_nse == "Market Holiday"
+
+        # Republic Day 2026 (Monday Jan 26)
+        rep_day = datetime(2026, 1, 26, 11, 0, 0, tzinfo=tz_nse).astimezone(timezone.utc)
+        state_rep, label_rep = get_market_state("RELIANCE.NS", dt=rep_day)
+        assert state_rep == "closed"
+        assert label_rep == "Market Holiday"
+
+        # US Independence Day Observed 2026 (Friday July 3)
+        us_july3 = datetime(2026, 7, 3, 14, 0, 0, tzinfo=tz_us).astimezone(timezone.utc)
+        state_us, label_us = get_market_state("AAPL", dt=us_july3)
+        assert state_us == "closed"
+        assert label_us == "Market Holiday"
 
     def test_extreme_leverage_and_distress(self):
         """Test financial risk scoring boundaries from zero debt to extreme leverage."""
@@ -115,20 +144,20 @@ class TestFreshnessEngineAndMarketSessions:
         """NSE trading session is 09:15 to 15:30 IST on weekdays."""
         tz = ZoneInfo("Asia/Kolkata")
 
-        # Tuesday 11:00 AM IST (Market Open)
-        tuesday_open = datetime(2026, 10, 20, 11, 0, 0, tzinfo=tz).astimezone(timezone.utc)
+        # Wednesday 11:00 AM IST (Market Open)
+        tuesday_open = datetime(2026, 10, 21, 11, 0, 0, tzinfo=tz).astimezone(timezone.utc)
         state, label = get_market_state("RELIANCE.NS", dt=tuesday_open)
         assert state == "open"
         assert label == "Regular Trading"
 
-        # Tuesday 08:00 AM IST (Before Market Open)
-        tuesday_pre = datetime(2026, 10, 20, 8, 0, 0, tzinfo=tz).astimezone(timezone.utc)
+        # Wednesday 08:00 AM IST (Before Market Open)
+        tuesday_pre = datetime(2026, 10, 21, 8, 0, 0, tzinfo=tz).astimezone(timezone.utc)
         state, label = get_market_state("RELIANCE.NS", dt=tuesday_pre)
         assert state == "closed"
         assert label == "After Hours"
 
-        # Tuesday 18:00 PM IST (After Market Close)
-        tuesday_post = datetime(2026, 10, 20, 18, 0, 0, tzinfo=tz).astimezone(timezone.utc)
+        # Wednesday 18:00 PM IST (After Market Close)
+        tuesday_post = datetime(2026, 10, 21, 18, 0, 0, tzinfo=tz).astimezone(timezone.utc)
         state, label = get_market_state("RELIANCE.NS", dt=tuesday_post)
         assert state == "closed"
 

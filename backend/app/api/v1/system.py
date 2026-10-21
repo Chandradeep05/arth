@@ -183,8 +183,22 @@ async def redis_health():
 
 
 @router.get("/metrics")
-async def get_metrics():
-    """Return in-memory application metrics (request counts, latencies, cache ratios, etc.)."""
+async def get_metrics(request: Request):
+    """Return in-memory application metrics. Authenticated via X-Admin-Key header in production."""
+    from app.config import get_settings
+    settings = get_settings()
+
+    if not settings.is_development:
+        provided_key = request.headers.get("x-admin-key", "")
+        if not settings.admin_api_key or not hmac.compare_digest(provided_key, settings.admin_api_key):
+            return ORJSONResponse(
+                status_code=403,
+                content={
+                    "error": "forbidden",
+                    "message": "Admin API key required. Set X-Admin-Key header.",
+                },
+            )
+
     from app.engines.observability.metrics import metrics_collector
 
     return {

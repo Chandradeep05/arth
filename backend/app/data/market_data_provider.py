@@ -300,11 +300,11 @@ class MarketDataProvider:
                 chain.append("nse")
             return chain
 
-        # US Stocks provider chain
+        # US Stocks provider chain (TwelveData -> Finnhub -> FMP)
         chains = {
-            "quote": ["twelvedata", "finnhub"],
+            "quote": ["twelvedata", "finnhub", "fmp"],
             "history": ["twelvedata"],
-            "company_info": ["finnhub", "twelvedata"],
+            "company_info": ["finnhub", "twelvedata", "fmp"],
             "fundamentals": ["finnhub", "fmp", "twelvedata"],
             "news": ["finnhub"],
             "financials": ["fmp"],
@@ -353,6 +353,8 @@ class MarketDataProvider:
                 elif provider == "upstox":
                     upstox = self._get_upstox()
                     data = await upstox.get_quote(symbol) if upstox else None
+                elif provider == "fmp":
+                    data = await self._fmp.get_quote(symbol)
                 else:
                     data = None
 

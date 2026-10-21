@@ -196,7 +196,48 @@ class FMPAdapter(BaseDataAdapter):
 
 
     async def get_quote(self, symbol: str) -> Optional[Dict[str, Any]]:
-        return None
+        """Fetch real-time stock quote from FMP /quote."""
+        if symbol.upper().endswith(('.NS', '.BO')):
+            return None
+        clean_symbol = symbol.split(".")[0].upper()
+        raw = await self._throttled_get(f"quote/{clean_symbol}", {})
+        if not raw or not isinstance(raw, list) or len(raw) == 0:
+            return None
+        item = raw[0]
+        if item.get("price") is None:
+            return None
+
+        from datetime import datetime, timezone
+        raw_ts = item.get("timestamp")
+        quote_ts = (
+            datetime.fromtimestamp(int(raw_ts), tz=timezone.utc)
+            if raw_ts and str(raw_ts).isdigit()
+            else datetime.now(timezone.utc)
+        )
+
+        price = float(item["price"])
+        prev_close = float(item.get("previousClose") or price)
+        change = float(item.get("change") or (price - prev_close))
+        pct_change = float(item.get("changesPercentage") or ((change / prev_close) * 100 if prev_close else 0.0))
+
+        return {
+            "symbol": symbol.upper(),
+            "name": item.get("name", symbol),
+            "price": round(price, 2),
+            "change": round(change, 2),
+            "change_percent": round(pct_change, 2),
+            "volume": int(item.get("volume") or 0),
+            "high": round(float(item.get("dayHigh") or price), 2),
+            "low": round(float(item.get("dayLow") or price), 2),
+            "open": round(float(item.get("open") or price), 2),
+            "previous_close": round(prev_close, 2),
+            "market_cap": item.get("marketCap"),
+            "pe_ratio": item.get("pe"),
+            "timestamp": quote_ts,
+            "exchange": item.get("exchange", "US"),
+            "market": "us",
+            "currency": "USD",
+        }
 
     async def get_ohlcv(self, symbol: str, period: str = "1mo", interval: str = "1d") -> Optional[List[Dict[str, Any]]]:
         return None

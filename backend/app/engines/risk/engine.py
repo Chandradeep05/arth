@@ -328,13 +328,17 @@ class RiskEngine:
         score = 50.0  # Default medium risk
 
         # Debt-to-Equity — sector-aware scoring
+        # Strict architectural contract: de is consumed strictly as a normalized decimal ratio
+        # (e.g. 0.37 for 0.37x, 0.08 for 0.08x). Provider adapters normalize upstream percentages to ratios.
         de = metrics.get("debt_to_equity")
+        de_ratio = None
         if de is not None:
-            # Providers differ: yfinance returns percentage (e.g. 36.65 for 0.3665x),
-            # while Upstox and Finnhub return direct ratio (e.g. 0.40).
-            # If value > 20, it is represented as percentage -> divide by 100.
-            de_ratio = float(de) / 100.0 if float(de) > 20.0 else float(de)
+            try:
+                de_ratio = float(de)
+            except (ValueError, TypeError):
+                de_ratio = None
 
+        if de_ratio is not None:
             # Get sector-appropriate thresholds
             low_max, mod_max, high_max = _get_de_thresholds(sector)
             sector_label = f" [sector: {sector}]" if sector else ""

@@ -89,12 +89,73 @@ def _raise_data_error(symbol: str):
     raise SymbolNotFoundError(symbol)
 
 
+# Official Exchange Trading Holidays (YYYY, MM, DD)
+NSE_HOLIDAYS = {
+    # 2026
+    (2026, 1, 26),   # Republic Day
+    (2026, 2, 17),   # Mahashivratri
+    (2026, 3, 3),    # Holi
+    (2026, 3, 20),   # Id-Ul-Fitr
+    (2026, 3, 27),   # Ram Navami
+    (2026, 3, 31),   # Mahavir Jayanti
+    (2026, 4, 3),    # Good Friday
+    (2026, 4, 14),   # Dr. Baba Saheb Ambedkar Jayanti
+    (2026, 5, 1),    # Maharashtra Day
+    (2026, 5, 27),   # Bakri Id
+    (2026, 6, 26),   # Muharram
+    (2026, 8, 15),   # Independence Day
+    (2026, 9, 4),    # Milad-un-Nabi
+    (2026, 10, 2),   # Mahatma Gandhi Jayanti
+    (2026, 10, 20),  # Dussehra
+    (2026, 11, 8),   # Diwali Laxmi Pujan
+    (2026, 11, 10),  # Diwali Balipratipada
+    (2026, 11, 24),  # Guru Nanak Jayanti
+    (2026, 12, 25),  # Christmas
+    # 2027
+    (2027, 1, 26),   # Republic Day
+    (2027, 3, 23),   # Holi
+    (2027, 3, 26),   # Good Friday
+    (2027, 4, 14),   # Ambedkar Jayanti
+    (2027, 5, 1),    # Maharashtra Day
+    (2027, 8, 15),   # Independence Day
+    (2027, 10, 2),   # Gandhi Jayanti
+    (2027, 12, 25),  # Christmas
+}
+
+US_HOLIDAYS = {
+    # 2026
+    (2026, 1, 1),    # New Year's Day
+    (2026, 1, 19),   # Martin Luther King Jr. Day
+    (2026, 2, 16),   # Washington's Birthday (Presidents Day)
+    (2026, 4, 3),    # Good Friday
+    (2026, 5, 25),   # Memorial Day
+    (2026, 6, 19),   # Juneteenth
+    (2026, 7, 3),    # Independence Day (Observed)
+    (2026, 7, 4),    # Independence Day
+    (2026, 9, 7),    # Labor Day
+    (2026, 11, 26),  # Thanksgiving Day
+    (2026, 12, 25),  # Christmas Day
+    # 2027
+    (2027, 1, 1),    # New Year's Day
+    (2027, 1, 18),   # Martin Luther King Jr. Day
+    (2027, 2, 15),   # Washington's Birthday
+    (2027, 3, 26),   # Good Friday
+    (2027, 5, 31),   # Memorial Day
+    (2027, 6, 18),   # Juneteenth (Observed)
+    (2027, 7, 5),    # Independence Day (Observed)
+    (2027, 9, 6),    # Labor Day
+    (2027, 11, 25),  # Thanksgiving Day
+    (2027, 12, 24),  # Christmas (Observed)
+    (2027, 12, 25),  # Christmas Day
+}
+
+
 def get_market_state(market_or_symbol: str = "us", dt: datetime | None = None) -> tuple[str, str]:
     """
     Determine if the market for a given symbol or market identifier is open or closed,
     and return (market_state, session_label).
     market_state: 'open' or 'closed'
-    session_label: 'Regular Trading', 'Closed', 'Weekend', 'After Hours'
+    session_label: 'Regular Trading', 'Closed', 'Weekend', 'After Hours', 'Market Holiday'
     """
     now_utc = dt or datetime.now(timezone.utc)
     s = str(market_or_symbol or "").upper()
@@ -103,6 +164,9 @@ def get_market_state(market_or_symbol: str = "us", dt: datetime | None = None) -
     if is_indian:
         tz = ZoneInfo("Asia/Kolkata")
         local_time = now_utc.astimezone(tz)
+        d_tuple = (local_time.year, local_time.month, local_time.day)
+        if d_tuple in NSE_HOLIDAYS:
+            return "closed", "Market Holiday"
         if local_time.weekday() >= 5:
             return "closed", "Weekend"
         market_open = local_time.replace(hour=9, minute=15, second=0, microsecond=0)
@@ -113,6 +177,9 @@ def get_market_state(market_or_symbol: str = "us", dt: datetime | None = None) -
     else:
         tz = ZoneInfo("America/New_York")
         local_time = now_utc.astimezone(tz)
+        d_tuple = (local_time.year, local_time.month, local_time.day)
+        if d_tuple in US_HOLIDAYS:
+            return "closed", "Market Holiday"
         if local_time.weekday() >= 5:
             return "closed", "Weekend"
         market_open = local_time.replace(hour=9, minute=30, second=0, microsecond=0)
@@ -131,7 +198,7 @@ def _make_freshness(
 ) -> FreshnessMetadata:
     """Build freshness metadata for a response, evaluating authentic quote age and market session."""
     now_utc = datetime.now(timezone.utc)
-    market_state, _ = get_market_state(market_or_symbol, now_utc)
+    market_state, session_label = get_market_state(market_or_symbol, now_utc)
 
     # When exchange is closed, data represents the final closing price (never falsely marked stale)
     if market_state == "closed":
@@ -141,11 +208,12 @@ def _make_freshness(
                 ts = datetime.fromisoformat(ts)
             except Exception:
                 ts = None
+        label = "market holiday" if session_label == "Market Holiday" else "last close"
         return FreshnessMetadata(
             source=source,
             timestamp=ts or now_utc,
             is_stale=False,
-            delay_label="last close",
+            delay_label=label,
             cache_hit=cache_hit,
             market_state="closed",
         )
