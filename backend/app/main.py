@@ -101,7 +101,9 @@ async def lifespan(app: FastAPI):
         await init_db(settings)
     except Exception as e:
         logger.error("database_init_failed", error=str(e))
-        # Don't crash — allow degraded operation without Postgres
+        if settings.is_production:
+            raise RuntimeError(f"Database initialization failed in production: {e}")
+        # In development/testing, allow degraded operation without Postgres
 
     # Initialize asyncpg pool (Phase 4 endpoints — raw SQL with fetchrow/fetch/execute)
     pg_pool = None
@@ -132,6 +134,8 @@ async def lifespan(app: FastAPI):
             logger.info("asyncpg_pool_created", dsn_host=dsn.split("@")[-1][:40] if "@" in dsn else "localhost")
         except Exception as e:
             logger.error("asyncpg_pool_failed", error=str(e))
+            if settings.is_production:
+                raise RuntimeError(f"asyncpg pool creation failed in production: {e}")
     app.state.pg_pool = pg_pool
 
     # Initialize Redis
@@ -390,7 +394,10 @@ def create_app() -> FastAPI:
         # Check AssistantEngine
         checks["assistant_engine"] = "ok" if getattr(app.state, "assistant_engine", None) else "not_available"
         
-        all_ok = all(v == "ok" for v in checks.values() if v != "not_configured")
+        # Database is strictly mandatory for readiness (Postgres is canonical system of record)
+        db_ok = checks.get("database") == "ok"
+        other_ok = all(v == "ok" for k, v in checks.items() if k != "database" and v != "not_configured")
+        all_ok = db_ok and other_ok
         status_code = 200 if all_ok else 503
         
         from fastapi.responses import JSONResponse

@@ -45,7 +45,7 @@ export default function StatusBar() {
 
       const sources = data?.active_sources?.length
         ? data.active_sources.join(' / ')
-        : 'Upstox / Twelve Data';
+        : 'unavailable';
       const indiaState = data?.markets?.india?.state === 'open' ? 'NSE Open' : 'NSE Closed';
       const usState = data?.markets?.us?.state === 'open' ? 'US Open' : 'US Closed';
 

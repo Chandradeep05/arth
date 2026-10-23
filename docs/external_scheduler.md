@@ -19,9 +19,11 @@ For high-confidence price alert notifications and data cache warming, ARTH provi
 | Endpoint | Method | Recommended Interval | Active Window | Header Required |
 |---|:---:|:---:|:---:|---|
 | `/api/v1/system/health` | `GET` | Every 5 min | 24x7 | None |
-| `/api/v1/internal/jobs/evaluate-alerts` | `POST` | Every 5 min | Market Hours (09:00 - 21:30 UTC) | `X-Internal-Secret: <SECRET>` |
-| `/api/v1/internal/jobs/warm-alert-symbols` | `POST` | Every 30 min | Market Hours | `X-Internal-Secret: <SECRET>` |
+| `/api/v1/internal/jobs/evaluate-alerts` | `POST` | Every 5 min | Global Trading Days (03:30 - 21:00 UTC) or 24x7* | `X-Internal-Secret: <SECRET>` |
+| `/api/v1/internal/jobs/warm-alert-symbols` | `POST` | Every 30 min | Global Trading Days (03:30 - 21:00 UTC) | `X-Internal-Secret: <SECRET>` |
 | `/api/v1/internal/jobs/evaluate-predictions` | `POST` | Every 6 hours | Market Days (Mon-Fri) | `X-Internal-Secret: <SECRET>` |
+
+*\*Note: The backend evaluator is intrinsically market-session aware (NSE: 09:15 - 15:30 IST / 03:45 - 10:00 UTC; NYSE: 09:30 - 16:00 ET / 13:30 - 20:00 UTC). It automatically skips price fetching and alerts for symbols whose exchanges are closed or on official holiday, and enforces a 120-second deduplication cooldown across dual schedulers.*
 
 ---
 

@@ -146,6 +146,7 @@ class Settings(BaseSettings):
     # Financial Modeling Prep API (Financial statements, ratios)
     fmp_api_key: str = ""
     fmp_enabled: bool = True
+    fmp_quote_display_enabled: bool = False  # Requires explicit commercial redistribution license
 
     # ── Security ──
     # JWT secret: empty default forces explicit configuration before use.

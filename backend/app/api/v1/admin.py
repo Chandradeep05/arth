@@ -13,7 +13,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
-from app.core.auth import UserContext, require_admin
+from app.core.auth import UserContext, require_admin, hash_invite_code
 from app.core.logging import get_logger
 from app.models.schemas.user import (
     CreateInviteCodeRequest,
@@ -94,13 +94,17 @@ async def create_invite_code(
     admin: UserContext = Depends(require_admin),
 ) -> dict:
     db = request.state.db
-    code = _gen_code()
+    raw_code = _gen_code()
+    code_hash = hash_invite_code(raw_code)
     row = await db.fetchrow(
         "INSERT INTO invite_codes (code, created_by, expires_at) VALUES ($1, $2, $3) RETURNING id, code, used_by, used_at, expires_at",
-        code, admin.user_id, body.expires_at,
+        code_hash, admin.user_id, body.expires_at,
     )
-    logger.info("invite_created", admin=str(admin.user_id), code_prefix=code[:4])
-    return dict(row)
+    logger.info("invite_created", admin=str(admin.user_id), code_prefix=raw_code[:4])
+    res = dict(row)
+    # Return plaintext raw_code once to the admin upon creation for distribution
+    res["code"] = raw_code
+    return res
 
 
 @router.get("/invite-codes")

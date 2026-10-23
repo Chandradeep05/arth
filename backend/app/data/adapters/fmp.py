@@ -94,6 +94,13 @@ class FMPAdapter(BaseDataAdapter):
                     return None
 
                 data = resp.json()
+                if len(_cache) > 500:
+                    expired = [k for k, v in _cache.items() if now >= v[1]]
+                    for k in expired:
+                        _cache.pop(k, None)
+                    if len(_cache) > 500:
+                        for k in list(_cache.keys())[:100]:
+                            _cache.pop(k, None)
                 _cache[cache_key] = (data, now + _CACHE_TTL_STATEMENTS)
                 return data
 
@@ -212,13 +219,17 @@ class FMPAdapter(BaseDataAdapter):
         quote_ts = (
             datetime.fromtimestamp(int(raw_ts), tz=timezone.utc)
             if raw_ts and str(raw_ts).isdigit()
-            else datetime.now(timezone.utc)
+            else None
         )
 
         price = float(item["price"])
-        prev_close = float(item.get("previousClose") or price)
-        change = float(item.get("change") or (price - prev_close))
-        pct_change = float(item.get("changesPercentage") or ((change / prev_close) * 100 if prev_close else 0.0))
+        prev_close = float(item["previousClose"]) if item.get("previousClose") is not None else None
+        change = float(item["change"]) if item.get("change") is not None else ((price - prev_close) if prev_close is not None else 0.0)
+        pct_change = float(item["changesPercentage"]) if item.get("changesPercentage") is not None else (((change / prev_close) * 100) if prev_close else 0.0)
+
+        high = float(item["dayHigh"]) if item.get("dayHigh") is not None else None
+        low = float(item["dayLow"]) if item.get("dayLow") is not None else None
+        open_val = float(item["open"]) if item.get("open") is not None else None
 
         return {
             "symbol": symbol.upper(),
@@ -227,10 +238,10 @@ class FMPAdapter(BaseDataAdapter):
             "change": round(change, 2),
             "change_percent": round(pct_change, 2),
             "volume": int(item.get("volume") or 0),
-            "high": round(float(item.get("dayHigh") or price), 2),
-            "low": round(float(item.get("dayLow") or price), 2),
-            "open": round(float(item.get("open") or price), 2),
-            "previous_close": round(prev_close, 2),
+            "high": round(high, 2) if high is not None else None,
+            "low": round(low, 2) if low is not None else None,
+            "open": round(open_val, 2) if open_val is not None else None,
+            "previous_close": round(prev_close, 2) if prev_close is not None else None,
             "market_cap": item.get("marketCap"),
             "pe_ratio": item.get("pe"),
             "timestamp": quote_ts,

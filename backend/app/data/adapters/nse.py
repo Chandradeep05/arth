@@ -219,6 +219,19 @@ class NSEAdapter:
             except (ValueError, TypeError):
                 market_cap = None
 
+        raw_high = float(price_info.get("intraDayHighLow", {}).get("max", 0) or 0)
+        raw_low = float(price_info.get("intraDayHighLow", {}).get("min", 0) or 0)
+        raw_open = float(price_info.get("open", 0) or 0)
+        quote_ts: Optional[datetime] = None
+        raw_lut = metadata.get("lastUpdateTime")
+        if raw_lut and isinstance(raw_lut, str):
+            try:
+                from zoneinfo import ZoneInfo
+                parsed_dt = datetime.strptime(raw_lut.strip(), "%d-%b-%Y %H:%M:%S")
+                quote_ts = parsed_dt.replace(tzinfo=ZoneInfo("Asia/Kolkata")).astimezone(timezone.utc)
+            except Exception:
+                quote_ts = None
+
         return {
             "symbol": symbol.upper(),
             "name": info.get("companyName", metadata.get("companyName", clean)),
@@ -226,13 +239,13 @@ class NSEAdapter:
             "change": round(float(change), 2),
             "change_percent": round(float(change_pct), 2),
             "volume": int(price_info.get("totalTradedVolume", 0) or 0),
-            "high": round(float(price_info.get("intraDayHighLow", {}).get("max", 0) or 0), 2),
-            "low": round(float(price_info.get("intraDayHighLow", {}).get("min", 0) or 0), 2),
-            "open": round(float(price_info.get("open", 0) or 0), 2),
-            "previous_close": round(float(prev_close or 0), 2),
+            "high": round(raw_high, 2) if raw_high > 0 else None,
+            "low": round(raw_low, 2) if raw_low > 0 else None,
+            "open": round(raw_open, 2) if raw_open > 0 else None,
+            "previous_close": round(float(prev_close), 2) if prev_close else None,
             "market_cap": market_cap,
             "pe_ratio": float(str(metadata.get("pdSymbolPe")).replace(",", "").strip()) if metadata.get("pdSymbolPe") not in (None, "", "-", "NA") else None,
-            "timestamp": datetime.now(timezone.utc),
+            "timestamp": quote_ts,
             "exchange": "NSE",
             "market": "india",
             "currency": "INR",

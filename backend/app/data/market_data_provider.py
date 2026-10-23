@@ -7,6 +7,8 @@ from enum import Enum
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Union
 from app.core.logging import get_logger
+from app.core.provider_quota import quota_governor
+from dataclasses import dataclass
 
 logger = get_logger(__name__)
 
@@ -90,41 +92,55 @@ _COMMON_INDIAN_SYMBOLS = {
     "JIOFIN", "TRENT", "HAL", "VBL", "NIFTY", "BANKNIFTY"
 }
 
-# Outstanding equity shares for prominent Indian equities (source: official quarterly filings)
-# Authoritative fallback for market_cap = price * shares when exchange scraping is blocked
-_INDIAN_SHARES_OUTSTANDING: Dict[str, float] = {
-    "RELIANCE": 13_532_453_400,    # ~13.53B shares (post 1:1 bonus Oct 2024)
-    "TCS": 3_618_087_500,          # ~3.62B shares
-    "HDFCBANK": 7_643_190_000,      # ~7.64B shares
-    "INFY": 4_151_000_000,          # ~4.15B shares
-    "ICICIBANK": 7_068_000_000,     # ~7.07B shares
-    "BHARTIARTL": 5_984_000_000,    # ~5.98B shares
-    "SBIN": 8_924_600_000,          # ~8.92B shares
-    "ITC": 12_498_000_000,          # ~12.50B shares
-    "LT": 1_375_000_000,            # ~1.38B shares
-    "TATAMOTORS": 3_681_000_000,    # ~3.68B shares
-    "KOTAKBANK": 1_988_000_000,
-    "HINDUNILVR": 2_349_600_000,
-    "AXISBANK": 3_090_000_000,
-    "BAJFINANCE": 619_000_000,
-    "MARUTI": 314_400_000,
-    "SUNPHARMA": 2_399_000_000,
-    "TITAN": 887_800_000,
-    "WIPRO": 5_227_000_000,
-    "ADANIENT": 1_140_000_000,
-    "NTPC": 9_696_000_000,
-    "ONGC": 12_580_000_000,
-    "POWERGRID": 9_300_000_000,
-    "M&M": 1_243_000_000,
-    "TATASTEEL": 12_480_000_000,
-    "COALINDIA": 6_162_000_000,
-    "HCLTECH": 2_713_000_000,
-    "ASIANPAINT": 959_000_000,
-    "BAJAJFINSV": 1_595_000_000,
-    "JSWSTEEL": 2_445_000_000,
-    "ADANIPORTS": 2_160_000_000,
-    "ZOMATO": 8_820_000_000,
-    "JIOFIN": 6_353_000_000,
+@dataclass(frozen=True)
+class ShareAuditRecord:
+    shares: float
+    as_of: str
+    source: str
+
+# Auditable dataset of outstanding equity shares (source: official quarterly filings / exchange filings)
+_INDIAN_SHARES_AUDIT: Dict[str, ShareAuditRecord] = {
+    "RELIANCE": ShareAuditRecord(13_532_453_400, "2024-10", "NSE/BSE (Post 1:1 Bonus Issue)"),
+    "TCS": ShareAuditRecord(3_618_087_500, "2024-09", "BSE Shareholding Pattern"),
+    "HDFCBANK": ShareAuditRecord(7_643_190_000, "2024-09", "BSE Shareholding Pattern"),
+    "INFY": ShareAuditRecord(4_151_000_000, "2024-09", "NSE Shareholding Pattern"),
+    "ICICIBANK": ShareAuditRecord(7_068_000_000, "2024-09", "BSE Shareholding Pattern"),
+    "BHARTIARTL": ShareAuditRecord(5_984_000_000, "2024-09", "NSE Filing"),
+    "SBIN": ShareAuditRecord(8_924_600_000, "2024-09", "NSE Filing"),
+    "ITC": ShareAuditRecord(12_498_000_000, "2024-09", "NSE Shareholding Pattern"),
+    "LT": ShareAuditRecord(1_375_000_000, "2024-09", "BSE Filing"),
+    "TATAMOTORS": ShareAuditRecord(3_681_000_000, "2024-09", "NSE Shareholding Pattern"),
+    "KOTAKBANK": ShareAuditRecord(1_988_000_000, "2024-09", "BSE Shareholding Pattern"),
+    "HINDUNILVR": ShareAuditRecord(2_349_600_000, "2024-09", "BSE Shareholding Pattern"),
+    "AXISBANK": ShareAuditRecord(3_090_000_000, "2024-09", "NSE Filing"),
+    "BAJFINANCE": ShareAuditRecord(619_000_000, "2024-09", "BSE Filing"),
+    "MARUTI": ShareAuditRecord(314_400_000, "2024-09", "NSE Filing"),
+    "SUNPHARMA": ShareAuditRecord(2_399_000_000, "2024-09", "NSE Filing"),
+    "TITAN": ShareAuditRecord(887_800_000, "2024-09", "BSE Filing"),
+    "WIPRO": ShareAuditRecord(5_227_000_000, "2024-09", "BSE Filing"),
+    "ADANIENT": ShareAuditRecord(1_140_000_000, "2024-09", "NSE Filing"),
+    "NTPC": ShareAuditRecord(9_696_000_000, "2024-09", "NSE Filing"),
+    "ONGC": ShareAuditRecord(12_580_000_000, "2024-09", "NSE Filing"),
+    "POWERGRID": ShareAuditRecord(9_300_000_000, "2024-09", "NSE Filing"),
+    "M&M": ShareAuditRecord(1_243_000_000, "2024-09", "NSE Filing"),
+    "TATASTEEL": ShareAuditRecord(12_480_000_000, "2024-09", "NSE Filing"),
+    "COALINDIA": ShareAuditRecord(6_162_000_000, "2024-09", "NSE Filing"),
+    "HCLTECH": ShareAuditRecord(2_713_000_000, "2024-09", "NSE Filing"),
+    "ASIANPAINT": ShareAuditRecord(959_000_000, "2024-09", "BSE Filing"),
+    "BAJAJFINSV": ShareAuditRecord(1_595_000_000, "2024-09", "BSE Filing"),
+    "JSWSTEEL": ShareAuditRecord(2_445_000_000, "2024-09", "NSE Filing"),
+    "ADANIPORTS": ShareAuditRecord(2_160_000_000, "2024-09", "NSE Filing"),
+    "ZOMATO": ShareAuditRecord(9_200_000_000, "2026-10", "BSE/NSE Filing (Eternal/Zomato)"),
+    "ETERNAL": ShareAuditRecord(9_200_000_000, "2026-10", "BSE/NSE Filing (Eternal/Zomato)"),
+    "JIOFIN": ShareAuditRecord(6_353_000_000, "2024-09", "NSE Filing"),
+}
+
+# Compatibility dictionary mapping symbol -> raw float share count
+_INDIAN_SHARES_OUTSTANDING: Dict[str, float] = {k: v.shares for k, v in _INDIAN_SHARES_AUDIT.items()}
+
+# Common symbol aliases
+_SYMBOL_ALIASES = {
+    "ETERNAL": "ZOMATO",
 }
 
 def _calculate_fallback_market_cap(symbol: str, price: Optional[float]) -> Optional[float]:
@@ -132,9 +148,10 @@ def _calculate_fallback_market_cap(symbol: str, price: Optional[float]) -> Optio
     if not price or float(price) <= 0:
         return None
     clean = symbol.upper().split(".")[0]
-    shares = _INDIAN_SHARES_OUTSTANDING.get(clean)
-    if shares:
-        return round(float(price) * shares, 2)
+    canonical = _SYMBOL_ALIASES.get(clean, clean)
+    rec = _INDIAN_SHARES_AUDIT.get(canonical) or _INDIAN_SHARES_AUDIT.get(clean)
+    if rec:
+        return round(float(price) * rec.shares, 2)
     return None
 
 
@@ -300,11 +317,19 @@ class MarketDataProvider:
                 chain.append("nse")
             return chain
 
-        # US Stocks provider chain (TwelveData -> Finnhub -> FMP)
+        # US Stocks provider chain
+        quote_chain = ["twelvedata", "finnhub"]
+        try:
+            from app.config import get_settings
+            if get_settings().fmp_quote_display_enabled:
+                quote_chain.append("fmp")
+        except Exception:
+            pass
+
         chains = {
-            "quote": ["twelvedata", "finnhub", "fmp"],
+            "quote": quote_chain,
             "history": ["twelvedata"],
-            "company_info": ["finnhub", "twelvedata", "fmp"],
+            "company_info": ["finnhub", "twelvedata"],
             "fundamentals": ["finnhub", "fmp", "twelvedata"],
             "news": ["finnhub"],
             "financials": ["fmp"],
@@ -318,6 +343,9 @@ class MarketDataProvider:
         chain = self._get_chain(symbol, "quote")
         for provider in chain:
             try:
+                if not await quota_governor.acquire(provider):
+                    logger.warning("provider_quota_governor_blocked", provider=provider, symbol=symbol)
+                    continue
                 if provider == "twelvedata":
                     data = await self._twelve.get_quote(symbol)
                 elif provider == "nse":

@@ -22,12 +22,15 @@ from fastapi import APIRouter, Depends, Request
 
 from app.core.auth import require_internal_secret
 from app.core.logging import get_logger
+from app.core.market_calendar import get_market_state
 
 logger = get_logger(__name__)
 router = APIRouter(prefix="/internal", tags=["internal"])
 
 ALERT_EVAL_LOCK = "alert_eval_lock"
 ALERT_EVAL_LOCK_TTL = 120  # seconds
+_in_process_eval_lock = asyncio.Lock()
+_last_eval_time = [0.0]
 
 
 @router.post("/jobs/evaluate-alerts")
@@ -46,6 +49,24 @@ async def evaluate_alerts(
             content={"skipped": True, "reason": "Database pool unavailable — check asyncpg connection"},
         )
     now = datetime.now(timezone.utc)
+    now_epoch = time.time()
+
+    # Deduplication & cooldown guard (prevents redundant executions across dual schedulers)
+    if redis:
+        last_run = await redis.get("alert_eval_last_run")
+        if last_run:
+            try:
+                if (now_epoch - float(last_run)) < 120.0:
+                    logger.info("alert_eval_skipped_cooldown", elapsed=round(now_epoch - float(last_run), 1))
+                    return {"skipped": True, "reason": "Evaluated recently within 120s cooldown"}
+            except Exception:
+                pass
+        await redis.set("alert_eval_last_run", str(now_epoch), ex=300)
+    else:
+        if (now_epoch - _last_eval_time[0]) < 120.0:
+            logger.info("alert_eval_skipped_cooldown_in_process", elapsed=round(now_epoch - _last_eval_time[0], 1))
+            return {"skipped": True, "reason": "Evaluated recently within 120s cooldown"}
+        _last_eval_time[0] = now_epoch
 
     if redis:
         lock_token = secrets.token_hex(16)
@@ -53,11 +74,15 @@ async def evaluate_alerts(
         if not acquired:
             logger.info("alert_eval_skipped_locked")
             return {"skipped": True, "reason": "Another evaluation running"}
+    else:
+        if _in_process_eval_lock.locked():
+            logger.info("alert_eval_skipped_locked_in_process")
+            return {"skipped": True, "reason": "Another evaluation running (in-process)"}
 
-    try:
-        return await _run_eval(db, redis, now)
-    finally:
-        if redis:
+    if redis:
+        try:
+            return await _run_eval(db, redis, now)
+        finally:
             _RELEASE_LOCK_LUA = """
             if redis.call('get', KEYS[1]) == ARGV[1] then
                 return redis.call('del', KEYS[1])
@@ -66,6 +91,9 @@ async def evaluate_alerts(
             end
             """
             await redis.eval(_RELEASE_LOCK_LUA, 1, ALERT_EVAL_LOCK, lock_token)
+    else:
+        async with _in_process_eval_lock:
+            return await _run_eval(db, redis, now)
 
 
 async def _run_eval(db, redis, now: datetime) -> dict:
@@ -77,7 +105,20 @@ async def _run_eval(db, redis, now: datetime) -> dict:
     if not alerts:
         return {"run_id": run_id, "evaluated": 0, "triggered": 0, "skipped_no_cache": 0}
 
-    symbols = list({row["symbol"] for row in alerts})
+    all_symbols = list({row["symbol"] for row in alerts})
+    active_symbols = set()
+    skipped_market_closed = 0
+
+    # Market-aware session gate: only evaluate symbols whose exchanges are currently open
+    for sym in all_symbols:
+        mstate, _ = get_market_state(sym, now)
+        if mstate == "closed":
+            skipped_market_closed += 1
+            logger.debug("alert_skipped_market_closed", symbol=sym)
+        else:
+            active_symbols.add(sym)
+
+    symbols = list(active_symbols)
     prices = {}
     cache_miss = 0
 
@@ -184,6 +225,7 @@ async def _run_eval(db, redis, now: datetime) -> dict:
         "evaluated": evaluated,
         "triggered": triggered,
         "notifications_created": triggered,
+        "skipped_market_closed": skipped_market_closed,
         "provider_errors": provider_errors,
         "skipped_no_cache": cache_miss,
         "unpriced_symbols": unpriced,

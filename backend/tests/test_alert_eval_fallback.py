@@ -49,6 +49,9 @@ class FakeRedis:
         return True
 
 
+# Deterministic trading-session timestamp (Wednesday 11:00 AM IST / 05:30 UTC)
+_OPEN_TRADING_TIME = datetime(2026, 10, 21, 5, 30, tzinfo=timezone.utc)
+
 def _alert(symbol="RELIANCE.NS", atype="price_below", threshold=3000.0, state="armed"):
     return {
         "id": "a1", "user_id": "u1", "symbol": symbol,
@@ -77,7 +80,7 @@ async def test_cache_miss_falls_back_to_provider_and_triggers(monkeypatch):
     monkeypatch.setattr(mdp.market_data, "get_quote", fake_get_quote)
     db = FakeDB([_alert()])
 
-    result = await internal._run_eval(db, None, datetime.now(timezone.utc))
+    result = await internal._run_eval(db, None, _OPEN_TRADING_TIME)
 
     assert calls == ["RELIANCE.NS"]
     assert result["quotes_obtained"] == 1
@@ -97,7 +100,7 @@ async def test_condition_not_met_does_not_notify(monkeypatch):
     monkeypatch.setattr(mdp.market_data, "get_quote", fake_get_quote)
     db = FakeDB([_alert()])
 
-    result = await internal._run_eval(db, None, datetime.now(timezone.utc))
+    result = await internal._run_eval(db, None, _OPEN_TRADING_TIME)
 
     assert result["evaluated"] == 1
     assert result["triggered"] == 0
@@ -116,7 +119,7 @@ async def test_quote_with_datetime_is_cached_without_error(monkeypatch):
     redis = FakeRedis()
     db = FakeDB([_alert()])
 
-    result = await internal._run_eval(db, redis, datetime.now(timezone.utc))
+    result = await internal._run_eval(db, redis, _OPEN_TRADING_TIME)
 
     assert result["triggered"] == 1
     cached = json.loads(redis.store["quote:RELIANCE.NS"])
@@ -131,7 +134,7 @@ async def test_provider_error_is_counted_not_crashing(monkeypatch):
     monkeypatch.setattr(mdp.market_data, "get_quote", boom)
     db = FakeDB([_alert()])
 
-    result = await internal._run_eval(db, None, datetime.now(timezone.utc))
+    result = await internal._run_eval(db, None, _OPEN_TRADING_TIME)
 
     assert result["provider_errors"] == 1
     assert result["evaluated"] == 0
@@ -147,7 +150,7 @@ async def test_zero_or_missing_price_is_not_evaluated(monkeypatch):
     monkeypatch.setattr(mdp.market_data, "get_quote", zero)
     db = FakeDB([_alert()])
 
-    result = await internal._run_eval(db, None, datetime.now(timezone.utc))
+    result = await internal._run_eval(db, None, _OPEN_TRADING_TIME)
 
     assert result["evaluated"] == 0
     assert _notifications(db) == []
@@ -163,7 +166,7 @@ async def test_cached_symbol_skips_provider(monkeypatch):
     redis.store["quote:RELIANCE.NS"] = json.dumps({"price": 2900.0})
     db = FakeDB([_alert()])
 
-    result = await internal._run_eval(db, redis, datetime.now(timezone.utc))
+    result = await internal._run_eval(db, redis, _OPEN_TRADING_TIME)
 
     assert result["triggered"] == 1
 

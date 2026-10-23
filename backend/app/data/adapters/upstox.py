@@ -347,7 +347,7 @@ class UpstoxAdapter(BaseDataAdapter):
                     quote_data.get("last_trade_time")
                     or quote_data.get("timestamp")
                     or quote_data.get("time")
-                ) or datetime.now(timezone.utc),
+                ),
                 "exchange": "BSE" if symbol.endswith(".BO") else "NSE",
                 "market": "india",
                 "currency": "INR",

@@ -85,8 +85,16 @@ class TwelveDataAdapter(BaseDataAdapter):
 
     @staticmethod
     def _cache_set(key: str, data: Any, ttl: float):
-        """Store in cache with TTL."""
-        _cache[key] = (data, time.monotonic() + ttl)
+        """Store in cache with TTL and bounded max size."""
+        now = time.monotonic()
+        if len(_cache) > 500:
+            expired = [k for k, v in _cache.items() if now >= v[1]]
+            for k in expired:
+                _cache.pop(k, None)
+            if len(_cache) > 500:
+                for k in list(_cache.keys())[:100]:
+                    _cache.pop(k, None)
+        _cache[key] = (data, now + ttl)
 
     @property
     def is_cooling_down(self) -> bool:
@@ -204,16 +212,27 @@ class TwelveDataAdapter(BaseDataAdapter):
                 except (ValueError, TypeError):
                     return fallback
 
-            price = _safe_float(data.get("close"), 0)
-            prev_close = _safe_float(data.get("previous_close"), price)
+            price_raw = data.get("close")
+            if price_raw is None or str(price_raw).strip() == "":
+                return None
+            price = _safe_float(price_raw, 0)
+            if price <= 0:
+                return None
+
+            prev_close_raw = data.get("previous_close")
+            prev_close = _safe_float(prev_close_raw, 0) if prev_close_raw is not None else None
             change = _safe_float(data.get("change"), 0)
             change_pct = _safe_float(data.get("percent_change"), 0)
 
-            # open/high/low may be "0" or "" when market is closed.
-            # Fall back to price so the UI never shows $0.00 or NaN.
             raw_open = _safe_float(data.get("open"), 0)
             raw_high = _safe_float(data.get("high"), 0)
             raw_low = _safe_float(data.get("low"), 0)
+
+            quote_ts = (
+                datetime.fromtimestamp(int(data["timestamp"]), tz=timezone.utc)
+                if data.get("timestamp") and str(data["timestamp"]).isdigit()
+                else None
+            )
 
             return {
                 "symbol": data.get("symbol", symbol).upper(),
@@ -222,17 +241,13 @@ class TwelveDataAdapter(BaseDataAdapter):
                 "change": round(change, 2),
                 "change_percent": round(change_pct, 2),
                 "volume": int(_safe_float(data.get("volume"), 0)),
-                "high": round(raw_high if raw_high > 0 else price, 2),
-                "low": round(raw_low if raw_low > 0 else price, 2),
-                "open": round(raw_open if raw_open > 0 else prev_close, 2),
-                "previous_close": round(prev_close, 2),
+                "high": round(raw_high, 2) if raw_high > 0 else None,
+                "low": round(raw_low, 2) if raw_low > 0 else None,
+                "open": round(raw_open, 2) if raw_open > 0 else None,
+                "previous_close": round(prev_close, 2) if prev_close is not None else None,
                 "market_cap": None,  # Not in /quote, needs /statistics (paid)
                 "pe_ratio": None,    # Not in /quote
-                "timestamp": (
-                    datetime.fromtimestamp(int(data["timestamp"]), tz=timezone.utc)
-                    if data.get("timestamp") and str(data["timestamp"]).isdigit()
-                    else datetime.now(timezone.utc)
-                ),
+                "timestamp": quote_ts,
                 "exchange": data.get("exchange", "NASDAQ"),
                 "market": "us",
                 "currency": data.get("currency", "USD"),

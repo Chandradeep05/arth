@@ -26,10 +26,10 @@ A critical architectural concern on Render (and cloud container platforms) is co
 | **Price Alerts** | PostgreSQL (`alerts`) | In-memory evaluation | **YES** |
 | **Notifications** | PostgreSQL (`notifications`) | None | **YES** |
 | **Prediction Ledger** | PostgreSQL (`predictions`) | None | **YES** |
-| **Stock Quotes** | Live Provider | Redis / `_memory_cache` (60s TTL) | **YES** (Refetched) |
+| **Stock Quotes** | Live Provider | Redis / `_memory_cache` (300s TTL via `redis_cache_ttl_tick`) | **YES** (Refetched) |
 | **OHLCV Candles** | Live Provider | Redis / `_memory_cache` (300s TTL) | **YES** (Refetched) |
 | **Financial Statements** | Live Provider | Redis / `_memory_cache` (86400s TTL) | **YES** (Refetched) |
-| **Distributed Job Locks** | Redis `SET NX` | In-process fallback | **YES** |
+| **Distributed Job Locks** | Redis `SET NX` | In-process `asyncio.Lock` fallback | **YES** |
 
 ---
 
