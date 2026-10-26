@@ -49,6 +49,9 @@ class StockQuote(BaseModel):
     open: Optional[float] = None
     previous_close: Optional[float] = None
     market_cap: Optional[float] = None
+    market_cap_source: Optional[str] = None
+    market_cap_as_of: Optional[str] = None
+    market_cap_source_doc: Optional[str] = None
     pe_ratio: Optional[float] = None
     timestamp: Optional[datetime] = None
     exchange: str

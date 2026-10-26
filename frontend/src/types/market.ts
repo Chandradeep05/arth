@@ -5,7 +5,7 @@
 
 export interface FreshnessMetadata {
   source: string;
-  timestamp: string;
+  timestamp: string | null;
   is_stale: boolean;
   delay_label: string;
   cache_hit: boolean;
@@ -19,13 +19,16 @@ export interface StockQuote {
   change: number;
   change_percent: number;
   volume: number;
-  high: number;
-  low: number;
-  open: number;
-  previous_close: number;
+  high: number | null;
+  low: number | null;
+  open: number | null;
+  previous_close: number | null;
   market_cap: number | null;
+  market_cap_source?: string | null;
+  market_cap_as_of?: string | null;
+  market_cap_source_doc?: string | null;
   pe_ratio: number | null;
-  timestamp: string;
+  timestamp: string | null;
   exchange: string;
   market: string;
   currency: string;

@@ -203,52 +203,8 @@ class FMPAdapter(BaseDataAdapter):
 
 
     async def get_quote(self, symbol: str) -> Optional[Dict[str, Any]]:
-        """Fetch real-time stock quote from FMP /quote."""
-        if symbol.upper().endswith(('.NS', '.BO')):
-            return None
-        clean_symbol = symbol.split(".")[0].upper()
-        raw = await self._throttled_get(f"quote/{clean_symbol}", {})
-        if not raw or not isinstance(raw, list) or len(raw) == 0:
-            return None
-        item = raw[0]
-        if item.get("price") is None:
-            return None
-
-        from datetime import datetime, timezone
-        raw_ts = item.get("timestamp")
-        quote_ts = (
-            datetime.fromtimestamp(int(raw_ts), tz=timezone.utc)
-            if raw_ts and str(raw_ts).isdigit()
-            else None
-        )
-
-        price = float(item["price"])
-        prev_close = float(item["previousClose"]) if item.get("previousClose") is not None else None
-        change = float(item["change"]) if item.get("change") is not None else ((price - prev_close) if prev_close is not None else 0.0)
-        pct_change = float(item["changesPercentage"]) if item.get("changesPercentage") is not None else (((change / prev_close) * 100) if prev_close else 0.0)
-
-        high = float(item["dayHigh"]) if item.get("dayHigh") is not None else None
-        low = float(item["dayLow"]) if item.get("dayLow") is not None else None
-        open_val = float(item["open"]) if item.get("open") is not None else None
-
-        return {
-            "symbol": symbol.upper(),
-            "name": item.get("name", symbol),
-            "price": round(price, 2),
-            "change": round(change, 2),
-            "change_percent": round(pct_change, 2),
-            "volume": int(item.get("volume") or 0),
-            "high": round(high, 2) if high is not None else None,
-            "low": round(low, 2) if low is not None else None,
-            "open": round(open_val, 2) if open_val is not None else None,
-            "previous_close": round(prev_close, 2) if prev_close is not None else None,
-            "market_cap": item.get("marketCap"),
-            "pe_ratio": item.get("pe"),
-            "timestamp": quote_ts,
-            "exchange": item.get("exchange", "US"),
-            "market": "us",
-            "currency": "USD",
-        }
+        """FMP user quote display is disabled by default to comply with third-party redistribution licensing."""
+        return None
 
     async def get_ohlcv(self, symbol: str, period: str = "1mo", interval: str = "1d") -> Optional[List[Dict[str, Any]]]:
         return None

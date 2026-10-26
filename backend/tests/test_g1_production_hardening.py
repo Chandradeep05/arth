@@ -244,3 +244,35 @@ async def test_health_check_error_sanitization_in_production():
                 assert "redis://" not in redis_msg.lower()
                 assert db_msg == "Database connection failed"
                 assert redis_msg == "Redis connection failed"
+
+
+# ── 7. Open-Market Only Alert Evaluation & Market Cap Metadata ───────────
+
+@pytest.mark.asyncio
+async def test_alert_evaluator_strictly_requires_open_market():
+    """Alert evaluation must skip symbols during pre-market, post-market, and closed sessions."""
+    from app.api.v1.internal import _run_eval
+
+    mock_db = MagicMock()
+    mock_alerts = [
+        {"id": "a1", "user_id": "u1", "symbol": "RELIANCE.NS", "alert_type": "price_above", "threshold": 2500.0, "trigger_state": "armed"},
+    ]
+    mock_db.fetch = AsyncMock(return_value=mock_alerts)
+
+    # 9:05 AM IST on Wednesday -> Pre-market session (not yet open)
+    pre_market_dt = datetime(2026, 10, 21, 9, 5, tzinfo=ZoneInfo("Asia/Kolkata"))
+    res = await _run_eval(mock_db, redis=None, now=pre_market_dt)
+    assert res["evaluated"] == 0
+    assert res["skipped_market_closed"] == 1
+
+
+def test_computed_market_cap_metadata_attached():
+    """Computed market cap must attach provenance metadata (computed source, as_of, citation)."""
+    from app.data.market_data_provider import _calculate_fallback_market_cap
+
+    res = _calculate_fallback_market_cap("RELIANCE.NS", 1300.0)
+    assert res is not None
+    mcap, rec = res
+    assert mcap > 0
+    assert rec.as_of == "2024-10"
+    assert "Bonus" in rec.source

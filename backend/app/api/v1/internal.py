@@ -109,12 +109,12 @@ async def _run_eval(db, redis, now: datetime) -> dict:
     active_symbols = set()
     skipped_market_closed = 0
 
-    # Market-aware session gate: only evaluate symbols whose exchanges are currently open
+    # Market-aware session gate: strictly evaluate symbols whose exchanges are currently OPEN
     for sym in all_symbols:
         mstate, _ = get_market_state(sym, now)
-        if mstate == "closed":
+        if mstate != "open":
             skipped_market_closed += 1
-            logger.debug("alert_skipped_market_closed", symbol=sym)
+            logger.debug("alert_skipped_market_not_open", symbol=sym, state=mstate)
         else:
             active_symbols.add(sym)
 
@@ -196,11 +196,17 @@ async def _run_eval(db, redis, now: datetime) -> dict:
                 if updated and updated != "UPDATE 0":
                     curr_sym = "₹" if symbol.endswith((".NS", ".BO")) else "$"
                     dir_sym = "≥" if direction == "above" else "≤"
+                    source_name = "Upstox" if symbol.endswith((".NS", ".BO")) else "TwelveData"
+                    body_text = (
+                        f"Price: {curr_sym}{current:.2f} | "
+                        f"Target: {dir_sym} {curr_sym}{threshold:.2f} | "
+                        f"Session: Regular Trading | Source: {source_name}"
+                    )
                     await db.execute(
                         "INSERT INTO notifications (user_id, alert_id, title, body) VALUES ($1, $2, $3, $4)",
                         alert["user_id"], alert["id"],
                         f"{symbol} crossed {direction} {curr_sym}{threshold:.2f}",
-                        f"Price: {curr_sym}{current:.2f} | Target: {dir_sym} {curr_sym}{threshold:.2f}",
+                        body_text,
                     )
                     triggered += 1
                     logger.info("alert_triggered", symbol=symbol, price=current, threshold=threshold)

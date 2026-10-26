@@ -41,7 +41,7 @@ NSE_HOLIDAYS_2026: Set[Tuple[int, int, int]] = {
     (2026, 12, 25),  # Christmas
 }
 
-# Preliminary 2027 NSE Holidays (curated based on national holidays & Lunar calendar)
+# PROVISIONAL 2027 NSE Holidays (Provisional estimates pending official annual exchange gazette/TradingHours API feed)
 NSE_HOLIDAYS_2027: Set[Tuple[int, int, int]] = {
     (2027, 1, 26),   # Republic Day
     (2027, 3, 22),   # Holi

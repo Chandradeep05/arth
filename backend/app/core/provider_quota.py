@@ -68,23 +68,8 @@ class ProviderQuotaGovernor:
         # ── 1. Redis Tier (Distributed) ──
         if redis_client is not None:
             try:
-                # Daily check
-                if limits.per_day is not None:
-                    daily_key = f"quota:provider:{prov}:daily:{today_str}"
-                    used_today = await redis_client.incr(daily_key)
-                    if used_today == 1:
-                        # Expire at end of day + 1 hour buffer (90,000 seconds)
-                        await redis_client.expire(daily_key, 90000)
-                    if used_today > limits.per_day:
-                        logger.warning(
-                            "provider_daily_quota_exceeded",
-                            provider=prov,
-                            used=used_today,
-                            limit=limits.per_day,
-                        )
-                        return False
-
-                # Minute check
+                # 1. Minute burst limit check FIRST (prevents leaking daily counter on burst rejection)
+                minute_key = None
                 if limits.per_minute is not None:
                     epoch_min = int(now_epoch // 60)
                     minute_key = f"quota:provider:{prov}:min:{epoch_min}"
@@ -97,6 +82,27 @@ class ProviderQuotaGovernor:
                             provider=prov,
                             used=used_min,
                             limit=limits.per_minute,
+                        )
+                        return False
+
+                # 2. Daily limit check (only reached if minute check passed)
+                if limits.per_day is not None:
+                    daily_key = f"quota:provider:{prov}:daily:{today_str}"
+                    used_today = await redis_client.incr(daily_key)
+                    if used_today == 1:
+                        await redis_client.expire(daily_key, 90000)
+                    if used_today > limits.per_day:
+                        # Rollback minute counter since daily cap is hit
+                        if minute_key:
+                            try:
+                                await redis_client.decr(minute_key)
+                            except Exception:
+                                pass
+                        logger.warning(
+                            "provider_daily_quota_exceeded",
+                            provider=prov,
+                            used=used_today,
+                            limit=limits.per_day,
                         )
                         return False
 

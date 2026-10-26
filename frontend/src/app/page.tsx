@@ -99,7 +99,8 @@ function StockMoverCard({ stock, index }: { stock: StockMover; index: number }) 
 }
 
 /* ── Helper: format number with commas ── */
-function formatNumber(n: number): string {
+function formatNumber(n: number | null | undefined): string {
+  if (n == null || isNaN(n)) return '—';
   return new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 }).format(n);
 }
 

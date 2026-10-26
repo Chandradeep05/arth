@@ -123,7 +123,52 @@ async def list_invite_codes(request: Request, admin: UserContext = Depends(requi
         LEFT JOIN profiles p ON ic.created_by = p.id
         ORDER BY ic.id DESC
     """)
-    return [dict(row) for row in rows]
+    res_rows = []
+    for row in rows:
+        d = dict(row)
+        c = d.get("code") or ""
+        # If code is stored as 64-char HMAC/SHA hash, present masked display prefix
+        if len(c) == 64:
+            d["code"] = f"ARTH-••••-{c[-4:].upper()}"
+        res_rows.append(d)
+    return res_rows
+
+
+@router.post("/invite-codes/{invite_id}/regenerate")
+async def regenerate_invite_code(
+    invite_id: str,
+    request: Request,
+    admin: UserContext = Depends(require_admin),
+) -> dict:
+    """Regenerate a new invite code for an unused invite and show once to admin."""
+    from uuid import UUID
+    db = request.state.db
+    try:
+        inv_uuid = UUID(invite_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid invite ID")
+
+    row = await db.fetchrow(
+        "SELECT id, used_by FROM invite_codes WHERE id = $1", inv_uuid
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Invite code not found")
+    if row["used_by"] is not None:
+        raise HTTPException(status_code=400, detail="Cannot regenerate an already used invite code")
+
+    raw_code = _gen_code()
+    code_hash = hash_invite_code(raw_code)
+    await db.execute(
+        "UPDATE invite_codes SET code = $1 WHERE id = $2",
+        code_hash, inv_uuid,
+    )
+    logger.info("invite_regenerated", admin=str(admin.user_id), invite_id=invite_id)
+    return {
+        "success": True,
+        "id": str(inv_uuid),
+        "code": raw_code,
+        "message": "Invite code regenerated. Copy and share it now; it cannot be shown again."
+    }
 
 
 @router.get("/usage")

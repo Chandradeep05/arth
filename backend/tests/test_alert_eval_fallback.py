@@ -176,10 +176,13 @@ def test_fallback_indian_market_cap():
     from app.data.market_data_provider import _calculate_fallback_market_cap, _INDIAN_SHARES_OUTSTANDING
 
     assert "RELIANCE" in _INDIAN_SHARES_OUTSTANDING
-    mcap_rel = _calculate_fallback_market_cap("RELIANCE.NS", 1167.70)
-    assert mcap_rel is not None
+    res = _calculate_fallback_market_cap("RELIANCE.NS", 1167.70)
+    assert res is not None
+    mcap_rel, rec = res
     # 1167.70 * 13,532,453,400 ≈ 15.80 Trillion (15.80 L Cr)
     assert 1.5e13 < mcap_rel < 1.7e13
+    assert rec.source_doc is not None
+    assert rec.as_of is not None
 
     # Unknown stock returns None gracefully
     assert _calculate_fallback_market_cap("UNKNOWN_STOCK.NS", 100.0) is None

@@ -41,10 +41,13 @@ logger = get_logger(__name__)
 
 
 def hash_invite_code(code: str) -> str:
-    """Hash invite code with SHA-256 for secure non-plaintext storage."""
+    """Hash invite code with HMAC-SHA256 using server secret to prevent offline rainbow table attacks."""
     import hashlib
+    import hmac
+    from app.config import get_settings
     clean = str(code or "").strip().upper()
-    return hashlib.sha256(clean.encode("utf-8")).hexdigest()
+    secret = (get_settings().jwt_secret_key or get_settings().admin_api_key or "arth-invite-secret-pepper-2026").encode("utf-8")
+    return hmac.new(secret, clean.encode("utf-8"), hashlib.sha256).hexdigest()
 
 # Module-level JWKS client cache -- PyJWKClient caches public keys across requests.
 # Supabase JWKS endpoint: {supabase_url}/auth/v1/.well-known/jwks.json

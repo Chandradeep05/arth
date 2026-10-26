@@ -465,9 +465,10 @@ class UpstoxAdapter(BaseDataAdapter):
             ratio_map = ratios
 
         mcap_val = None
+        EXACT_MCAP_KEYS = {"marketcap", "marketcapitalization", "totalmarketcap", "mcap", "market_cap", "market_capitalization"}
         for k, v in ratio_map.items():
             k_clean = str(k).lower().replace(" ", "").replace("_", "").replace("-", "").replace(".", "")
-            if "marketcap" in k_clean or "marketcapital" in k_clean or k_clean == "mcap":
+            if k_clean in EXACT_MCAP_KEYS:
                 mcap_val = v
                 break
         mcap_num = None

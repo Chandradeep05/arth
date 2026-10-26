@@ -98,6 +98,10 @@ class ShareAuditRecord:
     as_of: str
     source: str
 
+    @property
+    def source_doc(self) -> str:
+        return self.source
+
 # Auditable dataset of outstanding equity shares (source: official quarterly filings / exchange filings)
 _INDIAN_SHARES_AUDIT: Dict[str, ShareAuditRecord] = {
     "RELIANCE": ShareAuditRecord(13_532_453_400, "2024-10", "NSE/BSE (Post 1:1 Bonus Issue)"),
@@ -143,15 +147,15 @@ _SYMBOL_ALIASES = {
     "ETERNAL": "ZOMATO",
 }
 
-def _calculate_fallback_market_cap(symbol: str, price: Optional[float]) -> Optional[float]:
-    """Calculate market cap from price * shares outstanding for Indian equities."""
+def _calculate_fallback_market_cap(symbol: str, price: Optional[float]):
+    """Calculate market cap from price * shares outstanding for Indian equities with audit record."""
     if not price or float(price) <= 0:
         return None
     clean = symbol.upper().split(".")[0]
     canonical = _SYMBOL_ALIASES.get(clean, clean)
     rec = _INDIAN_SHARES_AUDIT.get(canonical) or _INDIAN_SHARES_AUDIT.get(clean)
     if rec:
-        return round(float(price) * rec.shares, 2)
+        return (round(float(price) * rec.shares, 2), rec)
     return None
 
 
@@ -269,6 +273,13 @@ class MarketDataProvider:
         except Exception:
             self._upstox = None
 
+    async def _get_redis(self):
+        try:
+            from app.dependencies import get_redis
+            return await get_redis()
+        except Exception:
+            return None
+
     def _get_upstox(self):
         if self._upstox is None:
             try:
@@ -341,9 +352,10 @@ class MarketDataProvider:
         symbol = self._normalize_symbol(symbol)
         is_indian = symbol.endswith(('.NS', '.BO'))
         chain = self._get_chain(symbol, "quote")
+        redis_client = await self._get_redis()
         for provider in chain:
             try:
-                if not await quota_governor.acquire(provider):
+                if not await quota_governor.acquire(provider, redis_client=redis_client):
                     logger.warning("provider_quota_governor_blocked", provider=provider, symbol=symbol)
                     continue
                 if provider == "twelvedata":
@@ -360,17 +372,17 @@ class MarketDataProvider:
                             "change": raw.get("d"),
                             "percent_change": raw.get("dp"),
                             "change_percent": raw.get("dp"),
-                            "open": raw.get("o"),
-                            "high": raw.get("h"),
-                            "low": raw.get("l"),
-                            "previous_close": raw.get("pc"),
+                            "open": raw.get("o") if raw.get("o") else None,
+                            "high": raw.get("h") if raw.get("h") else None,
+                            "low": raw.get("l") if raw.get("l") else None,
+                            "previous_close": raw.get("pc") if raw.get("pc") else None,
                             "volume": None,
                             "market_cap": None,
                             "pe_ratio": None,
                             "timestamp": (
                                 datetime.fromtimestamp(int(raw["t"]), tz=timezone.utc)
                                 if raw.get("t") and str(raw["t"]).isdigit()
-                                else datetime.now(timezone.utc)
+                                else None
                             ),
                             "exchange": "US",
                             "market": "us",
@@ -404,9 +416,13 @@ class MarketDataProvider:
 
                         # Authoritative fallback from shares outstanding if exchange scraping failed
                         if data.get("market_cap") is None:
-                            computed = _calculate_fallback_market_cap(symbol, data.get("price"))
-                            if computed:
-                                data["market_cap"] = computed
+                            calc_res = _calculate_fallback_market_cap(symbol, data.get("price"))
+                            if calc_res:
+                                computed_mcap, audit_rec = calc_res
+                                data["market_cap"] = computed_mcap
+                                data["market_cap_source"] = "computed"
+                                data["market_cap_as_of"] = audit_rec.as_of
+                                data["market_cap_source_doc"] = audit_rec.source
                     return DataResult(data, DataStatus.SUCCESS, provider)
             except Exception as e:
                 logger.warning("quote_provider_failed", provider=provider, symbol=symbol, error=str(e))
@@ -484,11 +500,18 @@ class MarketDataProvider:
                                     price = q_res.data.get("price")
                             except Exception:
                                 pass
-                            computed = _calculate_fallback_market_cap(symbol, price)
-                            if computed:
-                                data["market_cap"] = computed
+                            calc_res = _calculate_fallback_market_cap(symbol, price)
+                            if calc_res:
+                                computed_mcap, audit_rec = calc_res
+                                data["market_cap"] = computed_mcap
+                                data["market_cap_source"] = "computed"
+                                data["market_cap_as_of"] = audit_rec.as_of
+                                data["market_cap_source_doc"] = audit_rec.source
                                 if "metrics" in data and isinstance(data["metrics"], dict):
-                                    data["metrics"]["market_cap"] = computed
+                                    data["metrics"]["market_cap"] = computed_mcap
+                                    data["metrics"]["market_cap_source"] = "computed"
+                                    data["metrics"]["market_cap_as_of"] = audit_rec.as_of
+                                    data["metrics"]["market_cap_source_doc"] = audit_rec.source
                     return DataResult(data, DataStatus.SUCCESS, provider)
             except Exception as e:
                 logger.warning("company_info_failed", provider=provider, symbol=symbol, error=str(e))

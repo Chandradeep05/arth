@@ -224,19 +224,19 @@ export default function StockDetailPage() {
               <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-4 text-xs font-mono pt-2">
                 <div className="p-2 rounded-lg bg-white/[0.02] border border-white/[0.04]">
                   <span className="text-[10px] text-[var(--text-dim)] uppercase tracking-wider block">Open</span>
-                  <span className="text-white font-medium">{currency}{formatNumber(quote.open)}</span>
+                  <span className="text-white font-medium">{quote.open != null ? `${currency}${formatNumber(quote.open)}` : '—'}</span>
                 </div>
                 <div className="p-2 rounded-lg bg-white/[0.02] border border-white/[0.04]">
                   <span className="text-[10px] text-[var(--text-dim)] uppercase tracking-wider block">High</span>
-                  <span className="text-white font-medium">{currency}{formatNumber(quote.high)}</span>
+                  <span className="text-white font-medium">{quote.high != null ? `${currency}${formatNumber(quote.high)}` : '—'}</span>
                 </div>
                 <div className="p-2 rounded-lg bg-white/[0.02] border border-white/[0.04]">
                   <span className="text-[10px] text-[var(--text-dim)] uppercase tracking-wider block">Low</span>
-                  <span className="text-white font-medium">{currency}{formatNumber(quote.low)}</span>
+                  <span className="text-white font-medium">{quote.low != null ? `${currency}${formatNumber(quote.low)}` : '—'}</span>
                 </div>
                 <div className="p-2 rounded-lg bg-white/[0.02] border border-white/[0.04]">
                   <span className="text-[10px] text-[var(--text-dim)] uppercase tracking-wider block">Prev Close</span>
-                  <span className="text-white font-medium">{currency}{formatNumber(quote.previous_close)}</span>
+                  <span className="text-white font-medium">{quote.previous_close != null ? `${currency}${formatNumber(quote.previous_close)}` : '—'}</span>
                 </div>
                 <div className="p-2 rounded-lg bg-white/[0.02] border border-white/[0.04]">
                   <span className="text-[10px] text-[var(--text-dim)] uppercase tracking-wider block">Volume</span>
