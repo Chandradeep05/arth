@@ -14,9 +14,10 @@ interface SentimentGaugeProps {
   loading?: boolean;
 }
 
-function getColor(score: number): string {
-  if (score > 0.2) return '#10b981';
-  if (score < -0.2) return '#ef4444';
+function getColor(score: number, label: string): string {
+  const norm = (label || '').toLowerCase();
+  if (norm.includes('bullish')) return '#10b981';
+  if (norm.includes('bearish')) return '#ef4444';
   return '#f59e0b';
 }
 
@@ -39,7 +40,7 @@ export default function SentimentGauge({
     );
   }
 
-  const color = getColor(score);
+  const color = getColor(score, label);
   // Calculate percentage 0-100 from score (-1 to +1)
   const displayPct = Math.round(((score + 1) / 2) * 100);
   const strokeDashoffset = 2 * Math.PI * 40 * (1 - displayPct / 100);
@@ -63,7 +64,7 @@ export default function SentimentGauge({
           </h3>
         </div>
         <span className="text-[10px] font-mono text-[var(--text-dim)]">
-          {totalSources} sources analyzed
+          {totalSources > 0 ? `${totalSources} sources analyzed` : 'No news coverage'}
         </span>
       </div>
 

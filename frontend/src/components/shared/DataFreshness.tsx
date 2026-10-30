@@ -6,9 +6,12 @@ interface DataFreshnessProps {
   timestamp: Date | string | null;
   thresholdMs?: number;
   className?: string;
+  marketState?: 'open' | 'closed' | string;
+  delayLabel?: string;
+  isStale?: boolean;
 }
 
-type FreshnessState = 'fresh' | 'delayed' | 'stale' | 'unknown';
+type FreshnessState = 'fresh' | 'delayed' | 'stale' | 'unknown' | 'closed';
 
 function getAgeMs(timestamp: Date | string | null): number | null {
   if (!timestamp) return null;
@@ -48,12 +51,19 @@ const stateStyles: Record<FreshnessState, { dot: string; text: string }> = {
     dot: 'bg-[var(--text-dim)]',
     text: 'text-[var(--text-dim)]',
   },
+  closed: {
+    dot: 'bg-[var(--text-dim)]',
+    text: 'text-[var(--text-muted)]',
+  },
 };
 
 export default function DataFreshness({
   timestamp,
   thresholdMs = 15_000,
   className = '',
+  marketState,
+  delayLabel,
+  isStale,
 }: DataFreshnessProps) {
   const [mounted, setMounted] = useState(false);
   const [now, setNow] = useState(Date.now());
@@ -73,6 +83,45 @@ export default function DataFreshness({
       >
         <span className="inline-block h-1.5 w-1.5 rounded-full bg-[var(--text-dim)]" />
         —
+      </span>
+    );
+  }
+
+  // Explicit closed market state: quotes do not tick off-hours
+  if (marketState === 'closed' || delayLabel === 'last close') {
+    const styles = stateStyles.closed;
+    return (
+      <span
+        className={`inline-flex items-center gap-1.5 font-mono text-xs ${styles.text} ${className}`}
+      >
+        <span className={`inline-block h-1.5 w-1.5 rounded-full ${styles.dot}`} />
+        {delayLabel === 'last close' ? 'Last close' : (delayLabel || 'Market closed')}
+      </span>
+    );
+  }
+
+  // Explicit isStale flag provided
+  if (isStale === true) {
+    const styles = stateStyles.stale;
+    return (
+      <span
+        className={`inline-flex items-center gap-1.5 font-mono text-xs ${styles.text} ${className}`}
+      >
+        <span className={`inline-block h-1.5 w-1.5 rounded-full ${styles.dot}`} />
+        {delayLabel || 'Stale'}
+      </span>
+    );
+  }
+
+  // Explicit delayLabel provided during open market hours
+  if (isStale === false && delayLabel) {
+    const styles = delayLabel.includes('delayed') ? stateStyles.delayed : stateStyles.fresh;
+    return (
+      <span
+        className={`inline-flex items-center gap-1.5 font-mono text-xs ${styles.text} ${className}`}
+      >
+        <span className={`inline-block h-1.5 w-1.5 rounded-full ${styles.dot}`} />
+        {delayLabel}
       </span>
     );
   }

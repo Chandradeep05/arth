@@ -17,6 +17,7 @@ All responses include:
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 import math
 
 from fastapi import APIRouter, Depends, Query
@@ -38,6 +39,15 @@ from app.models.schemas.market import (
     SearchResult,
     StockQuote,
     StockQuoteResponse,
+)
+from app.core.market_calendar import (
+    NSE_HOLIDAYS,
+    US_HOLIDAYS,
+    NYSE_EARLY_CLOSES,
+    get_market_state,
+    is_nse_holiday,
+    is_us_holiday,
+    is_us_early_close,
 )
 
 logger = get_logger(__name__)
@@ -88,18 +98,88 @@ def _raise_data_error(symbol: str):
     raise SymbolNotFoundError(symbol)
 
 
+# (Exchange calendar & session logic imported from canonical app.core.market_calendar)
+
+
 def _make_freshness(
     source: str = "MarketDataProvider",
     cache_hit: bool = False,
+    quote_timestamp: datetime | str | None = None,
+    market_or_symbol: str = "us",
     settings: Settings | None = None,
 ) -> FreshnessMetadata:
-    """Build freshness metadata for a response."""
+    """Build freshness metadata for a response, evaluating authentic quote age and market session."""
+    now_utc = datetime.now(timezone.utc)
+    market_state, session_label = get_market_state(market_or_symbol, now_utc)
+
+    # Parse timestamp without fabrication
+    ts: datetime | None = None
+    if quote_timestamp is not None:
+        if isinstance(quote_timestamp, str):
+            try:
+                ts = datetime.fromisoformat(quote_timestamp)
+            except Exception:
+                ts = None
+        elif isinstance(quote_timestamp, datetime):
+            ts = quote_timestamp
+
+        if ts is not None:
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            else:
+                ts = ts.astimezone(timezone.utc)
+
+    # When exchange is not actively open (closed, pre-market, post-market, holiday),
+    # data represents the last available price -- never falsely mark it stale.
+    if market_state != "open":
+        if session_label == "Market Holiday":
+            label = "market holiday"
+        elif market_state in ("pre-market", "pre_open"):
+            label = "pre-market"
+        elif market_state == "post-market":
+            label = "post-market"
+        else:
+            label = "last close"
+        return FreshnessMetadata(
+            source=source,
+            timestamp=ts,
+            is_stale=False,
+            delay_label=label,
+            cache_hit=cache_hit,
+            market_state=market_state,
+        )
+
+    # During market hours: evaluate actual provider age if timestamp exists
+    source_lower = source.lower()
+    is_delayed_source = any(k in source_lower for k in ("twelvedata", "twelve data", "finnhub", "yahoo"))
+
+    if ts is not None:
+        age_seconds = max(0.0, (now_utc - ts).total_seconds())
+        threshold_seconds = 1800.0 if is_delayed_source else 300.0
+        is_stale = age_seconds > threshold_seconds
+
+        if is_stale:
+            delay_label = f"~{int(age_seconds // 60)}m delayed (stale)"
+        else:
+            delay_label = "~15s delayed" if is_delayed_source else "real-time"
+
+        return FreshnessMetadata(
+            source=source,
+            timestamp=ts,
+            is_stale=is_stale,
+            delay_label=delay_label,
+            cache_hit=cache_hit,
+            market_state=market_state,
+        )
+
+    # If no provider timestamp: truthful reporting (timestamp=None, delay='timestamp unavailable')
     return FreshnessMetadata(
         source=source,
-        timestamp=datetime.now(timezone.utc),
-        is_stale=False,
-        delay_label="~15s delayed" if source.lower() in ("yahoo_finance", "twelvedata", "twelve data") else "real-time",
+        timestamp=None,
+        is_stale=True,
+        delay_label="timestamp unavailable",
         cache_hit=cache_hit,
+        market_state=market_state,
     )
 
 
@@ -144,10 +224,16 @@ async def get_quote(
     data.pop("_validation", None)  # Validation metadata from DataQualityValidator
 
     source_label = market_data.get_source_label(symbol, source_name)
+    quote_ts = data.get("timestamp")
 
     return StockQuoteResponse(
         data=StockQuote(**data),
-        freshness=_make_freshness(source=source_label, cache_hit=cache_hit),
+        freshness=_make_freshness(
+            source=source_label,
+            cache_hit=cache_hit,
+            quote_timestamp=quote_ts,
+            market_or_symbol=symbol,
+        ),
     )
 
 
@@ -281,7 +367,7 @@ async def get_ohlcv(
         symbol=symbol.upper(),
         timeframe=interval,
         data=valid_bars,
-        freshness=_make_freshness(source=source_label, cache_hit=cache_hit),
+        freshness=_make_freshness(source=source_label, cache_hit=cache_hit, market_or_symbol=symbol),
     )
 
 
@@ -383,7 +469,7 @@ async def get_company_info(
     return {
         "success": True,
         "data": data,
-        "freshness": _make_freshness(source=source_label, cache_hit=cache_hit).model_dump(),
+        "freshness": _make_freshness(source=source_label, cache_hit=cache_hit, market_or_symbol=symbol).model_dump(),
     }
 
 
@@ -447,7 +533,7 @@ async def get_indicators(
     return {
         "success": True,
         "data": {"symbol": symbol.upper(), **indicators},
-        "freshness": _make_freshness(source=source_label, cache_hit=was_cached).model_dump(),
+        "freshness": _make_freshness(source=source_label, cache_hit=was_cached, market_or_symbol=symbol).model_dump(),
     }
 
 
@@ -478,11 +564,12 @@ async def batch_quotes(
     if cached and "quotes" in cached:
         cached.pop("_cache_hit", None)
         cached.pop("_cached_at", None)
+        first_sym = symbols[0] if symbols else "us"
         return {
             "success": True,
             "data": cached["quotes"],
             "count": len(cached["quotes"]),
-            "freshness": _make_freshness(source="MarketDataProvider", cache_hit=True).model_dump(),
+            "freshness": _make_freshness(source="MarketDataProvider", cache_hit=True, market_or_symbol=first_sym).model_dump(),
         }
 
     # Fetch fresh via market_data
@@ -491,17 +578,18 @@ async def batch_quotes(
     if quotes:
         await cache.set(cache_key, {"quotes": quotes}, ttl=30)
 
+    first_sym = symbols[0] if symbols else "us"
     return {
         "success": True,
         "data": quotes,
         "count": len(quotes),
-        "freshness": _make_freshness(source="MarketDataProvider", cache_hit=False).model_dump(),
+        "freshness": _make_freshness(source="MarketDataProvider", cache_hit=False, market_or_symbol=first_sym).model_dump(),
     }
 
 
 @router.get("/health")
 async def market_health():
-    """Health check for the market data subsystem."""
+    """Health check for the market data subsystem with market states and active sources."""
     health_dict = market_data.get_health()
     all_healthy = any(
         h.get("is_healthy", False) if isinstance(h, dict) else getattr(h, "is_healthy", False)
@@ -509,8 +597,22 @@ async def market_health():
     ) if health_dict else False
 
     primary_health = health_dict.get("upstox") or health_dict.get("twelvedata") or {}
+    india_state, india_label = get_market_state("india")
+    us_state, us_label = get_market_state("us")
+
+    active_sources = []
+    for name, h in health_dict.items():
+        is_up = h.get("is_healthy", False) if isinstance(h, dict) else getattr(h, "is_healthy", False)
+        if is_up:
+            active_sources.append(market_data.get_source_label("", name))
+
     return {
         "adapter": primary_health,
         "providers": health_dict,
+        "active_sources": active_sources,
         "status": "healthy" if all_healthy else "degraded",
+        "markets": {
+            "india": {"state": india_state, "session": india_label, "exchange": "NSE"},
+            "us": {"state": us_state, "session": us_label, "exchange": "NYSE/NASDAQ"},
+        },
     }

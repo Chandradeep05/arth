@@ -328,13 +328,17 @@ class RiskEngine:
         score = 50.0  # Default medium risk
 
         # Debt-to-Equity — sector-aware scoring
+        # Strict architectural contract: de is consumed strictly as a normalized decimal ratio
+        # (e.g. 0.37 for 0.37x, 0.08 for 0.08x). Provider adapters normalize upstream percentages to ratios.
         de = metrics.get("debt_to_equity")
+        de_ratio = None
         if de is not None:
-            # Some providers return debtToEquity as percentage.
-            # e.g., Reliance → 36.65 (means 0.3665x), HDFCBANK → 700+ (means 7x)
-            # We unconditionally divide by 100.
-            de_ratio = de / 100.0
+            try:
+                de_ratio = float(de)
+            except (ValueError, TypeError):
+                de_ratio = None
 
+        if de_ratio is not None:
             # Get sector-appropriate thresholds
             low_max, mod_max, high_max = _get_de_thresholds(sector)
             sector_label = f" [sector: {sector}]" if sector else ""

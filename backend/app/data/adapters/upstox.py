@@ -343,7 +343,11 @@ class UpstoxAdapter(BaseDataAdapter):
                 "previous_close": round(float(prev_close), 2) if prev_close is not None else None,
                 "market_cap": None,
                 "pe_ratio": None,
-                "timestamp": datetime.now(timezone.utc),
+                "timestamp": self._parse_timestamp(
+                    quote_data.get("last_trade_time")
+                    or quote_data.get("timestamp")
+                    or quote_data.get("time")
+                ),
                 "exchange": "BSE" if symbol.endswith(".BO") else "NSE",
                 "market": "india",
                 "currency": "INR",
@@ -460,13 +464,13 @@ class UpstoxAdapter(BaseDataAdapter):
         elif isinstance(ratios, dict):
             ratio_map = ratios
 
-        mcap_val = (
-            ratio_map.get("Market Cap") or 
-            ratio_map.get("Market Capitalization") or 
-            ratio_map.get("MCAP") or 
-            ratio_map.get("M-Cap") or
-            ratio_map.get("MarketCap")
-        )
+        mcap_val = None
+        EXACT_MCAP_KEYS = {"marketcap", "marketcapitalization", "totalmarketcap", "mcap", "market_cap", "market_capitalization"}
+        for k, v in ratio_map.items():
+            k_clean = str(k).lower().replace(" ", "").replace("_", "").replace("-", "").replace(".", "")
+            if k_clean in EXACT_MCAP_KEYS:
+                mcap_val = v
+                break
         mcap_num = None
         if mcap_val is not None:
             try:
@@ -582,6 +586,31 @@ class UpstoxAdapter(BaseDataAdapter):
             return float(clean)
         except (ValueError, TypeError):
             return None
+
+    @staticmethod
+    def _parse_timestamp(raw_val: Any) -> Optional[datetime]:
+        """Safely parse Upstox timestamp representations to timezone-aware UTC datetime."""
+        if not raw_val:
+            return None
+        if isinstance(raw_val, datetime):
+            return raw_val if raw_val.tzinfo else raw_val.replace(tzinfo=timezone.utc)
+        if isinstance(raw_val, (int, float)):
+            try:
+                ts_sec = raw_val / 1000.0 if raw_val > 1e11 else float(raw_val)
+                return datetime.fromtimestamp(ts_sec, tz=timezone.utc)
+            except Exception:
+                return None
+        if isinstance(raw_val, str):
+            try:
+                if raw_val.isdigit():
+                    num = float(raw_val)
+                    ts_sec = num / 1000.0 if num > 1e11 else num
+                    return datetime.fromtimestamp(ts_sec, tz=timezone.utc)
+                dt = datetime.fromisoformat(raw_val.replace("Z", "+00:00"))
+                return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+            except Exception:
+                return None
+        return None
 
     def _parse_upstox_periods(self, raw_data: Any) -> List[Dict[str, Any]]:
         """

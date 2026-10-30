@@ -7,6 +7,8 @@ from enum import Enum
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Union
 from app.core.logging import get_logger
+from app.core.provider_quota import quota_governor
+from dataclasses import dataclass
 
 logger = get_logger(__name__)
 
@@ -89,6 +91,73 @@ _COMMON_INDIAN_SYMBOLS = {
     "HDFCLIFE", "SHRIRAMFIN", "INDUSINDBK", "BEL", "VEDL", "ZOMATO", "PAYTM",
     "JIOFIN", "TRENT", "HAL", "VBL", "NIFTY", "BANKNIFTY"
 }
+
+@dataclass(frozen=True)
+class ShareAuditRecord:
+    shares: float
+    as_of: str
+    source: str
+
+    @property
+    def source_doc(self) -> str:
+        return self.source
+
+# Auditable dataset of outstanding equity shares (source: official quarterly filings / exchange filings)
+_INDIAN_SHARES_AUDIT: Dict[str, ShareAuditRecord] = {
+    "RELIANCE": ShareAuditRecord(13_532_453_400, "2024-10", "NSE/BSE (Post 1:1 Bonus Issue)"),
+    "TCS": ShareAuditRecord(3_618_087_500, "2024-09", "BSE Shareholding Pattern"),
+    "HDFCBANK": ShareAuditRecord(15_286_388_000, "2025-09", "BSE Shareholding Pattern Q2FY26 (post 1:1 bonus Aug 2025)"),
+    "INFY": ShareAuditRecord(4_151_000_000, "2024-09", "NSE Shareholding Pattern"),
+    "ICICIBANK": ShareAuditRecord(7_068_000_000, "2024-09", "BSE Shareholding Pattern"),
+    "BHARTIARTL": ShareAuditRecord(5_984_000_000, "2024-09", "NSE Filing"),
+    "SBIN": ShareAuditRecord(8_924_600_000, "2024-09", "NSE Filing"),
+    "ITC": ShareAuditRecord(12_498_000_000, "2024-09", "NSE Shareholding Pattern"),
+    "LT": ShareAuditRecord(1_375_000_000, "2024-09", "BSE Filing"),
+    "TATAMOTORS": ShareAuditRecord(3_704_420_000, "2025-09", "NSE Shareholding Pattern Q2FY26 (post DVR cancellation)"),
+    "KOTAKBANK": ShareAuditRecord(1_988_000_000, "2024-09", "BSE Shareholding Pattern"),
+    "HINDUNILVR": ShareAuditRecord(2_349_600_000, "2024-09", "BSE Shareholding Pattern"),
+    "AXISBANK": ShareAuditRecord(3_090_000_000, "2024-09", "NSE Filing"),
+    "BAJFINANCE": ShareAuditRecord(619_000_000, "2024-09", "BSE Filing"),
+    "MARUTI": ShareAuditRecord(314_400_000, "2024-09", "NSE Filing"),
+    "SUNPHARMA": ShareAuditRecord(2_399_000_000, "2024-09", "NSE Filing"),
+    "TITAN": ShareAuditRecord(887_800_000, "2024-09", "BSE Filing"),
+    "WIPRO": ShareAuditRecord(5_227_000_000, "2024-09", "BSE Filing"),
+    "ADANIENT": ShareAuditRecord(1_140_000_000, "2024-09", "NSE Filing"),
+    "NTPC": ShareAuditRecord(9_696_000_000, "2024-09", "NSE Filing"),
+    "ONGC": ShareAuditRecord(12_580_000_000, "2024-09", "NSE Filing"),
+    "POWERGRID": ShareAuditRecord(9_300_000_000, "2024-09", "NSE Filing"),
+    "M&M": ShareAuditRecord(1_243_000_000, "2024-09", "NSE Filing"),
+    "TATASTEEL": ShareAuditRecord(12_480_000_000, "2024-09", "NSE Filing"),
+    "COALINDIA": ShareAuditRecord(6_162_000_000, "2024-09", "NSE Filing"),
+    "HCLTECH": ShareAuditRecord(2_713_000_000, "2024-09", "NSE Filing"),
+    "ASIANPAINT": ShareAuditRecord(959_000_000, "2024-09", "BSE Filing"),
+    "BAJAJFINSV": ShareAuditRecord(1_595_000_000, "2024-09", "BSE Filing"),
+    "JSWSTEEL": ShareAuditRecord(2_445_000_000, "2024-09", "NSE Filing"),
+    "ADANIPORTS": ShareAuditRecord(2_160_000_000, "2024-09", "NSE Filing"),
+    "ZOMATO": ShareAuditRecord(9_200_000_000, "2026-10", "BSE/NSE Filing (Eternal/Zomato)"),
+    "ETERNAL": ShareAuditRecord(9_200_000_000, "2026-10", "BSE/NSE Filing (Eternal/Zomato)"),
+    "JIOFIN": ShareAuditRecord(6_353_000_000, "2024-09", "NSE Filing"),
+}
+
+# Compatibility dictionary mapping symbol -> raw float share count
+_INDIAN_SHARES_OUTSTANDING: Dict[str, float] = {k: v.shares for k, v in _INDIAN_SHARES_AUDIT.items()}
+
+# Common symbol aliases
+_SYMBOL_ALIASES = {
+    "ETERNAL": "ZOMATO",
+}
+
+def _calculate_fallback_market_cap(symbol: str, price: Optional[float]):
+    """Calculate market cap from price * shares outstanding for Indian equities with audit record."""
+    if not price or float(price) <= 0:
+        return None
+    clean = symbol.upper().split(".")[0]
+    canonical = _SYMBOL_ALIASES.get(clean, clean)
+    rec = _INDIAN_SHARES_AUDIT.get(canonical) or _INDIAN_SHARES_AUDIT.get(clean)
+    if rec:
+        return (round(float(price) * rec.shares, 2), rec)
+    return None
+
 
 def normalize_ohlcv(data: Any, source: str) -> pd.DataFrame | None:
     """
@@ -204,6 +273,13 @@ class MarketDataProvider:
         except Exception:
             self._upstox = None
 
+    async def _get_redis(self):
+        try:
+            from app.dependencies import get_redis
+            return await get_redis()
+        except Exception:
+            return None
+
     def _get_upstox(self):
         if self._upstox is None:
             try:
@@ -253,8 +329,12 @@ class MarketDataProvider:
             return chain
 
         # US Stocks provider chain
+        # FMP is intentionally excluded from quote chain — FMPAdapter.get_quote returns None
+        # and would consume quota without providing data. FMP is only used for fundamentals/financials.
+        quote_chain = ["twelvedata", "finnhub"]
+
         chains = {
-            "quote": ["twelvedata", "finnhub"],
+            "quote": quote_chain,
             "history": ["twelvedata"],
             "company_info": ["finnhub", "twelvedata"],
             "fundamentals": ["finnhub", "fmp", "twelvedata"],
@@ -268,8 +348,12 @@ class MarketDataProvider:
         symbol = self._normalize_symbol(symbol)
         is_indian = symbol.endswith(('.NS', '.BO'))
         chain = self._get_chain(symbol, "quote")
+        redis_client = await self._get_redis()
         for provider in chain:
             try:
+                if not await quota_governor.acquire(provider, redis_client=redis_client):
+                    logger.warning("provider_quota_governor_blocked", provider=provider, symbol=symbol)
+                    continue
                 if provider == "twelvedata":
                     data = await self._twelve.get_quote(symbol)
                 elif provider == "nse":
@@ -284,14 +368,18 @@ class MarketDataProvider:
                             "change": raw.get("d"),
                             "percent_change": raw.get("dp"),
                             "change_percent": raw.get("dp"),
-                            "open": raw.get("o"),
-                            "high": raw.get("h"),
-                            "low": raw.get("l"),
-                            "previous_close": raw.get("pc"),
+                            "open": raw.get("o") if raw.get("o") else None,
+                            "high": raw.get("h") if raw.get("h") else None,
+                            "low": raw.get("l") if raw.get("l") else None,
+                            "previous_close": raw.get("pc") if raw.get("pc") else None,
                             "volume": None,
                             "market_cap": None,
                             "pe_ratio": None,
-                            "timestamp": datetime.now(timezone.utc),
+                            "timestamp": (
+                                datetime.fromtimestamp(int(raw["t"]), tz=timezone.utc)
+                                if raw.get("t") and str(raw["t"]).isdigit()
+                                else None
+                            ),
                             "exchange": "US",
                             "market": "us",
                             "currency": "USD",
@@ -301,6 +389,8 @@ class MarketDataProvider:
                 elif provider == "upstox":
                     upstox = self._get_upstox()
                     data = await upstox.get_quote(symbol) if upstox else None
+                elif provider == "fmp":
+                    data = await self._fmp.get_quote(symbol)
                 else:
                     data = None
 
@@ -319,6 +409,16 @@ class MarketDataProvider:
                                 logger.debug("nse_enrichment_no_data", symbol=symbol)
                         except Exception as enrich_err:
                             logger.warning("nse_enrichment_failed", symbol=symbol, error=str(enrich_err))
+
+                        # Authoritative fallback from shares outstanding if exchange scraping failed
+                        if data.get("market_cap") is None:
+                            calc_res = _calculate_fallback_market_cap(symbol, data.get("price"))
+                            if calc_res:
+                                computed_mcap, audit_rec = calc_res
+                                data["market_cap"] = computed_mcap
+                                data["market_cap_source"] = "computed"
+                                data["market_cap_as_of"] = audit_rec.as_of
+                                data["market_cap_source_doc"] = audit_rec.source
                     return DataResult(data, DataStatus.SUCCESS, provider)
             except Exception as e:
                 logger.warning("quote_provider_failed", provider=provider, symbol=symbol, error=str(e))
@@ -328,8 +428,12 @@ class MarketDataProvider:
     async def get_history(self, symbol: str, period: str = '1y', interval: str = '1d') -> DataResult:
         symbol = self._normalize_symbol(symbol)
         chain = self._get_chain(symbol, "history")
+        redis_client = await self._get_redis()
         for provider in chain:
             try:
+                if not await quota_governor.acquire(provider, redis_client=redis_client):
+                    logger.warning("provider_quota_governor_blocked", provider=provider, symbol=symbol, call="history")
+                    continue
                 if provider == "twelvedata":
                     data = await self._twelve.get_ohlcv(symbol, period=period, interval=interval)
                 elif provider == "nse":
@@ -356,8 +460,12 @@ class MarketDataProvider:
         symbol = self._normalize_symbol(symbol)
         is_indian = symbol.endswith(('.NS', '.BO'))
         chain = self._get_chain(symbol, "company_info")
+        redis_client = await self._get_redis()
         for provider in chain:
             try:
+                if not await quota_governor.acquire(provider, redis_client=redis_client):
+                    logger.warning("provider_quota_governor_blocked", provider=provider, symbol=symbol, call="company_info")
+                    continue
                 if provider == "finnhub":
                     data = await self._finnhub.get_company_info(symbol)
                 elif provider == "twelvedata":
@@ -386,6 +494,28 @@ class MarketDataProvider:
                                     data["metrics"]["pe_ratio"] = pe
                         except Exception as enrich_err:
                             logger.warning("nse_company_enrichment_failed", symbol=symbol, error=str(enrich_err))
+
+                        # Authoritative fallback from shares outstanding
+                        if data.get("market_cap") is None or (data.get("metrics") or {}).get("market_cap") is None:
+                            price = None
+                            try:
+                                q_res = await self.get_quote(symbol)
+                                if q_res.available and q_res.data:
+                                    price = q_res.data.get("price")
+                            except Exception:
+                                pass
+                            calc_res = _calculate_fallback_market_cap(symbol, price)
+                            if calc_res:
+                                computed_mcap, audit_rec = calc_res
+                                data["market_cap"] = computed_mcap
+                                data["market_cap_source"] = "computed"
+                                data["market_cap_as_of"] = audit_rec.as_of
+                                data["market_cap_source_doc"] = audit_rec.source
+                                if "metrics" in data and isinstance(data["metrics"], dict):
+                                    data["metrics"]["market_cap"] = computed_mcap
+                                    data["metrics"]["market_cap_source"] = "computed"
+                                    data["metrics"]["market_cap_as_of"] = audit_rec.as_of
+                                    data["metrics"]["market_cap_source_doc"] = audit_rec.source
                     return DataResult(data, DataStatus.SUCCESS, provider)
             except Exception as e:
                 logger.warning("company_info_failed", provider=provider, symbol=symbol, error=str(e))
@@ -395,8 +525,12 @@ class MarketDataProvider:
     async def get_fundamentals(self, symbol: str) -> DataResult:
         symbol = self._normalize_symbol(symbol)
         chain = self._get_chain(symbol, "fundamentals")
+        redis_client = await self._get_redis()
         for provider in chain:
             try:
+                if not await quota_governor.acquire(provider, redis_client=redis_client):
+                    logger.warning("provider_quota_governor_blocked", provider=provider, symbol=symbol, call="fundamentals")
+                    continue
                 if provider == "finnhub":
                     data = await self._finnhub.get_fundamentals(symbol)
                 elif provider == "fmp":
@@ -568,6 +702,16 @@ class MarketDataProvider:
                         quote["pe_ratio"] = nse_quote["pe_ratio"]
                 except Exception:
                     pass
+
+            # Authoritative fallback from shares outstanding
+            if quote and quote.get("market_cap") is None:
+                computed = _calculate_fallback_market_cap(sym, quote.get("price"))
+                if computed:
+                    computed_mcap, audit_rec = computed
+                    quote["market_cap"] = computed_mcap
+                    quote["market_cap_source"] = "computed"
+                    quote["market_cap_as_of"] = audit_rec.as_of
+                    quote["market_cap_source_doc"] = audit_rec.source
             return quote
 
         if indian_symbols:

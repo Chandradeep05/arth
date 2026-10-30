@@ -15,7 +15,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
-from app.core.auth import UserContext, get_current_user
+from app.core.auth import UserContext, get_current_user, hash_invite_code
 from app.core.logging import get_logger
 from app.models.schemas.user import RedeemInviteRequest
 
@@ -75,15 +75,17 @@ async def redeem_invite_code(
         if current_status != 'pending':
             raise HTTPException(status_code=403, detail="Only pending accounts can redeem invite codes.")
 
-        # Lock the invite code row for this transaction
+        code_hash = hash_invite_code(code)
+        # Lock the invite code row for this transaction (support both hashed and legacy unhashed codes)
         invite = await db.fetchrow(
             """
             SELECT id, used_by, expires_at, created_by
             FROM invite_codes
-            WHERE code = $1
+            WHERE code = $1 OR code = $2
             FOR UPDATE
             """,
-            code,
+            code_hash,
+            code.strip().upper(),
         )
 
         if not invite:

@@ -77,10 +77,11 @@ async def health_check():
         # If the error is a connection failure to the default localhost DB,
         # treat it as "not provisioned" rather than "unhealthy"
         is_local_fail = any(x in err_msg for x in ["Connection refused", "localhost", "127.0.0.1", "connect call failed"])
+        safe_msg = "Engine not initialized" if is_local_fail else (err_msg if settings.is_development else "Database connection failed")
         services["database"] = HealthStatus(
             status="unhealthy",
             service="TimescaleDB",
-            message="Engine not initialized" if is_local_fail else err_msg,
+            message=safe_msg,
             timestamp=datetime.now(timezone.utc).isoformat(),
         )
         overall_status = "degraded"
@@ -108,10 +109,11 @@ async def health_check():
             )
             overall_status = "degraded"
     except Exception as e:
+        safe_redis_msg = str(e) if settings.is_development else "Redis connection failed"
         services["redis"] = HealthStatus(
             status="unhealthy",
             service="Redis",
-            message=str(e),
+            message=safe_redis_msg,
             timestamp=datetime.now(timezone.utc).isoformat(),
         )
         overall_status = "degraded"
@@ -183,8 +185,22 @@ async def redis_health():
 
 
 @router.get("/metrics")
-async def get_metrics():
-    """Return in-memory application metrics (request counts, latencies, cache ratios, etc.)."""
+async def get_metrics(request: Request):
+    """Return in-memory application metrics. Authenticated via X-Admin-Key header in production."""
+    from app.config import get_settings
+    settings = get_settings()
+
+    if not settings.is_development:
+        provided_key = request.headers.get("x-admin-key", "")
+        if not settings.admin_api_key or not hmac.compare_digest(provided_key, settings.admin_api_key):
+            return ORJSONResponse(
+                status_code=403,
+                content={
+                    "error": "forbidden",
+                    "message": "Admin API key required. Set X-Admin-Key header.",
+                },
+            )
+
     from app.engines.observability.metrics import metrics_collector
 
     return {
@@ -197,10 +213,12 @@ async def get_metrics():
 @router.get("/debug")
 async def get_debug(request: Request):
     """
-    Diagnostic endpoint — verify curl_cffi session and yfinance connectivity.
+    Diagnostic endpoint — provider routing, quota state, and NSE circuit state.
 
     Gated behind ADMIN_API_KEY header in production. Returns 403 if key
     is missing or incorrect when running in non-development environments.
+
+    Yahoo Finance is NOT a configured provider; this endpoint no longer tests it. Use /system/health for overall status.
     """
     from app.config import get_settings
 
@@ -218,26 +236,26 @@ async def get_debug(request: Request):
                 },
             )
 
-    from app.data.adapters.yahoo import _yf_session, make_ticker
+    from app.core.provider_quota import quota_governor
+    from app.data.market_data_provider import market_data
 
     result = {
-        "curl_cffi_session": _yf_session is not None,
-        "session_type": type(_yf_session).__name__ if _yf_session else "None",
+        "provider_routing": {
+            "RELIANCE.NS": market_data._get_chain("RELIANCE.NS", "quote"),
+            "AAPL": market_data._get_chain("AAPL", "quote"),
+        },
+        "quota_status": quota_governor.get_status(),
+        "upstox_enabled": settings.upstox_enabled if hasattr(settings, "upstox_enabled") else False,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
-    # Quick yfinance connectivity test
+    # NSE circuit state -- read from the module-level adapter session (not a fresh instance)
+    # Creating NSESession() gives a new object with a fresh CLOSED state, not the live state.
     try:
-        ticker = make_ticker("AAPL")
-        info = ticker.info
-        result["yfinance_test"] = {
-            "symbol": "AAPL",
-            "price": info.get("regularMarketPrice"),
-            "name": info.get("shortName"),
-            "status": "ok" if info.get("regularMarketPrice") else "no_data",
-        }
+        from app.data.adapters.nse import _session as _nse_live_session
+        result["nse_circuit_state"] = _nse_live_session._circuit_state.value
     except Exception as e:
-        result["yfinance_test"] = {"status": "error", "error": str(e)}
+        result["nse_circuit_state"] = f"error: {e}"
 
     return result
 

@@ -54,6 +54,25 @@ class CreateAlertRequest(BaseModel):
         return v
 
 
+class EditAlertRequest(BaseModel):
+    threshold: Optional[float] = None
+    alert_type: Optional[str] = None
+
+    @field_validator("alert_type")
+    @classmethod
+    def valid_type(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and v not in ("price_above", "price_below"):
+            raise ValueError("alert_type must be price_above or price_below")
+        return v
+
+    @field_validator("threshold")
+    @classmethod
+    def positive_threshold(cls, v: Optional[float]) -> Optional[float]:
+        if v is not None and v <= 0:
+            raise ValueError("threshold must be positive")
+        return v
+
+
 class ToggleAlertRequest(BaseModel):
     is_active: bool
 
@@ -97,6 +116,58 @@ async def create_alert(body: CreateAlertRequest, request: Request, user: UserCon
     return result
 
 
+@router.patch("/{alert_id}")
+async def edit_alert(alert_id: UUID, body: EditAlertRequest, request: Request, user: UserContext = Depends(require_active_user)) -> dict:
+    """Edit an existing alert's threshold or direction, re-arming it automatically."""
+    db = request.state.db
+    if body.threshold is None and body.alert_type is None:
+        raise HTTPException(status_code=400, detail="Must provide threshold or alert_type to edit")
+
+    row = await db.fetchrow(
+        "SELECT id, symbol, threshold, alert_type FROM alerts WHERE id = $1 AND user_id = $2",
+        alert_id, user.user_id,
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Alert not found or not yours")
+
+    # Build a partial SET clause -- only update fields that were actually supplied.
+    # This prevents a stale client overwriting a field it didn't intend to change.
+    set_parts = ["trigger_state = 'armed'", "last_evaluated_value = NULL"]
+    params: list = []
+    idx = 1
+    if body.threshold is not None:
+        set_parts.append(f"threshold = ${idx}")
+        params.append(body.threshold)
+        idx += 1
+    if body.alert_type is not None:
+        set_parts.append(f"alert_type = ${idx}")
+        params.append(body.alert_type)
+        idx += 1
+    params.extend([alert_id, user.user_id])
+
+    await db.execute(
+        f"UPDATE alerts SET {', '.join(set_parts)} WHERE id = ${idx} AND user_id = ${idx + 1}",
+        *params,
+    )
+    # Re-read updated values for response
+    updated_row = await db.fetchrow(
+        "SELECT threshold, alert_type FROM alerts WHERE id = $1 AND user_id = $2",
+        alert_id, user.user_id,
+    )
+    new_threshold = float(updated_row["threshold"]) if updated_row else (body.threshold or float(row["threshold"]))
+    new_type = updated_row["alert_type"] if updated_row else (body.alert_type or row["alert_type"])
+
+    return {
+        "success": True,
+        "id": str(alert_id),
+        "symbol": row["symbol"],
+        "threshold": new_threshold,
+        "alert_type": new_type,
+        "trigger_state": "armed",
+        "currency": _currency_for_symbol(row["symbol"]),
+    }
+
+
 @router.delete("/{alert_id}")
 async def delete_alert(alert_id: UUID, request: Request, user: UserContext = Depends(require_active_user)) -> dict:
     db = request.state.db
@@ -121,21 +192,37 @@ async def toggle_alert(alert_id: UUID, body: ToggleAlertRequest, request: Reques
 @notifications_router.get("")
 async def list_notifications(request: Request, limit: int = Query(default=20, le=100), cursor: Optional[UUID] = None, user: UserContext = Depends(require_active_user)) -> dict:
     db = request.state.db
+    query = """
+        SELECT n.id, n.alert_id, n.title, n.body, n.is_read, n.created_at,
+               a.symbol, a.alert_type, a.threshold, a.last_evaluated_value
+        FROM notifications n
+        LEFT JOIN alerts a ON n.alert_id = a.id
+        WHERE n.user_id = $1
+    """
     if cursor:
         rows = await db.fetch(
-            "SELECT id, alert_id, title, body, is_read, created_at FROM notifications "
-            "WHERE user_id = $1 AND (created_at, id) < ((SELECT created_at FROM notifications WHERE id = $2), $2) "
-            "ORDER BY created_at DESC, id DESC LIMIT $3",
+            f"{query} AND (n.created_at, n.id) < ((SELECT created_at FROM notifications WHERE id = $2), $2) "
+            "ORDER BY n.created_at DESC, n.id DESC LIMIT $3",
             user.user_id, cursor, limit,
         )
     else:
         rows = await db.fetch(
-            "SELECT id, alert_id, title, body, is_read, created_at FROM notifications "
-            "WHERE user_id = $1 ORDER BY created_at DESC, id DESC LIMIT $2",
+            f"{query} ORDER BY n.created_at DESC, n.id DESC LIMIT $2",
             user.user_id, limit,
         )
     
-    items = [dict(row) for row in rows]
+    items = []
+    for row in rows:
+        item = dict(row)
+        sym = item.get("symbol")
+        if not sym and item.get("title"):
+            parts = item["title"].split()
+            if parts:
+                sym = parts[0]
+                item["symbol"] = sym
+        item["currency"] = _currency_for_symbol(sym or "")
+        items.append(item)
+
     next_cursor = items[-1]["id"] if items and len(items) == limit else None
     return {"items": items, "next_cursor": next_cursor}
 
