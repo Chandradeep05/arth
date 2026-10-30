@@ -96,6 +96,14 @@ async def lifespan(app: FastAPI):
         llm_tier=settings.llm_tier.value,
     )
 
+    # Reject missing DATABASE_URL in production immediately -- before any init attempt.
+    # A production deploy without a database URL is always a misconfiguration.
+    if settings.is_production and not settings.database_url:
+        raise RuntimeError(
+            "DATABASE_URL is required in production but is not set. "
+            "Configure it in the Render environment variables and redeploy."
+        )
+
     # Initialize SQLAlchemy (Phase 1-3 endpoints)
     try:
         await init_db(settings)
@@ -389,7 +397,14 @@ def create_app() -> FastAPI:
             except Exception as e:
                 checks["redis"] = f"error: {str(e)[:100]}"
         else:
-            checks["redis"] = "not_configured"
+            # Distinguish "never configured" (no URL) from "configured but failed to connect"
+            from app.dependencies import _redis_client as _rdep
+            _redis_url_set = bool(settings.upstash_redis_url or settings.redis_url)
+            if _redis_url_set:
+                # URL was provided but connection failed during startup
+                checks["redis"] = "error: connection failed at startup (check REDIS_URL)"
+            else:
+                checks["redis"] = "not_configured"
         
         # Check AssistantEngine
         checks["assistant_engine"] = "ok" if getattr(app.state, "assistant_engine", None) else "not_available"

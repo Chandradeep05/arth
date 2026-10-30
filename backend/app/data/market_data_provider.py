@@ -329,13 +329,9 @@ class MarketDataProvider:
             return chain
 
         # US Stocks provider chain
+        # FMP is intentionally excluded from quote chain — FMPAdapter.get_quote returns None
+        # and would consume quota without providing data. FMP is only used for fundamentals/financials.
         quote_chain = ["twelvedata", "finnhub"]
-        try:
-            from app.config import get_settings
-            if get_settings().fmp_quote_display_enabled:
-                quote_chain.append("fmp")
-        except Exception:
-            pass
 
         chains = {
             "quote": quote_chain,
@@ -711,7 +707,11 @@ class MarketDataProvider:
             if quote and quote.get("market_cap") is None:
                 computed = _calculate_fallback_market_cap(sym, quote.get("price"))
                 if computed:
-                    quote["market_cap"] = computed
+                    computed_mcap, audit_rec = computed
+                    quote["market_cap"] = computed_mcap
+                    quote["market_cap_source"] = "computed"
+                    quote["market_cap_as_of"] = audit_rec.as_of
+                    quote["market_cap_source_doc"] = audit_rec.source
             return quote
 
         if indian_symbols:

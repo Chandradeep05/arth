@@ -43,7 +43,7 @@ For high-confidence price alert notifications and data cache warming, ARTH provi
 4. Create **Job 3 (Symbol Cache Warmup)**:
    - **URL:** `https://your-app.onrender.com/api/v1/internal/jobs/warm-alert-symbols`
    - **Request Method:** `POST`
-   - **Schedule:** Every 30 minutes
+   - **Schedule:** Every 5 minutes (must be ≤ alert evaluation interval so quotes are fresh)
    - **Headers:**
      - Key: `X-Internal-Secret`
      - Value: `<YOUR_INTERNAL_JOB_SECRET>`
@@ -65,17 +65,16 @@ export default {
       "Content-Type": "application/json",
     };
 
+    // Both jobs run on the same 5-minute cron.
+    // Warmup runs before evaluation so quotes are cached and fresh when alerts fire.
     if (event.cron === "*/5 * * * *") {
-      // 5-minute alert evaluation
-      await fetch(`${BASE_URL}/api/v1/internal/jobs/evaluate-alerts`, {
+      // 5-minute quote cache warmup (must run before alert evaluation)
+      await fetch(`${BASE_URL}/api/v1/internal/jobs/warm-alert-symbols`, {
         method: "POST",
         headers,
       });
-    }
-
-    if (event.cron === "*/30 * * * *") {
-      // 30-minute quote cache warmup
-      await fetch(`${BASE_URL}/api/v1/internal/jobs/warm-alert-symbols`, {
+      // 5-minute alert evaluation
+      await fetch(`${BASE_URL}/api/v1/internal/jobs/evaluate-alerts`, {
         method: "POST",
         headers,
       });

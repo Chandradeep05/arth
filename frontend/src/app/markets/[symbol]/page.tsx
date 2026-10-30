@@ -66,6 +66,11 @@ export default function StockDetailPage() {
   const [loading, setLoading] = useState(true);
   const [lastUpdated, setLastUpdated] = useState<Date>(new Date());
   const [activeTimeframe, setActiveTimeframe] = useState<string>('3M');
+  const [freshnessMetadata, setFreshnessMetadata] = useState<{
+    market_state?: string;
+    delay_label?: string;
+    is_stale?: boolean;
+  } | null>(null);
 
   const fetchOhlcv = useCallback(async (period: string = '3mo', interval: string = '1d') => {
     try {
@@ -107,6 +112,17 @@ export default function StockDetailPage() {
       if (ohlcvRes.status === 'fulfilled') {
         const d = ohlcvRes.value.data;
         setOhlcv(Array.isArray(d) ? d : []);
+      }
+
+      // Fetch per-symbol freshness metadata from the quote endpoint (best-effort)
+      try {
+        const fRes = await apiClient.get<{
+          freshness?: { market_state?: string; delay_label?: string; is_stale?: boolean };
+        }>(`/api/v1/market/quote/${encodeURIComponent(symbol)}`);
+        const freshness = (fRes as any)?.freshness;
+        if (freshness) setFreshnessMetadata(freshness);
+      } catch {
+        // Freshness metadata is optional -- ignore failure
       }
 
       setLoading(false);
@@ -177,7 +193,9 @@ export default function StockDetailPage() {
           <DataFreshness
             timestamp={quote?.timestamp ?? lastUpdated}
             thresholdMs={60000}
-            delayLabel={quote?.exchange ? undefined : undefined}
+            marketState={freshnessMetadata?.market_state}
+            delayLabel={freshnessMetadata?.delay_label}
+            isStale={freshnessMetadata?.is_stale}
           />
           <button
             onClick={fetchAll}

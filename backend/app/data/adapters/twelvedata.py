@@ -448,9 +448,9 @@ class TwelveDataAdapter(BaseDataAdapter):
                             "market_cap": None,
                             "pe_ratio": None,
                             "timestamp": (
-                    datetime.fromtimestamp(int(data["timestamp"]), tz=timezone.utc)
-                    if data.get("timestamp") and str(data["timestamp"]).isdigit()
-                    else datetime.now(timezone.utc)
+                    datetime.fromtimestamp(int(item["timestamp"]), tz=timezone.utc)
+                    if item.get("timestamp") and str(item["timestamp"]).isdigit()
+                    else None
                 ),
                             "exchange": item.get("exchange", "NASDAQ"),
                             "market": "us",

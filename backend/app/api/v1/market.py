@@ -129,16 +129,24 @@ def _make_freshness(
             else:
                 ts = ts.astimezone(timezone.utc)
 
-    # When exchange is closed, data represents the final closing price (never falsely marked stale)
-    if market_state == "closed":
-        label = "market holiday" if session_label == "Market Holiday" else "last close"
+    # When exchange is not actively open (closed, pre-market, post-market, holiday),
+    # data represents the last available price -- never falsely mark it stale.
+    if market_state != "open":
+        if session_label == "Market Holiday":
+            label = "market holiday"
+        elif market_state in ("pre-market", "pre_open"):
+            label = "pre-market"
+        elif market_state == "post-market":
+            label = "post-market"
+        else:
+            label = "last close"
         return FreshnessMetadata(
             source=source,
             timestamp=ts,
             is_stale=False,
             delay_label=label,
             cache_hit=cache_hit,
-            market_state="closed",
+            market_state=market_state,
         )
 
     # During market hours: evaluate actual provider age if timestamp exists

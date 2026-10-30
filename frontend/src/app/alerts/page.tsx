@@ -345,7 +345,11 @@ export default function AlertsPage() {
             {notifications.map((notif) => {
               // Extract symbol from notification or parse from title
               const displaySymbol = notif.symbol || (notif.title ? notif.title.split(' ')[0] : 'ALERT');
-              const isCrossAbove = (notif.title && notif.title.includes('above')) || notif.alert_type === 'price_above';
+              // Prefer alert_type field over title-text parsing for direction (title text is user-facing and may change)
+              const isCrossAbove = notif.alert_type === 'price_above'
+                || (notif.alert_type == null && notif.title != null && notif.title.includes('above'));
+              // URL-encode symbol for safe routing
+              const encodedSymbol = displaySymbol ? encodeURIComponent(displaySymbol) : null;
 
               return (
                 <div
@@ -364,12 +368,16 @@ export default function AlertsPage() {
                     </div>
                     <div>
                       <div className="flex items-center gap-2 mb-1">
-                        <Link
-                          href={`/markets/${displaySymbol}`}
-                          className="font-mono text-xs font-bold text-white hover:text-[var(--green)] flex items-center gap-1 transition-colors"
-                        >
-                          {displaySymbol}
-                        </Link>
+                        {encodedSymbol ? (
+                          <Link
+                            href={`/markets/${encodedSymbol}`}
+                            className="font-mono text-xs font-bold text-white hover:text-[var(--green)] flex items-center gap-1 transition-colors"
+                          >
+                            {displaySymbol}
+                          </Link>
+                        ) : (
+                          <span className="font-mono text-xs font-bold text-white">{displaySymbol}</span>
+                        )}
                         <span className={`text-[10px] font-mono px-2 py-0.5 rounded-full ${
                           isCrossAbove 
                             ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' 
@@ -439,7 +447,7 @@ export default function AlertsPage() {
 
               <div>
                 <label className="block text-[11px] font-mono text-[var(--text-muted)] mb-1">
-                  Threshold Price ({editingAlert.currency || (editingAlert.symbol.endsWith('.NS') ? '₹' : '$')})
+                  Threshold Price ({editingAlert.currency || (editingAlert.symbol.endsWith('.NS') || editingAlert.symbol.endsWith('.BO') ? '₹' : '$')})
                 </label>
                 <input
                   type="number"

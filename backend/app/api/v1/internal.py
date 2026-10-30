@@ -52,6 +52,8 @@ async def evaluate_alerts(
     now_epoch = time.time()
 
     # Deduplication & cooldown guard (prevents redundant executions across dual schedulers)
+    # NOTE: The cooldown timestamp is recorded AFTER _run_eval completes (not before) so that
+    # a crashed or failed evaluation does not block retries for 120s.
     if redis:
         last_run = await redis.get("alert_eval_last_run")
         if last_run:
@@ -61,12 +63,10 @@ async def evaluate_alerts(
                     return {"skipped": True, "reason": "Evaluated recently within 120s cooldown"}
             except Exception:
                 pass
-        await redis.set("alert_eval_last_run", str(now_epoch), ex=300)
     else:
         if (now_epoch - _last_eval_time[0]) < 120.0:
             logger.info("alert_eval_skipped_cooldown_in_process", elapsed=round(now_epoch - _last_eval_time[0], 1))
             return {"skipped": True, "reason": "Evaluated recently within 120s cooldown"}
-        _last_eval_time[0] = now_epoch
 
     if redis:
         lock_token = secrets.token_hex(16)
@@ -81,7 +81,10 @@ async def evaluate_alerts(
 
     if redis:
         try:
-            return await _run_eval(db, redis, now)
+            result = await _run_eval(db, redis, now)
+            # Record completion time AFTER successful eval so failures remain retryable
+            await redis.set("alert_eval_last_run", str(now_epoch), ex=300)
+            return result
         finally:
             _RELEASE_LOCK_LUA = """
             if redis.call('get', KEYS[1]) == ARGV[1] then
@@ -93,7 +96,10 @@ async def evaluate_alerts(
             await redis.eval(_RELEASE_LOCK_LUA, 1, ALERT_EVAL_LOCK, lock_token)
     else:
         async with _in_process_eval_lock:
-            return await _run_eval(db, redis, now)
+            result = await _run_eval(db, redis, now)
+            # Record completion time AFTER successful eval so failures remain retryable
+            _last_eval_time[0] = now_epoch
+            return result
 
 
 async def _run_eval(db, redis, now: datetime) -> dict:
@@ -110,6 +116,7 @@ async def _run_eval(db, redis, now: datetime) -> dict:
     skipped_market_closed = 0
 
     # Market-aware session gate: strictly evaluate symbols whose exchanges are currently OPEN
+    # Normalize symbol: symbols without an exchange suffix default to US market (no dot = NASDAQ/NYSE)
     for sym in all_symbols:
         mstate, _ = get_market_state(sym, now)
         if mstate != "open":
@@ -153,7 +160,7 @@ async def _run_eval(db, redis, now: datetime) -> dict:
             try:
                 res = await provider.get_quote(symbol)
                 quote_data = res.data if hasattr(res, "data") else res
-                actual_provider = getattr(res, "provider", None) or "unknown"
+                actual_provider = getattr(res, "source", None) or "unknown"
                 if quote_data and isinstance(quote_data, dict):
                     p = quote_data.get("price") or quote_data.get("close") or quote_data.get("last_price")
                     if p is not None and float(p) > 0:
@@ -193,12 +200,14 @@ async def _run_eval(db, redis, now: datetime) -> dict:
         if condition and state == "armed":
             direction = "above" if atype == "price_above" else "below"
             # Atomic: state transition is the authoritative idempotency guard.
-            # If UPDATE matches 0 rows, another evaluator already triggered.
+            # If UPDATE matches 0 rows, another evaluator already triggered — or the alert config
+            # changed between our SELECT and this UPDATE (alert_type/threshold guard prevents
+            # an obsolete evaluation from firing on a freshly edited alert).
             async with db.transaction():
                 updated = await db.execute(
                     "UPDATE alerts SET trigger_state = $1, last_evaluated_value = $2, last_triggered_at = $3 "
-                    "WHERE id = $4 AND trigger_state = 'armed'",
-                    "triggered", current, now, alert["id"],
+                    "WHERE id = $4 AND trigger_state = 'armed' AND alert_type = $5 AND threshold = $6",
+                    "triggered", current, now, alert["id"], atype, threshold,
                 )
                 # Only insert notification if we actually flipped the state
                 if updated and updated != "UPDATE 0":

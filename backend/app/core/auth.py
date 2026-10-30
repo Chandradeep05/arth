@@ -334,7 +334,16 @@ async def _send_invite_email(email: str, code: str) -> None:
             message="Invite code issued for user",
         )
     except Exception as e:
-        logger.warning("invite_email_send_failed", error=str(e), email=email)
+        # If delivery fails, log the plaintext code at WARNING so admin can recover it from logs.
+        # This is the only point where the plaintext is available after hashing — once this
+        # function returns, the code cannot be recovered without calling the regenerate endpoint.
+        logger.warning(
+            "invite_email_send_failed",
+            error=str(e),
+            email=email,
+            recovery_code=code,  # noqa: S001 — intentional: admin must be able to recover
+            action="Use the regenerate endpoint or copy this code from logs to send manually",
+        )
 
 
 # == FastAPI Dependencies =====================================================

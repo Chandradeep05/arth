@@ -130,17 +130,32 @@ async def edit_alert(alert_id: UUID, body: EditAlertRequest, request: Request, u
     if not row:
         raise HTTPException(status_code=404, detail="Alert not found or not yours")
 
-    new_threshold = body.threshold if body.threshold is not None else float(row["threshold"])
-    new_type = body.alert_type if body.alert_type is not None else row["alert_type"]
+    # Build a partial SET clause -- only update fields that were actually supplied.
+    # This prevents a stale client overwriting a field it didn't intend to change.
+    set_parts = ["trigger_state = 'armed'", "last_evaluated_value = NULL"]
+    params: list = []
+    idx = 1
+    if body.threshold is not None:
+        set_parts.append(f"threshold = ${idx}")
+        params.append(body.threshold)
+        idx += 1
+    if body.alert_type is not None:
+        set_parts.append(f"alert_type = ${idx}")
+        params.append(body.alert_type)
+        idx += 1
+    params.extend([alert_id, user.user_id])
 
     await db.execute(
-        """
-        UPDATE alerts 
-        SET threshold = $1, alert_type = $2, trigger_state = 'armed', last_evaluated_value = NULL
-        WHERE id = $3 AND user_id = $4
-        """,
-        new_threshold, new_type, alert_id, user.user_id,
+        f"UPDATE alerts SET {', '.join(set_parts)} WHERE id = ${idx} AND user_id = ${idx + 1}",
+        *params,
     )
+    # Re-read updated values for response
+    updated_row = await db.fetchrow(
+        "SELECT threshold, alert_type FROM alerts WHERE id = $1 AND user_id = $2",
+        alert_id, user.user_id,
+    )
+    new_threshold = float(updated_row["threshold"]) if updated_row else (body.threshold or float(row["threshold"]))
+    new_type = updated_row["alert_type"] if updated_row else (body.alert_type or row["alert_type"])
 
     return {
         "success": True,

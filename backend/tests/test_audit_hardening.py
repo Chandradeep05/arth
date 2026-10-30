@@ -537,7 +537,7 @@ async def test_finnhub_fundamentals_enrichment():
         res = await adapter.get_fundamentals("NVDA")
         assert res is not None
         assert res["pe_ratio"] == 32.5
-        assert res["debt_to_equity"] == 0.452
+        assert res["debt_to_equity"] == 45.2  # Finnhub returns ratio as-is (no /100 conversion)
         assert res["current_ratio"] == 1.85
         assert res["profit_margin"] == 0.265  # Normalized from 26.5%
         assert res["roe"] == 40.0

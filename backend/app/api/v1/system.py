@@ -249,11 +249,11 @@ async def get_debug(request: Request):
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
-    # NSE circuit state
+    # NSE circuit state -- read from the module-level adapter session (not a fresh instance)
+    # Creating NSESession() gives a new object with a fresh CLOSED state, not the live state.
     try:
-        from app.data.adapters.nse import NSESession
-        _nse_session = NSESession()
-        result["nse_circuit_state"] = _nse_session._circuit_state.value
+        from app.data.adapters.nse import _session as _nse_live_session
+        result["nse_circuit_state"] = _nse_live_session._circuit_state.value
     except Exception as e:
         result["nse_circuit_state"] = f"error: {e}"
 

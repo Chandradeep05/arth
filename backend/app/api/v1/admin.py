@@ -127,9 +127,19 @@ async def list_invite_codes(request: Request, admin: UserContext = Depends(requi
     for row in rows:
         d = dict(row)
         c = d.get("code") or ""
-        # If code is stored as 64-char HMAC/SHA hash, present masked display prefix
+        is_used = d.get("used_by") is not None
+        # Hashed codes (64-char) are never shown as copyable text.
+        # Used codes cannot be regenerated; unused codes can.
         if len(c) == 64:
-            d["code"] = "ARTH-[hashed — use regenerate to get plaintext]"
+            d["code"] = None  # Not available — use regenerate endpoint for unused entries
+            d["code_available"] = False
+            d["is_regeneratable"] = not is_used
+        else:
+            # Plaintext code (legacy entries or freshly generated) — still mask after use
+            d["code_available"] = not is_used
+            d["is_regeneratable"] = not is_used
+            if is_used:
+                d["code"] = None
         res_rows.append(d)
     return res_rows
 

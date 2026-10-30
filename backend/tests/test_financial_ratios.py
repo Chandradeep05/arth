@@ -190,35 +190,34 @@ class TestFreshnessEngineAndMarketSessions:
 
     def test_closed_market_freshness_metadata(self):
         """When exchange is closed, quote must NEVER be falsely marked stale."""
+        from unittest.mock import patch
         old_friday_quote = datetime(2026, 10, 23, 15, 30, 0, tzinfo=timezone.utc)
 
-        freshness = _make_freshness(
-            source="Upstox",
-            quote_timestamp=old_friday_quote,
-            market_or_symbol="RELIANCE.NS",
-        )
-        # Note: If test runs outside market hours, it confirms last close handling
-        curr_state, _ = get_market_state("RELIANCE.NS")
-        if curr_state == "closed":
-            assert freshness.market_state == "closed"
-            assert freshness.is_stale is False
-            assert freshness.delay_label == "last close"
+        # Pin market state to "closed" so test is deterministic regardless of wall-clock time
+        with patch("app.api.v1.market.get_market_state", return_value=("closed", "After Hours")):
+            freshness = _make_freshness(
+                source="Upstox",
+                quote_timestamp=old_friday_quote,
+                market_or_symbol="RELIANCE.NS",
+            )
+        assert freshness.market_state != "open"
+        assert freshness.is_stale is False
+        assert freshness.delay_label == "last close"
 
     def test_open_market_freshness_evaluation(self):
         """During market hours, quotes older than threshold become stale."""
+        from unittest.mock import patch
         fresh_ts = datetime.now(timezone.utc) - timedelta(seconds=30)
-        fresh_meta = _make_freshness(
-            source="Upstox",
-            quote_timestamp=fresh_ts,
-            market_or_symbol="RELIANCE.NS",
-        )
-        curr_state, _ = get_market_state("RELIANCE.NS")
-        if curr_state == "open":
-            assert fresh_meta.is_stale is False
-            assert fresh_meta.delay_label == "real-time"
-        else:
-            assert fresh_meta.market_state == "closed"
-            assert fresh_meta.delay_label == "last close"
+
+        # Pin market state to "open" so the freshness logic evaluates the actual timestamp
+        with patch("app.api.v1.market.get_market_state", return_value=("open", "Regular Trading")):
+            fresh_meta = _make_freshness(
+                source="Upstox",
+                quote_timestamp=fresh_ts,
+                market_or_symbol="RELIANCE.NS",
+            )
+        assert fresh_meta.is_stale is False
+        assert fresh_meta.delay_label == "real-time"
 
 
 class TestInMemoryCacheFallback:
