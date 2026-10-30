@@ -103,7 +103,7 @@ async def lifespan(app: FastAPI):
         logger.error("database_init_failed", error=str(e))
         if settings.is_production:
             raise RuntimeError(f"Database initialization failed in production: {e}")
-        # In development/testing, allow degraded operation without Postgres
+        # Don't crash in development/testing — allow degraded operation without Postgres
 
     # Initialize asyncpg pool (Phase 4 endpoints — raw SQL with fetchrow/fetch/execute)
     pg_pool = None
