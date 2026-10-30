@@ -129,7 +129,7 @@ async def list_invite_codes(request: Request, admin: UserContext = Depends(requi
         c = d.get("code") or ""
         # If code is stored as 64-char HMAC/SHA hash, present masked display prefix
         if len(c) == 64:
-            d["code"] = f"ARTH-••••-{c[-4:].upper()}"
+            d["code"] = "ARTH-[hashed — use regenerate to get plaintext]"
         res_rows.append(d)
     return res_rows
 
@@ -158,9 +158,11 @@ async def regenerate_invite_code(
 
     raw_code = _gen_code()
     code_hash = hash_invite_code(raw_code)
+    from datetime import timedelta
+    new_expires_at = datetime.now(timezone.utc) + timedelta(days=30)
     await db.execute(
-        "UPDATE invite_codes SET code = $1 WHERE id = $2",
-        code_hash, inv_uuid,
+        "UPDATE invite_codes SET code = $1, expires_at = $2 WHERE id = $3",
+        code_hash, new_expires_at, inv_uuid,
     )
     logger.info("invite_regenerated", admin=str(admin.user_id), invite_id=invite_id)
     return {

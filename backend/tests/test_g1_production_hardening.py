@@ -13,6 +13,7 @@ Deterministic regression tests verifying:
 9. Sanitized health check error responses
 """
 
+import os
 from datetime import datetime, timezone
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -212,12 +213,22 @@ async def test_fail_closed_auth_in_production():
 
 
 def test_invite_code_hashing():
-    """Invite code hashing produces consistent SHA-256 digests and case-insensitivity."""
-    raw = "arth-test-code-123"
-    hash1 = hash_invite_code(raw)
-    hash2 = hash_invite_code("ARTH-TEST-CODE-123")
-    assert hash1 == hash2
-    assert len(hash1) == 64  # SHA-256 hex string
+    """Invite code hashing uses INVITE_CODE_PEPPER and produces consistent 64-char HMAC hex."""
+    # Ensure a pepper is set so dev fallback is used (not raising RuntimeError)
+    with patch.dict(os.environ, {"INVITE_CODE_PEPPER": "test-pepper-for-unit-test"}):
+        # Reload settings so invite_code_pepper is picked up
+        from importlib import reload
+        import app.config as _cfg_mod
+        reload(_cfg_mod)
+        raw = "arth-test-code-123"
+        hash1 = hash_invite_code(raw)
+        hash2 = hash_invite_code("ARTH-TEST-CODE-123")
+        assert hash1 == hash2
+        assert len(hash1) == 64  # HMAC-SHA256 hex string
+        # Must NOT match bare SHA-256 (confirms pepper is in use)
+        import hashlib
+        bare_sha = hashlib.sha256(raw.lower().encode()).hexdigest()
+        assert hash1 != bare_sha
 
 
 # ── 6. Sanitized Health Check Responses ──────────────────────────────────
@@ -276,3 +287,37 @@ def test_computed_market_cap_metadata_attached():
     assert mcap > 0
     assert rec.as_of == "2024-10"
     assert "Bonus" in rec.source
+
+
+def test_debug_endpoint_no_longer_uses_yfinance():
+    """system.py /debug endpoint must not import yfinance or yahoo adapter."""
+    import inspect
+    from app.api.v1 import system as sys_module
+    src_text = inspect.getsource(sys_module)
+    assert "yfinance" not in src_text, "/debug still imports yfinance"
+    assert "_yf_session" not in src_text, "/debug still references _yf_session"
+    assert "make_ticker" not in src_text, "/debug still calls make_ticker"
+
+
+def test_hdfcbank_shares_updated_for_bonus_issue():
+    """HDFCBANK shares must reflect 1:1 bonus allotted Aug 28 2025 (approx 15.28B)."""
+    from app.data.market_data_provider import _INDIAN_SHARES_AUDIT
+    rec = _INDIAN_SHARES_AUDIT.get("HDFCBANK")
+    assert rec is not None
+    # Pre-bonus: 7.64B; post-bonus must be > 14B
+    assert rec.shares > 14_000_000_000, f"HDFCBANK shares {rec.shares:,.0f} look pre-bonus"
+    assert rec.as_of >= "2025-09", f"HDFCBANK as_of {rec.as_of!r} is stale — should be post-bonus"
+    assert "bonus" in rec.source.lower(), f"HDFCBANK source {rec.source!r} should mention bonus"
+
+
+def test_invite_code_pepper_required_in_production():
+    """hash_invite_code must raise RuntimeError in production if INVITE_CODE_PEPPER is empty."""
+    from app.core.auth import hash_invite_code
+    mock_settings = MagicMock()
+    mock_settings.is_production = True
+    mock_settings.invite_code_pepper = ""
+    # hash_invite_code calls `from app.config import get_settings` at call time,
+    # so the patch target is app.config.get_settings (not app.core.auth.get_settings)
+    with patch("app.config.get_settings", return_value=mock_settings):
+        with pytest.raises(RuntimeError, match="INVITE_CODE_PEPPER"):
+            hash_invite_code("any-code")

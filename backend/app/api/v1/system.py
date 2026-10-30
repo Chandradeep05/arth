@@ -213,10 +213,12 @@ async def get_metrics(request: Request):
 @router.get("/debug")
 async def get_debug(request: Request):
     """
-    Diagnostic endpoint — verify curl_cffi session and yfinance connectivity.
+    Diagnostic endpoint — provider routing, quota state, and NSE circuit state.
 
     Gated behind ADMIN_API_KEY header in production. Returns 403 if key
     is missing or incorrect when running in non-development environments.
+
+    Yahoo Finance is NOT a configured provider; this endpoint no longer tests it. Use /system/health for overall status.
     """
     from app.config import get_settings
 
@@ -234,26 +236,26 @@ async def get_debug(request: Request):
                 },
             )
 
-    from app.data.adapters.yahoo import _yf_session, make_ticker
+    from app.core.provider_quota import quota_governor
+    from app.data.market_data_provider import market_data
 
     result = {
-        "curl_cffi_session": _yf_session is not None,
-        "session_type": type(_yf_session).__name__ if _yf_session else "None",
+        "provider_routing": {
+            "RELIANCE.NS": market_data._get_chain("RELIANCE.NS", "quote"),
+            "AAPL": market_data._get_chain("AAPL", "quote"),
+        },
+        "quota_status": quota_governor.get_status(),
+        "upstox_enabled": settings.upstox_enabled if hasattr(settings, "upstox_enabled") else False,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
-    # Quick yfinance connectivity test
+    # NSE circuit state
     try:
-        ticker = make_ticker("AAPL")
-        info = ticker.info
-        result["yfinance_test"] = {
-            "symbol": "AAPL",
-            "price": info.get("regularMarketPrice"),
-            "name": info.get("shortName"),
-            "status": "ok" if info.get("regularMarketPrice") else "no_data",
-        }
+        from app.data.adapters.nse import NSESession
+        _nse_session = NSESession()
+        result["nse_circuit_state"] = _nse_session._circuit_state.value
     except Exception as e:
-        result["yfinance_test"] = {"status": "error", "error": str(e)}
+        result["nse_circuit_state"] = f"error: {e}"
 
     return result
 

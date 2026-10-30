@@ -103,6 +103,10 @@ class Settings(BaseSettings):
     # Without this, Render's shared IP gets 429'd by Yahoo immediately.
     yahoo_proxy_url: str = ""
 
+    # ── Invite Code Security ──
+    # Required in production. Fail-closed: invite creation raises if absent.
+    invite_code_pepper: str = ""
+
     # ── Twelve Data API (US stocks) ──
     # Free tier: 8 credits/min, 800/day. Used for US stocks only.
     # Indian stocks (NSE/BSE) still use yfinance (free tier doesn't cover India).
@@ -132,7 +136,7 @@ class Settings(BaseSettings):
     openai_embedding_model: str = "text-embedding-3-small"
 
     # ── Data Sources ──
-    yahoo_finance_enabled: bool = False     # Deprecated — migrated to MarketDataProvider (TwelveData, Finnhub, FMP, NSE)
+    yahoo_finance_enabled: bool = False     # Removed — Yahoo Finance excluded from all provider chains
     alpha_vantage_api_key: str = ""         # Phase 2+ placeholder
     alpha_vantage_daily_budget: int = 20    # Phase 2+ placeholder
     alpha_vantage_enabled: bool = False     # Phase 2+ — not active

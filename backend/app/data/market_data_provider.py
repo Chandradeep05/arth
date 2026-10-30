@@ -106,14 +106,14 @@ class ShareAuditRecord:
 _INDIAN_SHARES_AUDIT: Dict[str, ShareAuditRecord] = {
     "RELIANCE": ShareAuditRecord(13_532_453_400, "2024-10", "NSE/BSE (Post 1:1 Bonus Issue)"),
     "TCS": ShareAuditRecord(3_618_087_500, "2024-09", "BSE Shareholding Pattern"),
-    "HDFCBANK": ShareAuditRecord(7_643_190_000, "2024-09", "BSE Shareholding Pattern"),
+    "HDFCBANK": ShareAuditRecord(15_286_388_000, "2025-09", "BSE Shareholding Pattern Q2FY26 (post 1:1 bonus Aug 2025)"),
     "INFY": ShareAuditRecord(4_151_000_000, "2024-09", "NSE Shareholding Pattern"),
     "ICICIBANK": ShareAuditRecord(7_068_000_000, "2024-09", "BSE Shareholding Pattern"),
     "BHARTIARTL": ShareAuditRecord(5_984_000_000, "2024-09", "NSE Filing"),
     "SBIN": ShareAuditRecord(8_924_600_000, "2024-09", "NSE Filing"),
     "ITC": ShareAuditRecord(12_498_000_000, "2024-09", "NSE Shareholding Pattern"),
     "LT": ShareAuditRecord(1_375_000_000, "2024-09", "BSE Filing"),
-    "TATAMOTORS": ShareAuditRecord(3_681_000_000, "2024-09", "NSE Shareholding Pattern"),
+    "TATAMOTORS": ShareAuditRecord(3_704_420_000, "2025-09", "NSE Shareholding Pattern Q2FY26 (post DVR cancellation)"),
     "KOTAKBANK": ShareAuditRecord(1_988_000_000, "2024-09", "BSE Shareholding Pattern"),
     "HINDUNILVR": ShareAuditRecord(2_349_600_000, "2024-09", "BSE Shareholding Pattern"),
     "AXISBANK": ShareAuditRecord(3_090_000_000, "2024-09", "NSE Filing"),
@@ -432,8 +432,12 @@ class MarketDataProvider:
     async def get_history(self, symbol: str, period: str = '1y', interval: str = '1d') -> DataResult:
         symbol = self._normalize_symbol(symbol)
         chain = self._get_chain(symbol, "history")
+        redis_client = await self._get_redis()
         for provider in chain:
             try:
+                if not await quota_governor.acquire(provider, redis_client=redis_client):
+                    logger.warning("provider_quota_governor_blocked", provider=provider, symbol=symbol, call="history")
+                    continue
                 if provider == "twelvedata":
                     data = await self._twelve.get_ohlcv(symbol, period=period, interval=interval)
                 elif provider == "nse":
@@ -460,8 +464,12 @@ class MarketDataProvider:
         symbol = self._normalize_symbol(symbol)
         is_indian = symbol.endswith(('.NS', '.BO'))
         chain = self._get_chain(symbol, "company_info")
+        redis_client = await self._get_redis()
         for provider in chain:
             try:
+                if not await quota_governor.acquire(provider, redis_client=redis_client):
+                    logger.warning("provider_quota_governor_blocked", provider=provider, symbol=symbol, call="company_info")
+                    continue
                 if provider == "finnhub":
                     data = await self._finnhub.get_company_info(symbol)
                 elif provider == "twelvedata":
@@ -521,8 +529,12 @@ class MarketDataProvider:
     async def get_fundamentals(self, symbol: str) -> DataResult:
         symbol = self._normalize_symbol(symbol)
         chain = self._get_chain(symbol, "fundamentals")
+        redis_client = await self._get_redis()
         for provider in chain:
             try:
+                if not await quota_governor.acquire(provider, redis_client=redis_client):
+                    logger.warning("provider_quota_governor_blocked", provider=provider, symbol=symbol, call="fundamentals")
+                    continue
                 if provider == "finnhub":
                     data = await self._finnhub.get_fundamentals(symbol)
                 elif provider == "fmp":

@@ -119,7 +119,8 @@ async def _run_eval(db, redis, now: datetime) -> dict:
             active_symbols.add(sym)
 
     symbols = list(active_symbols)
-    prices = {}
+    prices = {}         # symbol -> price (float)
+    quote_sources = {}  # symbol -> provider name string
     cache_miss = 0
 
     for symbol in symbols:
@@ -135,6 +136,7 @@ async def _run_eval(db, redis, now: datetime) -> dict:
                                  (data.get("data") or {}).get("price"))
                         if price:
                             prices[symbol] = float(price)
+                            quote_sources[symbol] = data.get("provider") or data.get("source") or "cache"
                             break
                     except Exception:
                         continue
@@ -151,14 +153,20 @@ async def _run_eval(db, redis, now: datetime) -> dict:
             try:
                 res = await provider.get_quote(symbol)
                 quote_data = res.data if hasattr(res, "data") else res
+                actual_provider = getattr(res, "provider", None) or "unknown"
                 if quote_data and isinstance(quote_data, dict):
                     p = quote_data.get("price") or quote_data.get("close") or quote_data.get("last_price")
                     if p is not None and float(p) > 0:
                         prices[symbol] = float(p)
+                        # Use provider name from DataResult, not symbol suffix
+                        quote_sources[symbol] = actual_provider
                         cache_miss = max(0, cache_miss - 1)
                         if redis:
                             try:
-                                await redis.set(f"quote:{symbol}", json.dumps(quote_data, default=str), ex=300)
+                                # Include provider so cache reads can recover source
+                                cache_blob = dict(quote_data)
+                                cache_blob["provider"] = actual_provider
+                                await redis.set(f"quote:{symbol}", json.dumps(cache_blob, default=str), ex=300)
                             except Exception as cache_err:
                                 logger.warning("alert_eval_cache_write_failed", symbol=symbol, error=str(cache_err))
             except Exception as sym_err:
@@ -196,11 +204,16 @@ async def _run_eval(db, redis, now: datetime) -> dict:
                 if updated and updated != "UPDATE 0":
                     curr_sym = "₹" if symbol.endswith((".NS", ".BO")) else "$"
                     dir_sym = "≥" if direction == "above" else "≤"
-                    source_name = "Upstox" if symbol.endswith((".NS", ".BO")) else "TwelveData"
+                    # Use actual provider from DataResult, not guessed from symbol suffix
+                    actual_source = quote_sources.get(symbol, "unknown")
+                    # Get real session name from market state engine
+                    _, session_label = get_market_state(symbol, now)
+                    session_name = session_label if session_label else "Regular Trading"
+                    # Build human-readable body with real provenance
                     body_text = (
                         f"Price: {curr_sym}{current:.2f} | "
                         f"Target: {dir_sym} {curr_sym}{threshold:.2f} | "
-                        f"Session: Regular Trading | Source: {source_name}"
+                        f"Session: {session_name} | Source: {actual_source}"
                     )
                     await db.execute(
                         "INSERT INTO notifications (user_id, alert_id, title, body) VALUES ($1, $2, $3, $4)",

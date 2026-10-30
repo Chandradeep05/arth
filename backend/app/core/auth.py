@@ -41,12 +41,27 @@ logger = get_logger(__name__)
 
 
 def hash_invite_code(code: str) -> str:
-    """Hash invite code with HMAC-SHA256 using server secret to prevent offline rainbow table attacks."""
+    """
+    Hash invite code with HMAC-SHA256 using a dedicated INVITE_CODE_PEPPER.
+
+    Fail-closed: raises RuntimeError in production if INVITE_CODE_PEPPER is not set.
+    Never reuses jwt_secret_key or admin_api_key — rotating those must not silently
+    invalidate unredeemed invite codes.
+    """
     import hashlib
     import hmac
     from app.config import get_settings
     clean = str(code or "").strip().upper()
-    secret = (get_settings().jwt_secret_key or get_settings().admin_api_key or "arth-invite-secret-pepper-2026").encode("utf-8")
+    settings = get_settings()
+    pepper = settings.invite_code_pepper
+    if not pepper:
+        if settings.is_production:
+            raise RuntimeError(
+                "INVITE_CODE_PEPPER is not set. Set this env var in production before creating invite codes."
+            )
+        # Development/test fallback — never a production path
+        pepper = "arth-dev-only-pepper-not-for-production"
+    secret = pepper.encode("utf-8")
     return hmac.new(secret, clean.encode("utf-8"), hashlib.sha256).hexdigest()
 
 # Module-level JWKS client cache -- PyJWKClient caches public keys across requests.
