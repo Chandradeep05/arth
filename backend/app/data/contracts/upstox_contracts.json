@@ -1,0 +1,67 @@
+{
+  "_metadata": {
+    "provider": "Upstox",
+    "endpoint": "/v2/fundamentals/{isin}/key-ratios",
+    "contract_version": "v2",
+    "captured_symbols": ["RELIANCE", "TCS", "INFY"],
+    "unit_semantics": {
+      "debt_to_equity": "Direct decimal ratio (e.g. 0.37x). Must NOT be divided by 100.",
+      "pe_ratio": "Direct decimal multiple (e.g. 24.5x).",
+      "pb_ratio": "Direct decimal multiple (e.g. 2.1x).",
+      "roe": "Percentage expressed as float (e.g. 9.8 for 9.8%).",
+      "roa": "Percentage expressed as float (e.g. 5.2 for 5.2%).",
+      "current_ratio": "Direct decimal ratio (e.g. 1.25x).",
+      "market_cap": "Absolute INR value."
+    }
+  },
+  "contracts": {
+    "RELIANCE": {
+      "isin": "INE002A01018",
+      "symbol": "RELIANCE.NS",
+      "data": {
+        "ratios": [
+          {"name": "Price to Earnings (P/E)", "value": 24.8, "unit": "x"},
+          {"name": "Price to Book (P/B)", "value": 2.15, "unit": "x"},
+          {"name": "Debt to Equity", "value": 0.37, "unit": "ratio"},
+          {"name": "Return on Equity (ROE)", "value": 9.45, "unit": "%"},
+          {"name": "Return on Assets (ROA)", "value": 5.12, "unit": "%"},
+          {"name": "Current Ratio", "value": 1.18, "unit": "ratio"},
+          {"name": "Interest Coverage Ratio", "value": 6.84, "unit": "x"},
+          {"name": "Operating Margin", "value": 14.2, "unit": "%"}
+        ]
+      }
+    },
+    "TCS": {
+      "isin": "INE467B01029",
+      "symbol": "TCS.NS",
+      "data": {
+        "ratios": [
+          {"name": "Price to Earnings (P/E)", "value": 31.2, "unit": "x"},
+          {"name": "Price to Book (P/B)", "value": 13.8, "unit": "x"},
+          {"name": "Debt to Equity", "value": 0.08, "unit": "ratio"},
+          {"name": "Return on Equity (ROE)", "value": 48.5, "unit": "%"},
+          {"name": "Return on Assets (ROA)", "value": 32.1, "unit": "%"},
+          {"name": "Current Ratio", "value": 2.45, "unit": "ratio"},
+          {"name": "Interest Coverage Ratio", "value": 85.0, "unit": "x"},
+          {"name": "Operating Margin", "value": 24.8, "unit": "%"}
+        ]
+      }
+    },
+    "INFY": {
+      "isin": "INE009A01021",
+      "symbol": "INFY.NS",
+      "data": {
+        "ratios": [
+          {"name": "Price to Earnings (P/E)", "value": 26.4, "unit": "x"},
+          {"name": "Price to Book (P/B)", "value": 8.1, "unit": "x"},
+          {"name": "Debt to Equity", "value": 0.11, "unit": "ratio"},
+          {"name": "Return on Equity (ROE)", "value": 31.8, "unit": "%"},
+          {"name": "Return on Assets (ROA)", "value": 21.4, "unit": "%"},
+          {"name": "Current Ratio", "value": 2.10, "unit": "ratio"},
+          {"name": "Interest Coverage Ratio", "value": 42.6, "unit": "x"},
+          {"name": "Operating Margin", "value": 21.1, "unit": "%"}
+        ]
+      }
+    }
+  }
+}

@@ -161,87 +161,40 @@ class SentimentEngine:
             else:
                 neutral_count += 1
 
-        # ── 2. Analyze company description ──
-        if company and company.get("description"):
-            desc = company["description"].lower()
-            score = self._keyword_score(desc)
-            label = "bullish" if score > 0.1 else "bearish" if score < -0.1 else "neutral"
-            weight = 0.6  # Lower weight for static description
-            sources.append({
-                "title": f"{company_name} — Company Profile",
-                "source": "yahoo_finance",
-                "url": None,
-                "sentiment": label,
-                "score": round(score, 3),
-                "published_at": datetime.now(timezone.utc).isoformat(),
-                "credibility_weight": 0.8,
-                "time_decay": 1.0,
-                "effective_weight": round(weight, 3),
-            })
-            total_weighted_score += score * weight
-            total_weight += weight
-            if label == "bullish":
-                bullish_count += 1
-            elif label == "bearish":
-                bearish_count += 1
-            else:
-                neutral_count += 1
-
-        # ── 3. Analyze financial metrics ──
-        if company:
-            metrics = company.get("metrics", {})
-            metric_sources = self._analyze_metrics(symbol, metrics)
-            for src in metric_sources:
-                sources.append(src)
-                total_weighted_score += src["score"] * src.get("credibility_weight", 0.5)
-                total_weight += src.get("credibility_weight", 0.5)
-                if src["sentiment"] == "bullish":
-                    bullish_count += 1
-                elif src["sentiment"] == "bearish":
-                    bearish_count += 1
-                else:
-                    neutral_count += 1
-
-        # ── Compute overall sentiment ──
-        total = bullish_count + bearish_count + neutral_count
-        if total == 0:
-            total = 1
-
-        bullish_pct = bullish_count / total * 100
-        bearish_pct = bearish_count / total * 100
-        neutral_pct = neutral_count / total * 100
-
-        # Weighted overall score: -1 to +1
-        overall = total_weighted_score / total_weight if total_weight > 0 else 0
-
-        # Confidence scales with number of sources
         news_available = len(news_items) > 0
-        confidence = min(85.0, total * 8.0 + (20 if len(news_items) > 3 else 0))
-        if not news_available and not company:
-            confidence = 0.0
 
-        # Label based on score and confidence
-        if confidence < 40:
-            if overall > 0.3:
-                label = "Slightly Bullish"
-            elif overall < -0.3:
-                label = "Slightly Bearish"
-            else:
+        # If real news exists, sentiment is driven by news
+        if news_available:
+            total = bullish_count + bearish_count + neutral_count
+            bullish_pct = (bullish_count / total * 100) if total > 0 else 0
+            bearish_pct = (bearish_count / total * 100) if total > 0 else 0
+            neutral_pct = (neutral_count / total * 100) if total > 0 else 100
+            overall = total_weighted_score / total_weight if total_weight > 0 else 0
+            confidence = min(85.0, total * 10.0 + (15 if len(news_items) > 3 else 0))
+
+            if confidence < 35:
                 label = "Neutral"
-        else:
-            if overall > 0.2:
+            elif overall > 0.2:
                 label = "Bullish"
             elif overall < -0.2:
                 label = "Bearish"
             else:
                 label = "Neutral"
+        else:
+            # No news available — honest reporting
+            bullish_pct = 0.0
+            bearish_pct = 0.0
+            neutral_pct = 0.0
+            overall = 0.0
+            confidence = 0.0
+            label = "Neutral"
 
         methodology = (
-            "Phase 2: News + fundamentals keyword analysis "
+            "Phase 2: Real-time news sentiment analysis "
             "with source credibility weighting and time decay."
         )
-        if not news_available and not sources:
-            methodology += " (News analysis currently unavailable)"
+        if not news_available:
+            methodology += " (No recent news coverage available for this asset)"
 
         return {
             "symbol": symbol.upper(),
@@ -271,10 +224,11 @@ class SentimentEngine:
         return []
 
     def _keyword_score(self, text: str) -> float:
-        """Score text based on keyword frequency. Returns -1 to +1."""
-        words = set(text.lower().split())
-        bull = len(words & BULLISH_KEYWORDS)
-        bear = len(words & BEARISH_KEYWORDS)
+        """Score text based on keyword frequency with punctuation stripping. Returns -1 to +1."""
+        import re
+        tokens = set(re.findall(r"\b[a-z]+\b", text.lower()))
+        bull = len(tokens & BULLISH_KEYWORDS)
+        bear = len(tokens & BEARISH_KEYWORDS)
         total = bull + bear
         if total == 0:
             return 0.0

@@ -22,12 +22,15 @@ from fastapi import APIRouter, Depends, Request
 
 from app.core.auth import require_internal_secret
 from app.core.logging import get_logger
+from app.core.market_calendar import get_market_state
 
 logger = get_logger(__name__)
 router = APIRouter(prefix="/internal", tags=["internal"])
 
 ALERT_EVAL_LOCK = "alert_eval_lock"
 ALERT_EVAL_LOCK_TTL = 120  # seconds
+_in_process_eval_lock = asyncio.Lock()
+_last_eval_time = [0.0]
 
 
 @router.post("/jobs/evaluate-alerts")
@@ -46,6 +49,24 @@ async def evaluate_alerts(
             content={"skipped": True, "reason": "Database pool unavailable — check asyncpg connection"},
         )
     now = datetime.now(timezone.utc)
+    now_epoch = time.time()
+
+    # Deduplication & cooldown guard (prevents redundant executions across dual schedulers)
+    # NOTE: The cooldown timestamp is recorded AFTER _run_eval completes (not before) so that
+    # a crashed or failed evaluation does not block retries for 120s.
+    if redis:
+        last_run = await redis.get("alert_eval_last_run")
+        if last_run:
+            try:
+                if (now_epoch - float(last_run)) < 120.0:
+                    logger.info("alert_eval_skipped_cooldown", elapsed=round(now_epoch - float(last_run), 1))
+                    return {"skipped": True, "reason": "Evaluated recently within 120s cooldown"}
+            except Exception:
+                pass
+    else:
+        if (now_epoch - _last_eval_time[0]) < 120.0:
+            logger.info("alert_eval_skipped_cooldown_in_process", elapsed=round(now_epoch - _last_eval_time[0], 1))
+            return {"skipped": True, "reason": "Evaluated recently within 120s cooldown"}
 
     if redis:
         lock_token = secrets.token_hex(16)
@@ -53,11 +74,18 @@ async def evaluate_alerts(
         if not acquired:
             logger.info("alert_eval_skipped_locked")
             return {"skipped": True, "reason": "Another evaluation running"}
+    else:
+        if _in_process_eval_lock.locked():
+            logger.info("alert_eval_skipped_locked_in_process")
+            return {"skipped": True, "reason": "Another evaluation running (in-process)"}
 
-    try:
-        return await _run_eval(db, redis, now)
-    finally:
-        if redis:
+    if redis:
+        try:
+            result = await _run_eval(db, redis, now)
+            # Record completion time AFTER successful eval so failures remain retryable
+            await redis.set("alert_eval_last_run", str(now_epoch), ex=300)
+            return result
+        finally:
             _RELEASE_LOCK_LUA = """
             if redis.call('get', KEYS[1]) == ARGV[1] then
                 return redis.call('del', KEYS[1])
@@ -66,6 +94,12 @@ async def evaluate_alerts(
             end
             """
             await redis.eval(_RELEASE_LOCK_LUA, 1, ALERT_EVAL_LOCK, lock_token)
+    else:
+        async with _in_process_eval_lock:
+            result = await _run_eval(db, redis, now)
+            # Record completion time AFTER successful eval so failures remain retryable
+            _last_eval_time[0] = now_epoch
+            return result
 
 
 async def _run_eval(db, redis, now: datetime) -> dict:
@@ -77,8 +111,23 @@ async def _run_eval(db, redis, now: datetime) -> dict:
     if not alerts:
         return {"run_id": run_id, "evaluated": 0, "triggered": 0, "skipped_no_cache": 0}
 
-    symbols = list({row["symbol"] for row in alerts})
-    prices = {}
+    all_symbols = list({row["symbol"] for row in alerts})
+    active_symbols = set()
+    skipped_market_closed = 0
+
+    # Market-aware session gate: strictly evaluate symbols whose exchanges are currently OPEN
+    # Normalize symbol: symbols without an exchange suffix default to US market (no dot = NASDAQ/NYSE)
+    for sym in all_symbols:
+        mstate, _ = get_market_state(sym, now)
+        if mstate != "open":
+            skipped_market_closed += 1
+            logger.debug("alert_skipped_market_not_open", symbol=sym, state=mstate)
+        else:
+            active_symbols.add(sym)
+
+    symbols = list(active_symbols)
+    prices = {}         # symbol -> price (float)
+    quote_sources = {}  # symbol -> provider name string
     cache_miss = 0
 
     for symbol in symbols:
@@ -94,6 +143,7 @@ async def _run_eval(db, redis, now: datetime) -> dict:
                                  (data.get("data") or {}).get("price"))
                         if price:
                             prices[symbol] = float(price)
+                            quote_sources[symbol] = data.get("provider") or data.get("source") or "cache"
                             break
                     except Exception:
                         continue
@@ -110,14 +160,20 @@ async def _run_eval(db, redis, now: datetime) -> dict:
             try:
                 res = await provider.get_quote(symbol)
                 quote_data = res.data if hasattr(res, "data") else res
+                actual_provider = getattr(res, "source", None) or "unknown"
                 if quote_data and isinstance(quote_data, dict):
                     p = quote_data.get("price") or quote_data.get("close") or quote_data.get("last_price")
                     if p is not None and float(p) > 0:
                         prices[symbol] = float(p)
+                        # Use provider name from DataResult, not symbol suffix
+                        quote_sources[symbol] = actual_provider
                         cache_miss = max(0, cache_miss - 1)
                         if redis:
                             try:
-                                await redis.set(f"quote:{symbol}", json.dumps(quote_data, default=str), ex=300)
+                                # Include provider so cache reads can recover source
+                                cache_blob = dict(quote_data)
+                                cache_blob["provider"] = actual_provider
+                                await redis.set(f"quote:{symbol}", json.dumps(cache_blob, default=str), ex=300)
                             except Exception as cache_err:
                                 logger.warning("alert_eval_cache_write_failed", symbol=symbol, error=str(cache_err))
             except Exception as sym_err:
@@ -144,20 +200,35 @@ async def _run_eval(db, redis, now: datetime) -> dict:
         if condition and state == "armed":
             direction = "above" if atype == "price_above" else "below"
             # Atomic: state transition is the authoritative idempotency guard.
-            # If UPDATE matches 0 rows, another evaluator already triggered.
+            # If UPDATE matches 0 rows, another evaluator already triggered — or the alert config
+            # changed between our SELECT and this UPDATE (alert_type/threshold guard prevents
+            # an obsolete evaluation from firing on a freshly edited alert).
             async with db.transaction():
                 updated = await db.execute(
                     "UPDATE alerts SET trigger_state = $1, last_evaluated_value = $2, last_triggered_at = $3 "
-                    "WHERE id = $4 AND trigger_state = 'armed'",
-                    "triggered", current, now, alert["id"],
+                    "WHERE id = $4 AND trigger_state = 'armed' AND alert_type = $5 AND threshold = $6",
+                    "triggered", current, now, alert["id"], atype, threshold,
                 )
                 # Only insert notification if we actually flipped the state
                 if updated and updated != "UPDATE 0":
+                    curr_sym = "₹" if symbol.endswith((".NS", ".BO")) else "$"
+                    dir_sym = "≥" if direction == "above" else "≤"
+                    # Use actual provider from DataResult, not guessed from symbol suffix
+                    actual_source = quote_sources.get(symbol, "unknown")
+                    # Get real session name from market state engine
+                    _, session_label = get_market_state(symbol, now)
+                    session_name = session_label if session_label else "Regular Trading"
+                    # Build human-readable body with real provenance
+                    body_text = (
+                        f"Price: {curr_sym}{current:.2f} | "
+                        f"Target: {dir_sym} {curr_sym}{threshold:.2f} | "
+                        f"Session: {session_name} | Source: {actual_source}"
+                    )
                     await db.execute(
                         "INSERT INTO notifications (user_id, alert_id, title, body) VALUES ($1, $2, $3, $4)",
                         alert["user_id"], alert["id"],
-                        f"{symbol} {direction} {threshold}",
-                        f"Price: {current:.2f} | Threshold: {threshold:.2f}",
+                        f"{symbol} crossed {direction} {curr_sym}{threshold:.2f}",
+                        body_text,
                     )
                     triggered += 1
                     logger.info("alert_triggered", symbol=symbol, price=current, threshold=threshold)
@@ -182,6 +253,7 @@ async def _run_eval(db, redis, now: datetime) -> dict:
         "evaluated": evaluated,
         "triggered": triggered,
         "notifications_created": triggered,
+        "skipped_market_closed": skipped_market_closed,
         "provider_errors": provider_errors,
         "skipped_no_cache": cache_miss,
         "unpriced_symbols": unpriced,

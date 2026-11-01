@@ -18,11 +18,12 @@ from pydantic import BaseModel, Field, model_validator
 
 class FreshnessMetadata(BaseModel):
     """Attached to every data response — drives the DataFreshness UI component."""
-    source: str = Field(description="Data source name (e.g., 'yahoo_finance')")
-    timestamp: datetime = Field(description="When this data was fetched")
+    source: str = Field(description="Data source name")
+    timestamp: Optional[datetime] = Field(default=None, description="When this quote occurred")
     is_stale: bool = Field(default=False, description="True if data exceeds freshness threshold")
     delay_label: str = Field(default="~15s delayed", description="Human-readable delay description")
     cache_hit: bool = Field(default=False, description="Whether this was served from cache")
+    market_state: Optional[str] = Field(default=None, description="Market session state ('open', 'closed')")
 
 
 class APIResponse(BaseModel):
@@ -43,13 +44,16 @@ class StockQuote(BaseModel):
     change: float
     change_percent: float
     volume: int
-    high: float
-    low: float
-    open: float
-    previous_close: float
+    high: Optional[float] = None
+    low: Optional[float] = None
+    open: Optional[float] = None
+    previous_close: Optional[float] = None
     market_cap: Optional[float] = None
+    market_cap_source: Optional[str] = None
+    market_cap_as_of: Optional[str] = None
+    market_cap_source_doc: Optional[str] = None
     pe_ratio: Optional[float] = None
-    timestamp: datetime
+    timestamp: Optional[datetime] = None
     exchange: str
     market: str  # "india" or "us"
     currency: str = "INR"

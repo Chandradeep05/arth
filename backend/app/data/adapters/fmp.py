@@ -94,6 +94,13 @@ class FMPAdapter(BaseDataAdapter):
                     return None
 
                 data = resp.json()
+                if len(_cache) > 500:
+                    expired = [k for k, v in _cache.items() if now >= v[1]]
+                    for k in expired:
+                        _cache.pop(k, None)
+                    if len(_cache) > 500:
+                        for k in list(_cache.keys())[:100]:
+                            _cache.pop(k, None)
                 _cache[cache_key] = (data, now + _CACHE_TTL_STATEMENTS)
                 return data
 
@@ -196,6 +203,7 @@ class FMPAdapter(BaseDataAdapter):
 
 
     async def get_quote(self, symbol: str) -> Optional[Dict[str, Any]]:
+        """FMP user quote display is disabled by default to comply with third-party redistribution licensing."""
         return None
 
     async def get_ohlcv(self, symbol: str, period: str = "1mo", interval: str = "1d") -> Optional[List[Dict[str, Any]]]:

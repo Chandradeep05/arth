@@ -313,7 +313,7 @@ class YahooFinanceAdapter(BaseDataAdapter):
                     "revenue": info.get("totalRevenue"),
                     "revenue_growth": info.get("revenueGrowth"),
                     "profit_margin": info.get("profitMargins"),
-                    "debt_to_equity": info.get("debtToEquity"),
+                    "debt_to_equity": round(float(info["debtToEquity"]) / 100.0, 4) if info.get("debtToEquity") is not None else None,
                     "dividend_yield": info.get("dividendYield"),
                     "book_value": info.get("bookValue"),
                     "roe": info.get("returnOnEquity"),

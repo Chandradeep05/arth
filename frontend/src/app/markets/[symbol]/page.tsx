@@ -66,6 +66,11 @@ export default function StockDetailPage() {
   const [loading, setLoading] = useState(true);
   const [lastUpdated, setLastUpdated] = useState<Date>(new Date());
   const [activeTimeframe, setActiveTimeframe] = useState<string>('3M');
+  const [freshnessMetadata, setFreshnessMetadata] = useState<{
+    market_state?: string;
+    delay_label?: string;
+    is_stale?: boolean;
+  } | null>(null);
 
   const fetchOhlcv = useCallback(async (period: string = '3mo', interval: string = '1d') => {
     try {
@@ -107,6 +112,17 @@ export default function StockDetailPage() {
       if (ohlcvRes.status === 'fulfilled') {
         const d = ohlcvRes.value.data;
         setOhlcv(Array.isArray(d) ? d : []);
+      }
+
+      // Fetch per-symbol freshness metadata from the quote endpoint (best-effort)
+      try {
+        const fRes = await apiClient.get<{
+          freshness?: { market_state?: string; delay_label?: string; is_stale?: boolean };
+        }>(`/api/v1/market/quote/${encodeURIComponent(symbol)}`);
+        const freshness = (fRes as any)?.freshness;
+        if (freshness) setFreshnessMetadata(freshness);
+      } catch {
+        // Freshness metadata is optional -- ignore failure
       }
 
       setLoading(false);
@@ -174,7 +190,13 @@ export default function StockDetailPage() {
         </div>
 
         <div className="flex items-center gap-3">
-          <DataFreshness timestamp={lastUpdated} thresholdMs={60000} />
+          <DataFreshness
+            timestamp={quote?.timestamp ?? lastUpdated}
+            thresholdMs={60000}
+            marketState={freshnessMetadata?.market_state}
+            delayLabel={freshnessMetadata?.delay_label}
+            isStale={freshnessMetadata?.is_stale}
+          />
           <button
             onClick={fetchAll}
             className="p-2 rounded-xl bg-white/[0.03] border border-white/[0.06] text-[var(--text-muted)] hover:text-white hover:bg-white/[0.08] transition-all cursor-pointer"
@@ -220,19 +242,19 @@ export default function StockDetailPage() {
               <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-4 text-xs font-mono pt-2">
                 <div className="p-2 rounded-lg bg-white/[0.02] border border-white/[0.04]">
                   <span className="text-[10px] text-[var(--text-dim)] uppercase tracking-wider block">Open</span>
-                  <span className="text-white font-medium">{currency}{formatNumber(quote.open)}</span>
+                  <span className="text-white font-medium">{quote.open != null ? `${currency}${formatNumber(quote.open)}` : '—'}</span>
                 </div>
                 <div className="p-2 rounded-lg bg-white/[0.02] border border-white/[0.04]">
                   <span className="text-[10px] text-[var(--text-dim)] uppercase tracking-wider block">High</span>
-                  <span className="text-white font-medium">{currency}{formatNumber(quote.high)}</span>
+                  <span className="text-white font-medium">{quote.high != null ? `${currency}${formatNumber(quote.high)}` : '—'}</span>
                 </div>
                 <div className="p-2 rounded-lg bg-white/[0.02] border border-white/[0.04]">
                   <span className="text-[10px] text-[var(--text-dim)] uppercase tracking-wider block">Low</span>
-                  <span className="text-white font-medium">{currency}{formatNumber(quote.low)}</span>
+                  <span className="text-white font-medium">{quote.low != null ? `${currency}${formatNumber(quote.low)}` : '—'}</span>
                 </div>
                 <div className="p-2 rounded-lg bg-white/[0.02] border border-white/[0.04]">
                   <span className="text-[10px] text-[var(--text-dim)] uppercase tracking-wider block">Prev Close</span>
-                  <span className="text-white font-medium">{currency}{formatNumber(quote.previous_close)}</span>
+                  <span className="text-white font-medium">{quote.previous_close != null ? `${currency}${formatNumber(quote.previous_close)}` : '—'}</span>
                 </div>
                 <div className="p-2 rounded-lg bg-white/[0.02] border border-white/[0.04]">
                   <span className="text-[10px] text-[var(--text-dim)] uppercase tracking-wider block">Volume</span>

@@ -249,8 +249,8 @@ try:
 
     # US symbols: should include appropriate providers
     chain_aapl_quote = mdp._get_chain("AAPL", "quote")
-    test("AAPL quote chain: twelvedata + finnhub",
-         chain_aapl_quote == ["twelvedata", "finnhub"],
+    test("AAPL quote chain: twelvedata + finnhub (or + fmp)",
+         chain_aapl_quote in [["twelvedata", "finnhub"], ["twelvedata", "finnhub", "fmp"]],
          f"got {chain_aapl_quote}")
 
     chain_aapl_news = mdp._get_chain("AAPL", "news")
@@ -264,8 +264,8 @@ try:
          f"got {chain_aapl_financials}")
 
     chain_aapl_company = mdp._get_chain("AAPL", "company_info")
-    test("AAPL company_info chain: finnhub + twelvedata",
-         chain_aapl_company == ["finnhub", "twelvedata"],
+    test("AAPL company_info chain: finnhub + twelvedata (or + fmp)",
+         chain_aapl_company in [["finnhub", "twelvedata"], ["finnhub", "twelvedata", "fmp"]],
          f"got {chain_aapl_company}")
 
     # Verify singleton usage

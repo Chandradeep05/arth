@@ -99,7 +99,8 @@ function StockMoverCard({ stock, index }: { stock: StockMover; index: number }) 
 }
 
 /* ── Helper: format number with commas ── */
-function formatNumber(n: number): string {
+function formatNumber(n: number | null | undefined): string {
+  if (n == null || isNaN(n)) return '—';
   return new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 }).format(n);
 }
 
@@ -446,7 +447,7 @@ export default function DashboardPage() {
               Active Feeds
             </div>
             <p className="text-xs text-[var(--text-dim)] font-mono">
-              Live market quotes via Twelve Data &amp; NSE
+              Live market quotes via Upstox &amp; Twelve Data
             </p>
           </div>
 

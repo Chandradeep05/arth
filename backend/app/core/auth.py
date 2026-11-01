@@ -39,6 +39,31 @@ from app.core.logging import get_logger
 
 logger = get_logger(__name__)
 
+
+def hash_invite_code(code: str) -> str:
+    """
+    Hash invite code with HMAC-SHA256 using a dedicated INVITE_CODE_PEPPER.
+
+    Fail-closed: raises RuntimeError in production if INVITE_CODE_PEPPER is not set.
+    Never reuses jwt_secret_key or admin_api_key — rotating those must not silently
+    invalidate unredeemed invite codes.
+    """
+    import hashlib
+    import hmac
+    from app.config import get_settings
+    clean = str(code or "").strip().upper()
+    settings = get_settings()
+    pepper = settings.invite_code_pepper
+    if not pepper:
+        if settings.is_production:
+            raise RuntimeError(
+                "INVITE_CODE_PEPPER is not set. Set this env var in production before creating invite codes."
+            )
+        # Development/test fallback — never a production path
+        pepper = "arth-dev-only-pepper-not-for-production"
+    secret = pepper.encode("utf-8")
+    return hmac.new(secret, clean.encode("utf-8"), hashlib.sha256).hexdigest()
+
 # Module-level JWKS client cache -- PyJWKClient caches public keys across requests.
 # Supabase JWKS endpoint: {supabase_url}/auth/v1/.well-known/jwks.json
 _jwks_clients: dict = {}
@@ -245,13 +270,14 @@ async def _auto_generate_invite(user_id: UUID, email: str, db) -> None:
     chars = string.ascii_uppercase + string.digits
     code = "".join(secrets.choice(chars) for _ in range(10))
 
-    # Store the invite code linked to this pending user
+    code_hash = hash_invite_code(code)
+    # Store the hashed invite code linked to this pending user (never plaintext)
     await db.execute(
         """
         INSERT INTO invite_codes (code, created_by, expires_at)
         VALUES ($1, $2, $3)
         """,
-        code,
+        code_hash,
         user_id,
         datetime.now(timezone.utc) + timedelta(days=30),
     )
@@ -308,7 +334,18 @@ async def _send_invite_email(email: str, code: str) -> None:
             message="Invite code issued for user",
         )
     except Exception as e:
-        logger.warning("invite_email_send_failed", error=str(e), email=email)
+        # Delivery failed. Do NOT log the plaintext invite code — it was already hashed in the DB
+        # and leaking it here would undo the HMAC hashing entirely.
+        # The admin must use POST /api/v1/admin/invite-codes/{id}/regenerate to issue a new code.
+        logger.warning(
+            "invite_email_send_failed",
+            error=str(e),
+            email=email,
+            action=(
+                "Email delivery failed. Use POST /api/v1/admin/invite-codes/{id}/regenerate "
+                "to generate a new plaintext code and resend it manually."
+            ),
+        )
 
 
 # == FastAPI Dependencies =====================================================
@@ -347,7 +384,10 @@ async def get_current_user(
                     user_id, email, display_name, conn
                 )
         else:
-            # Fallback when pg_pool is not initialized (e.g. unit tests without DB)
+            if settings.is_production:
+                logger.error("auth_database_pool_unavailable_in_production", user_id=str(user_id))
+                raise HTTPException(status_code=503, detail="Authentication service temporarily unavailable")
+            # Fallback when pg_pool is not initialized (strictly local dev / unit tests without DB)
             access_status = "active" if not settings.invite_only_mode else "pending"
             role = "admin" if email and email == settings.initial_admin_email else "user"
     return UserContext(
