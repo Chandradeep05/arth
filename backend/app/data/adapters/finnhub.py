@@ -194,7 +194,10 @@ class FinnhubAdapter(BaseDataAdapter):
         # 'totalDebt/totalEquityQuarterly' / 'totalDebt/totalEquityAnnual': direct ratio (e.g. 1.45), NOT a percentage.
         # 'debtToEquityAnnual' / 'debtToEquityQuarterly': also a direct ratio.
         # Do NOT divide by 100 -- the API returns the ratio as-is in all known response shapes.
-        raw_de = m.get("totalDebt/totalEquityQuarterly") or m.get("totalDebt/totalEquityAnnual")
+        # Use explicit None check — `or` would treat a real D/E of 0.0 (zero-debt company) as missing.
+        raw_de = m.get("totalDebt/totalEquityQuarterly")
+        if raw_de is None:
+            raw_de = m.get("totalDebt/totalEquityAnnual")
         if raw_de is not None:
             try:
                 de = round(float(raw_de), 4)

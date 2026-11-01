@@ -31,9 +31,9 @@ interface Notification {
   is_read: boolean;
   created_at: string;
   symbol?: string;
-  alert_type?: 'price_above' | 'price_below';
-  threshold?: number;
-  last_evaluated_value?: number;
+  // alert_type, threshold, last_evaluated_value intentionally excluded:
+  // the API no longer returns mutable alert fields in notifications to prevent
+  // historical notifications from reflecting later alert edits.
   currency?: string;
 }
 
@@ -345,9 +345,8 @@ export default function AlertsPage() {
             {notifications.map((notif) => {
               // Extract symbol from notification or parse from title
               const displaySymbol = notif.symbol || (notif.title ? notif.title.split(' ')[0] : 'ALERT');
-              // Prefer alert_type field over title-text parsing for direction (title text is user-facing and may change)
-              const isCrossAbove = notif.alert_type === 'price_above'
-                || (notif.alert_type == null && notif.title != null && notif.title.includes('above'));
+              // Notification direction is derived from immutable title snapshot (e.g. "crossed above")
+              const isCrossAbove = Boolean(notif.title && notif.title.includes('above'));
               // URL-encode symbol for safe routing
               const encodedSymbol = displaySymbol ? encodeURIComponent(displaySymbol) : null;
 

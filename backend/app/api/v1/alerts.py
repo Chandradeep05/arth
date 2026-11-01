@@ -192,9 +192,14 @@ async def toggle_alert(alert_id: UUID, body: ToggleAlertRequest, request: Reques
 @notifications_router.get("")
 async def list_notifications(request: Request, limit: int = Query(default=20, le=100), cursor: Optional[UUID] = None, user: UserContext = Depends(require_active_user)) -> dict:
     db = request.state.db
+    # NOTE: We deliberately do NOT select a.alert_type, a.threshold, a.last_evaluated_value
+    # from the alerts table here. Those fields are mutable — if an alert is later edited,
+    # joining them would make old notifications reflect the new (wrong) alert config.
+    # n.title and n.body were captured at trigger time and are the immutable historical record.
+    # a.symbol is safe to join because alert symbols are never changed after creation.
     query = """
         SELECT n.id, n.alert_id, n.title, n.body, n.is_read, n.created_at,
-               a.symbol, a.alert_type, a.threshold, a.last_evaluated_value
+               a.symbol
         FROM notifications n
         LEFT JOIN alerts a ON n.alert_id = a.id
         WHERE n.user_id = $1

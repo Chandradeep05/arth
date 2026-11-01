@@ -104,6 +104,20 @@ async def lifespan(app: FastAPI):
             "Configure it in the Render environment variables and redeploy."
         )
 
+    # Fail-fast for other required production secrets — better to crash at startup with a clear
+    # message than to surface a 500 error on the first invite or admin action.
+    if settings.is_production:
+        if not settings.invite_code_pepper:
+            raise RuntimeError(
+                "INVITE_CODE_PEPPER is required in production but is not set. "
+                "Generate a random 32-byte hex string and add it to Render environment variables."
+            )
+        if not settings.admin_api_key:
+            raise RuntimeError(
+                "ADMIN_API_KEY is required in production but is not set. "
+                "Set it in the Render environment variables and redeploy."
+            )
+
     # Initialize SQLAlchemy (Phase 1-3 endpoints)
     try:
         await init_db(settings)

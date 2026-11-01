@@ -334,15 +334,17 @@ async def _send_invite_email(email: str, code: str) -> None:
             message="Invite code issued for user",
         )
     except Exception as e:
-        # If delivery fails, log the plaintext code at WARNING so admin can recover it from logs.
-        # This is the only point where the plaintext is available after hashing — once this
-        # function returns, the code cannot be recovered without calling the regenerate endpoint.
+        # Delivery failed. Do NOT log the plaintext invite code — it was already hashed in the DB
+        # and leaking it here would undo the HMAC hashing entirely.
+        # The admin must use POST /api/v1/admin/invite-codes/{id}/regenerate to issue a new code.
         logger.warning(
             "invite_email_send_failed",
             error=str(e),
             email=email,
-            recovery_code=code,  # noqa: S001 — intentional: admin must be able to recover
-            action="Use the regenerate endpoint or copy this code from logs to send manually",
+            action=(
+                "Email delivery failed. Use POST /api/v1/admin/invite-codes/{id}/regenerate "
+                "to generate a new plaintext code and resend it manually."
+            ),
         )
 
 

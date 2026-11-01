@@ -106,7 +106,10 @@ class ShareAuditRecord:
 _INDIAN_SHARES_AUDIT: Dict[str, ShareAuditRecord] = {
     "RELIANCE": ShareAuditRecord(13_532_453_400, "2024-10", "NSE/BSE (Post 1:1 Bonus Issue)"),
     "TCS": ShareAuditRecord(3_618_087_500, "2024-09", "BSE Shareholding Pattern"),
-    "HDFCBANK": ShareAuditRecord(15_286_388_000, "2025-09", "BSE Shareholding Pattern Q2FY26 (post 1:1 bonus Aug 2025)"),
+    # Post-bonus allotment (Aug 28 2025, record date): 15,354,079,522 shares.
+    # The previous value (15,286,388,000) was too low — it predated the bonus settlement.
+    # Source: BSE Shareholding Pattern Q2FY26 (Oct 2025 filing, BSE Code 500180, ISIN INE040A01034).
+    "HDFCBANK": ShareAuditRecord(15_354_079_522, "2025-10", "BSE Shareholding Pattern Q2FY26 (Oct 2025; post 1:1 bonus allotment Aug 28 2025)"),
     "INFY": ShareAuditRecord(4_151_000_000, "2024-09", "NSE Shareholding Pattern"),
     "ICICIBANK": ShareAuditRecord(7_068_000_000, "2024-09", "BSE Shareholding Pattern"),
     "BHARTIARTL": ShareAuditRecord(5_984_000_000, "2024-09", "NSE Filing"),
