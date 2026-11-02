@@ -116,6 +116,12 @@ class NSESession:
             if not self._initialized or (now - self._cookie_time) > self._cookie_ttl:
                 await self._refresh_cookies()
 
+            # Outbound request boundary: check and acquire central quota governor
+            from app.core.provider_quota import quota_governor
+            if not await quota_governor.acquire("nse"):
+                logger.warning("nse_quota_governor_blocked", endpoint=endpoint)
+                return None
+
             try:
                 resp = await self._client.get(
                     f"{_API_BASE}/{endpoint}",

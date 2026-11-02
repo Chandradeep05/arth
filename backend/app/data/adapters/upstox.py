@@ -173,6 +173,12 @@ class UpstoxAdapter(BaseDataAdapter):
         token = _get_token()
         if not token:
             raise RuntimeError("Upstox token not configured")
+
+        # Outbound request boundary: check and acquire central quota governor
+        from app.core.provider_quota import quota_governor
+        if not await quota_governor.acquire("upstox"):
+            logger.warning("upstox_quota_governor_blocked", endpoint=endpoint)
+            return None
             
         headers = {
             "Authorization": f"Bearer {token}",

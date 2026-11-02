@@ -104,6 +104,7 @@ class TwelveDataAdapter(BaseDataAdapter):
     async def _throttled_request(
         self, endpoint: str, params: Dict[str, Any],
         cache_key: Optional[str] = None, cache_ttl: float = _CACHE_TTL_QUOTE,
+        quota_count: int = 1,
     ) -> Optional[Dict[str, Any]]:
         """Make a rate-limited, cached API request.
 
@@ -111,7 +112,7 @@ class TwelveDataAdapter(BaseDataAdapter):
         Does NOT raise — prevents circuit breaker from treating
         rate limits as outages.
         """
-        # Check cache first
+        # Check cache first — cache hits consume ZERO provider quota
         if cache_key:
             cached = self._cache_get(cache_key)
             if cached is not None:
@@ -138,6 +139,13 @@ class TwelveDataAdapter(BaseDataAdapter):
             # Re-check cooldown (might have been set while waiting for semaphore)
             if self._cache_get("_rate_limit_cooldown"):
                 return None
+
+            # Outbound request boundary: check and acquire central quota governor
+            if quota_count > 0:
+                from app.core.provider_quota import quota_governor
+                if not await quota_governor.acquire("twelvedata", count=quota_count):
+                    logger.warning("twelvedata_quota_governor_blocked", endpoint=endpoint, count=quota_count)
+                    return None
 
             now = time.monotonic()
             elapsed = now - _last_request_time[0]
@@ -379,21 +387,35 @@ class TwelveDataAdapter(BaseDataAdapter):
         """Batch-fetch quotes in chunks of 8 (free tier = 8 credits/min).
 
         Each symbol costs 1 credit. Comma-separated symbols in one call
-        still cost 1 credit per symbol. So we chunk and cache aggressively.
+        still cost 1 credit per symbol.
+        Cache checks are performed first so only actual misses consume quota.
         """
         all_results = []
+        missing_symbols = []
 
-        # Split into chunks of _MAX_BATCH_SIZE
-        for i in range(0, len(symbols), _MAX_BATCH_SIZE):
+        # 1. Check cache for individually cached symbols first (0 quota cost)
+        for sym in symbols:
+            cached_quote = self._cache_get(f"quote:{sym}")
+            if cached_quote is not None:
+                all_results.append(cached_quote)
+            else:
+                missing_symbols.append(sym)
+
+        if not missing_symbols:
+            logger.debug("twelvedata_batch_all_cached", count=len(symbols))
+            return all_results
+
+        # 2. Split missing symbols into chunks of _MAX_BATCH_SIZE (8)
+        for i in range(0, len(missing_symbols), _MAX_BATCH_SIZE):
             # If we're already rate-limited, stop — return what we have so far
             if self._cache_get("_rate_limit_cooldown"):
                 logger.info("twelvedata_batch_stopping_early", reason="rate_limited", fetched=len(all_results))
                 break
 
-            chunk = symbols[i:i + _MAX_BATCH_SIZE]
+            chunk = missing_symbols[i:i + _MAX_BATCH_SIZE]
             chunk_key = f"batch:{'|'.join(sorted(chunk))}"
 
-            # Check cache for this exact chunk
+            # Check cache for this exact chunk if previously cached together
             cached = self._cache_get(chunk_key)
             if cached is not None:
                 all_results.extend(cached)
@@ -401,8 +423,9 @@ class TwelveDataAdapter(BaseDataAdapter):
 
             async def _fetch_chunk(syms=chunk):
                 symbol_str = ",".join(syms)
+                # Pass quota_count=len(syms) so quota governor acquires 1 credit per symbol in chunk
                 data = await self._throttled_request(
-                    "quote", {"symbol": symbol_str},
+                    "quote", {"symbol": symbol_str}, quota_count=len(syms),
                 )
                 if data is None:
                     return []
@@ -434,7 +457,7 @@ class TwelveDataAdapter(BaseDataAdapter):
                         raw_high = _safe_float(item.get("high"), 0)
                         raw_low = _safe_float(item.get("low"), 0)
 
-                        results.append({
+                        parsed = {
                             "symbol": item.get("symbol", ""),
                             "name": item.get("name", ""),
                             "price": round(price, 2),
@@ -448,14 +471,18 @@ class TwelveDataAdapter(BaseDataAdapter):
                             "market_cap": None,
                             "pe_ratio": None,
                             "timestamp": (
-                    datetime.fromtimestamp(int(item["timestamp"]), tz=timezone.utc)
-                    if item.get("timestamp") and str(item["timestamp"]).isdigit()
-                    else None
-                ),
+                                datetime.fromtimestamp(int(item["timestamp"]), tz=timezone.utc)
+                                if item.get("timestamp") and str(item["timestamp"]).isdigit()
+                                else None
+                            ),
                             "exchange": item.get("exchange", "NASDAQ"),
                             "market": "us",
                             "currency": item.get("currency", "USD"),
-                        })
+                        }
+                        results.append(parsed)
+                        # Also cache individually so subsequent single get_quote or batch calls hit cache!
+                        if parsed.get("symbol"):
+                            self._cache_set(f"quote:{parsed['symbol']}", parsed, _CACHE_TTL_QUOTE)
                     except (ValueError, TypeError):
                         continue
 
@@ -471,7 +498,7 @@ class TwelveDataAdapter(BaseDataAdapter):
                 logger.warning("twelvedata_batch_chunk_failed", error=str(e))
 
             # Brief pause between chunks to be polite (NOT 60s)
-            if i + _MAX_BATCH_SIZE < len(symbols):
+            if i + _MAX_BATCH_SIZE < len(missing_symbols):
                 await asyncio.sleep(2)
 
         return all_results

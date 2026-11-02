@@ -81,6 +81,12 @@ class FMPAdapter(BaseDataAdapter):
                 await asyncio.sleep(_MIN_REQUEST_INTERVAL - elapsed)
             _last_request_time[0] = time.time()
 
+            # Outbound request boundary: check and acquire central quota governor
+            from app.core.provider_quota import quota_governor
+            if not await quota_governor.acquire("fmp"):
+                logger.warning("fmp_quota_governor_blocked", endpoint=endpoint)
+                return None
+
             client = _get_client()
             full_params = {**params, "apikey": api_key}
 

@@ -51,15 +51,25 @@ class ProviderQuotaGovernor:
         # In-memory daily tracking: (provider, date_str) -> count
         self._daily_counts: Dict[Tuple[str, str], int] = {}
 
-    async def acquire(self, provider: str, redis_client=None) -> bool:
+    async def acquire(self, provider: str, redis_client=None, count: int = 1) -> bool:
         """
-        Attempt to acquire 1 request token for the given provider.
+        Attempt to acquire `count` request tokens for the given provider.
         Returns True if within budget, False if quota exceeded.
         """
+        if count <= 0:
+            return True
+
         prov = provider.lower().strip()
         limits = PROVIDER_LIMITS.get(prov)
         if not limits:
             return True  # Unregulated provider
+
+        if redis_client is None:
+            try:
+                from app.dependencies import _redis_client
+                redis_client = _redis_client
+            except Exception:
+                pass
 
         now_utc = datetime.now(timezone.utc)
         today_str = now_utc.strftime("%Y-%m-%d")
@@ -73,29 +83,38 @@ class ProviderQuotaGovernor:
                 if limits.per_minute is not None:
                     epoch_min = int(now_epoch // 60)
                     minute_key = f"quota:provider:{prov}:min:{epoch_min}"
-                    used_min = await redis_client.incr(minute_key)
-                    if used_min == 1:
+                    used_min = await redis_client.incrby(minute_key, count)
+                    if used_min == count:
                         await redis_client.expire(minute_key, 120)
                     if used_min > limits.per_minute:
+                        try:
+                            await redis_client.decrby(minute_key, count)
+                        except Exception:
+                            pass
                         logger.warning(
                             "provider_minute_quota_exceeded",
                             provider=prov,
                             used=used_min,
                             limit=limits.per_minute,
+                            count=count,
                         )
                         return False
 
                 # 2. Daily limit check (only reached if minute check passed)
                 if limits.per_day is not None:
                     daily_key = f"quota:provider:{prov}:daily:{today_str}"
-                    used_today = await redis_client.incr(daily_key)
-                    if used_today == 1:
+                    used_today = await redis_client.incrby(daily_key, count)
+                    if used_today == count:
                         await redis_client.expire(daily_key, 90000)
                     if used_today > limits.per_day:
+                        try:
+                            await redis_client.decrby(daily_key, count)
+                        except Exception:
+                            pass
                         # Rollback minute counter since daily cap is hit
                         if minute_key:
                             try:
-                                await redis_client.decr(minute_key)
+                                await redis_client.decrby(minute_key, count)
                             except Exception:
                                 pass
                         logger.warning(
@@ -103,6 +122,7 @@ class ProviderQuotaGovernor:
                             provider=prov,
                             used=used_today,
                             limit=limits.per_day,
+                            count=count,
                         )
                         return False
 
@@ -117,12 +137,13 @@ class ProviderQuotaGovernor:
             if limits.per_day is not None:
                 day_key = (prov, today_str)
                 current_day_count = self._daily_counts.get(day_key, 0)
-                if current_day_count >= limits.per_day:
+                if current_day_count + count > limits.per_day:
                     logger.warning(
                         "provider_in_memory_daily_quota_exceeded",
                         provider=prov,
                         used=current_day_count,
                         limit=limits.per_day,
+                        count=count,
                     )
                     return False
 
@@ -131,24 +152,31 @@ class ProviderQuotaGovernor:
                 window_start = now_epoch - 60.0
                 calls = self._minute_calls.get(prov, [])
                 calls = [t for t in calls if t > window_start]
-                if len(calls) >= limits.per_minute:
+                if len(calls) + count > limits.per_minute:
                     logger.warning(
                         "provider_in_memory_minute_quota_exceeded",
                         provider=prov,
                         used=len(calls),
                         limit=limits.per_minute,
+                        count=count,
                     )
                     self._minute_calls[prov] = calls
                     return False
-                calls.append(now_epoch)
+                for _ in range(count):
+                    calls.append(now_epoch)
                 self._minute_calls[prov] = calls
 
             # Increment daily
             if limits.per_day is not None:
                 day_key = (prov, today_str)
-                self._daily_counts[day_key] = self._daily_counts.get(day_key, 0) + 1
+                self._daily_counts[day_key] = self._daily_counts.get(day_key, 0) + count
 
             return True
+
+    def reset(self) -> None:
+        """Reset in-memory counters (useful for unit testing)."""
+        self._minute_calls.clear()
+        self._daily_counts.clear()
 
     def get_status(self) -> Dict[str, dict]:
         """Return current in-memory quota usage for health/metrics display."""

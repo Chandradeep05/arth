@@ -354,9 +354,8 @@ class MarketDataProvider:
         redis_client = await self._get_redis()
         for provider in chain:
             try:
-                if not await quota_governor.acquire(provider, redis_client=redis_client):
-                    logger.warning("provider_quota_governor_blocked", provider=provider, symbol=symbol)
-                    continue
+                # Quota is governed inside each adapter at the outbound HTTP boundary AFTER cache checks,
+                # ensuring that cache hits consume 0 quota tokens across all endpoints.
                 if provider == "twelvedata":
                     data = await self._twelve.get_quote(symbol)
                 elif provider == "nse":
@@ -434,9 +433,6 @@ class MarketDataProvider:
         redis_client = await self._get_redis()
         for provider in chain:
             try:
-                if not await quota_governor.acquire(provider, redis_client=redis_client):
-                    logger.warning("provider_quota_governor_blocked", provider=provider, symbol=symbol, call="history")
-                    continue
                 if provider == "twelvedata":
                     data = await self._twelve.get_ohlcv(symbol, period=period, interval=interval)
                 elif provider == "nse":
@@ -466,9 +462,6 @@ class MarketDataProvider:
         redis_client = await self._get_redis()
         for provider in chain:
             try:
-                if not await quota_governor.acquire(provider, redis_client=redis_client):
-                    logger.warning("provider_quota_governor_blocked", provider=provider, symbol=symbol, call="company_info")
-                    continue
                 if provider == "finnhub":
                     data = await self._finnhub.get_company_info(symbol)
                 elif provider == "twelvedata":
@@ -531,9 +524,6 @@ class MarketDataProvider:
         redis_client = await self._get_redis()
         for provider in chain:
             try:
-                if not await quota_governor.acquire(provider, redis_client=redis_client):
-                    logger.warning("provider_quota_governor_blocked", provider=provider, symbol=symbol, call="fundamentals")
-                    continue
                 if provider == "finnhub":
                     data = await self._finnhub.get_fundamentals(symbol)
                 elif provider == "fmp":
