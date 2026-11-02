@@ -200,66 +200,81 @@ class TwelveDataAdapter(BaseDataAdapter):
                 logger.error("twelvedata_http_error", endpoint=endpoint, error=str(e))
                 raise
 
+    @staticmethod
+    def _parse_quote_payload(data: dict, fallback_symbol: str = "") -> Optional[Dict[str, Any]]:
+        """Parse a raw Twelve Data /quote JSON object into the normalized quote dictionary.
+
+        Shared by both single get_quote and batch get_batch_quotes to guarantee schema
+        consistency and avoid cache-collision between raw API payloads and parsed outputs.
+        """
+        if not data or not isinstance(data, dict):
+            return None
+        if data.get("status") == "error":
+            return None
+        if "close" not in data:
+            return None
+
+        def _safe_float(val, fallback=0.0):
+            """Parse to float, returning fallback for empty/missing/invalid."""
+            if val is None or val == "":
+                return fallback
+            try:
+                return float(val)
+            except (ValueError, TypeError):
+                return fallback
+
+        price_raw = data.get("close")
+        if price_raw is None or str(price_raw).strip() == "":
+            return None
+        price = _safe_float(price_raw, 0)
+        if price <= 0:
+            return None
+
+        prev_close_raw = data.get("previous_close")
+        prev_close = _safe_float(prev_close_raw, 0) if prev_close_raw is not None else None
+        change = _safe_float(data.get("change"), 0)
+        change_pct = _safe_float(data.get("percent_change"), 0)
+
+        raw_open = _safe_float(data.get("open"), 0)
+        raw_high = _safe_float(data.get("high"), 0)
+        raw_low = _safe_float(data.get("low"), 0)
+
+        quote_ts = None
+        raw_ts = data.get("timestamp")
+        if raw_ts and str(raw_ts).isdigit():
+            quote_ts = datetime.fromtimestamp(int(raw_ts), tz=timezone.utc)
+
+        sym = data.get("symbol", fallback_symbol)
+
+        return {
+            "symbol": sym.upper() if sym else "",
+            "name": data.get("name", sym),
+            "price": round(price, 2),
+            "change": round(change, 2),
+            "change_percent": round(change_pct, 2),
+            "volume": int(_safe_float(data.get("volume"), 0)),
+            "high": round(raw_high, 2) if raw_high > 0 else None,
+            "low": round(raw_low, 2) if raw_low > 0 else None,
+            "open": round(raw_open, 2) if raw_open > 0 else None,
+            "previous_close": round(prev_close, 2) if prev_close is not None else None,
+            "market_cap": None,  # Not in /quote, needs /statistics (paid)
+            "pe_ratio": None,    # Not in /quote
+            "timestamp": quote_ts,
+            "exchange": data.get("exchange", "NASDAQ"),
+            "market": "us",
+            "currency": data.get("currency", "USD"),
+        }
+
     async def get_quote(self, symbol: str) -> Optional[Dict[str, Any]]:
         """Get US stock quote from Twelve Data /quote endpoint."""
 
         async def _fetch():
+            # Stores and reads the RAW Twelve Data API payload under quote:{symbol}
             data = await self._throttled_request(
                 "quote", {"symbol": symbol},
                 cache_key=f"quote:{symbol}", cache_ttl=_CACHE_TTL_QUOTE,
             )
-            if data is None or "close" not in data:
-                return None
-
-            def _safe_float(val, fallback=0.0):
-                """Parse to float, returning fallback for empty/missing/invalid."""
-                if val is None or val == "":
-                    return fallback
-                try:
-                    return float(val)
-                except (ValueError, TypeError):
-                    return fallback
-
-            price_raw = data.get("close")
-            if price_raw is None or str(price_raw).strip() == "":
-                return None
-            price = _safe_float(price_raw, 0)
-            if price <= 0:
-                return None
-
-            prev_close_raw = data.get("previous_close")
-            prev_close = _safe_float(prev_close_raw, 0) if prev_close_raw is not None else None
-            change = _safe_float(data.get("change"), 0)
-            change_pct = _safe_float(data.get("percent_change"), 0)
-
-            raw_open = _safe_float(data.get("open"), 0)
-            raw_high = _safe_float(data.get("high"), 0)
-            raw_low = _safe_float(data.get("low"), 0)
-
-            quote_ts = (
-                datetime.fromtimestamp(int(data["timestamp"]), tz=timezone.utc)
-                if data.get("timestamp") and str(data["timestamp"]).isdigit()
-                else None
-            )
-
-            return {
-                "symbol": data.get("symbol", symbol).upper(),
-                "name": data.get("name", symbol),
-                "price": round(price, 2),
-                "change": round(change, 2),
-                "change_percent": round(change_pct, 2),
-                "volume": int(_safe_float(data.get("volume"), 0)),
-                "high": round(raw_high, 2) if raw_high > 0 else None,
-                "low": round(raw_low, 2) if raw_low > 0 else None,
-                "open": round(raw_open, 2) if raw_open > 0 else None,
-                "previous_close": round(prev_close, 2) if prev_close is not None else None,
-                "market_cap": None,  # Not in /quote, needs /statistics (paid)
-                "pe_ratio": None,    # Not in /quote
-                "timestamp": quote_ts,
-                "exchange": data.get("exchange", "NASDAQ"),
-                "market": "us",
-                "currency": data.get("currency", "USD"),
-            }
+            return self._parse_quote_payload(data, fallback_symbol=symbol)
 
         return await self.execute_with_resilience(_fetch)
 
@@ -393,16 +408,23 @@ class TwelveDataAdapter(BaseDataAdapter):
         all_results = []
         missing_symbols = []
 
-        # 1. Check cache for individually cached symbols first (0 quota cost)
-        for sym in symbols:
-            cached_quote = self._cache_get(f"quote:{sym}")
-            if cached_quote is not None:
-                all_results.append(cached_quote)
-            else:
-                missing_symbols.append(sym)
+        # Deduplicate symbols while preserving order
+        unique_symbols = list(dict.fromkeys(symbols))
+
+        # 1. Check cache for individually cached symbols first (0 quota cost).
+        # We store the RAW Twelve Data item under quote:{symbol}. Parse with _parse_quote_payload
+        # so single-quote and batch paths share the exact same raw payload representation.
+        for sym in unique_symbols:
+            cached_raw = self._cache_get(f"quote:{sym}")
+            if cached_raw is not None and isinstance(cached_raw, dict):
+                parsed = self._parse_quote_payload(cached_raw, fallback_symbol=sym)
+                if parsed:
+                    all_results.append(parsed)
+                    continue
+            missing_symbols.append(sym)
 
         if not missing_symbols:
-            logger.debug("twelvedata_batch_all_cached", count=len(symbols))
+            logger.debug("twelvedata_batch_all_cached", count=len(unique_symbols))
             return all_results
 
         # 2. Split missing symbols into chunks of _MAX_BATCH_SIZE (8)
@@ -416,9 +438,9 @@ class TwelveDataAdapter(BaseDataAdapter):
             chunk_key = f"batch:{'|'.join(sorted(chunk))}"
 
             # Check cache for this exact chunk if previously cached together
-            cached = self._cache_get(chunk_key)
-            if cached is not None:
-                all_results.extend(cached)
+            cached_chunk = self._cache_get(chunk_key)
+            if cached_chunk is not None and cached_chunk:
+                all_results.extend(cached_chunk)
                 continue
 
             async def _fetch_chunk(syms=chunk):
@@ -427,72 +449,39 @@ class TwelveDataAdapter(BaseDataAdapter):
                 data = await self._throttled_request(
                     "quote", {"symbol": symbol_str}, quota_count=len(syms),
                 )
-                if data is None:
+                if not data or not isinstance(data, dict):
                     return []
 
-                results = []
-                if isinstance(data, dict) and "symbol" in data:
-                    items = [data]
-                elif isinstance(data, dict):
-                    items = [v for v in data.values()
-                             if isinstance(v, dict) and "symbol" in v]
+                if "symbol" in data:
+                    raw_items = [data]
                 else:
-                    return []
+                    raw_items = [v for v in data.values()
+                                 if isinstance(v, dict) and "symbol" in v]
 
-                for item in items:
-                    if item.get("status") == "error":
+                chunk_results = []
+                for raw_item in raw_items:
+                    if raw_item.get("status") == "error":
                         continue
-                    try:
-                        def _safe_float(val, fallback=0.0):
-                            if val is None or val == "":
-                                return fallback
-                            try:
-                                return float(val)
-                            except (ValueError, TypeError):
-                                return fallback
+                    # 1. Cache the RAW per-symbol payload under quote:{symbol}
+                    # This guarantees that a subsequent single get_quote(sym) reads
+                    # the exact same raw dictionary structure!
+                    item_sym = raw_item.get("symbol", "")
+                    if item_sym:
+                        self._cache_set(f"quote:{item_sym}", raw_item, _CACHE_TTL_QUOTE)
 
-                        price = _safe_float(item.get("close"), 0)
-                        prev_close = _safe_float(item.get("previous_close"), price)
-                        raw_open = _safe_float(item.get("open"), 0)
-                        raw_high = _safe_float(item.get("high"), 0)
-                        raw_low = _safe_float(item.get("low"), 0)
+                    # 2. Parse with the shared parser function
+                    parsed = self._parse_quote_payload(raw_item, fallback_symbol=item_sym)
+                    if parsed:
+                        chunk_results.append(parsed)
 
-                        parsed = {
-                            "symbol": item.get("symbol", ""),
-                            "name": item.get("name", ""),
-                            "price": round(price, 2),
-                            "change": round(_safe_float(item.get("change"), 0), 2),
-                            "change_percent": round(_safe_float(item.get("percent_change"), 0), 2),
-                            "volume": int(_safe_float(item.get("volume"), 0)),
-                            "high": round(raw_high if raw_high > 0 else price, 2),
-                            "low": round(raw_low if raw_low > 0 else price, 2),
-                            "open": round(raw_open if raw_open > 0 else prev_close, 2),
-                            "previous_close": round(prev_close, 2),
-                            "market_cap": None,
-                            "pe_ratio": None,
-                            "timestamp": (
-                                datetime.fromtimestamp(int(item["timestamp"]), tz=timezone.utc)
-                                if item.get("timestamp") and str(item["timestamp"]).isdigit()
-                                else None
-                            ),
-                            "exchange": item.get("exchange", "NASDAQ"),
-                            "market": "us",
-                            "currency": item.get("currency", "USD"),
-                        }
-                        results.append(parsed)
-                        # Also cache individually so subsequent single get_quote or batch calls hit cache!
-                        if parsed.get("symbol"):
-                            self._cache_set(f"quote:{parsed['symbol']}", parsed, _CACHE_TTL_QUOTE)
-                    except (ValueError, TypeError):
-                        continue
-
-                return results
+                return chunk_results
 
             try:
                 chunk_results = await self.execute_with_resilience(_fetch_chunk)
                 chunk_results = chunk_results or []
-                # Cache the chunk results
-                self._cache_set(chunk_key, chunk_results, _CACHE_TTL_QUOTE)
+                # NEVER cache empty results: quota denials or errors must remain retryable
+                if chunk_results:
+                    self._cache_set(chunk_key, chunk_results, _CACHE_TTL_QUOTE)
                 all_results.extend(chunk_results)
             except Exception as e:
                 logger.warning("twelvedata_batch_chunk_failed", error=str(e))

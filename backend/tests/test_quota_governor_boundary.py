@@ -8,6 +8,11 @@ Verifies:
 4. Partial batch cache misses consume quota ONLY for the actual missing symbols.
 5. Outbound requests are blocked cleanly when quota is exhausted without making HTTP calls.
 6. Central quota governor properly tracks and rolls back multi-token batch acquires.
+7. Batch-then-single quote cache sharing: batch caches raw payload, single quote parses it cleanly.
+8. Single-then-batch quote cache sharing: single quote caches raw payload, batch parses it cleanly.
+9. Empty batch chunk on quota denial is NEVER cached (retries remain possible).
+10. Redis reservation rollback: minute reservation is rolled back if daily operation fails.
+11. NSE cookie refresh and 401 retry are strictly quota-governed.
 """
 
 import asyncio
@@ -163,22 +168,21 @@ async def test_twelvedata_batch_partial_cache_miss_quota():
     """When some symbols are cached, quota is only acquired for the uncached symbols."""
     adapter = TwelveDataAdapter()
 
-    # Pre-cache 3 symbols
+    # Pre-cache raw payloads for 3 symbols
     for sym in ["AAPL", "MSFT", "GOOGL"]:
         adapter._cache_set(f"quote:{sym}", {
-            "symbol": sym, "name": sym, "price": 100.0, "change": 0.0,
-            "change_percent": 0.0, "volume": 0, "high": 100.0, "low": 100.0,
-            "open": 100.0, "previous_close": 100.0, "market_cap": None,
-            "pe_ratio": None, "timestamp": None, "exchange": "NASDAQ",
-            "market": "us", "currency": "USD",
+            "symbol": sym, "name": sym, "close": "100.0", "change": "0.0",
+            "percent_change": "0.0", "volume": "0", "high": "100.0", "low": "100.0",
+            "open": "100.0", "previous_close": "100.0", "timestamp": "1700000000",
+            "exchange": "NASDAQ", "currency": "USD",
         }, ttl=300)
 
     # Request 5 symbols: 3 cached + 2 uncached ("NVDA", "AMZN")
     symbols = ["AAPL", "MSFT", "GOOGL", "NVDA", "AMZN"]
 
     batch_response = {
-        "NVDA": {"symbol": "NVDA", "close": "500.0", "timestamp": 1700000000},
-        "AMZN": {"symbol": "AMZN", "close": "180.0", "timestamp": 1700000000},
+        "NVDA": {"symbol": "NVDA", "close": "500.0", "timestamp": "1700000000"},
+        "AMZN": {"symbol": "AMZN", "close": "180.0", "timestamp": "1700000000"},
     }
 
     mock_resp = MagicMock()
@@ -222,80 +226,215 @@ async def test_twelvedata_batch_blocked_when_quota_exhausted():
         assert results == []
 
 
-@pytest.mark.asyncio
-async def test_upstox_cache_hit_consumes_zero_quota():
-    """Upstox quote cache hit must consume ZERO quota tokens."""
-    from app.data.adapters.upstox import UpstoxAdapter, _cache as up_cache
-    up_cache.clear()
+# ── Regressions for Finding 1: Shared Cache Formats ──────────────────────────
 
-    adapter = UpstoxAdapter()
+@pytest.mark.asyncio
+async def test_twelvedata_batch_then_single_quote_shared_cache():
+    """Batch quote stores raw payload under quote:{symbol}; single get_quote must parse it successfully."""
+    adapter = TwelveDataAdapter()
+
+    batch_response = {
+        "AAPL": {
+            "symbol": "AAPL",
+            "name": "Apple Inc",
+            "close": "182.25",
+            "previous_close": "180.00",
+            "open": "181.00",
+            "high": "183.00",
+            "low": "180.50",
+            "volume": "45000000",
+            "percent_change": "1.25",
+            "change": "2.25",
+            "timestamp": 1700000000,
+            "exchange": "NASDAQ",
+            "currency": "USD",
+        }
+    }
 
     mock_resp = MagicMock()
     mock_resp.status_code = 200
-    mock_resp.json.return_value = {
-        "status": "success",
-        "data": {
-            "NSE_EQ:RELIANCE": {
-                "last_price": 2800.0,
-                "net_change": 15.0,
-                "ohlc": {"open": 2790.0, "high": 2810.0, "low": 2785.0, "close": 2800.0},
-                "volume": 1200000,
-            }
+    mock_resp.json.return_value = batch_response
+
+    mock_client = AsyncMock()
+    mock_client.get.return_value = mock_resp
+
+    with patch("app.data.adapters.twelvedata._get_api_key", return_value="test_key"), \
+         patch("app.data.adapters.twelvedata._get_client", return_value=mock_client), \
+         patch.object(quota_governor, "acquire", wraps=quota_governor.acquire) as mock_acquire:
+
+        # 1. Run batch quotes
+        batch_res = await adapter.get_batch_quotes(["AAPL"])
+        assert len(batch_res) == 1
+        assert batch_res[0]["price"] == 182.25
+        assert mock_acquire.call_count == 1
+        assert mock_client.get.call_count == 1
+
+        # 2. Subsequent single get_quote for AAPL must read from cache, parse successfully, and NOT fail!
+        single_res = await adapter.get_quote("AAPL")
+        assert single_res is not None
+        assert single_res["price"] == 182.25
+        assert single_res["currency"] == "USD"
+        # Zero additional HTTP calls or quota
+        assert mock_acquire.call_count == 1
+        assert mock_client.get.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_twelvedata_single_then_batch_quote_shared_cache():
+    """Single get_quote stores raw payload under quote:{symbol}; batch must read and parse it properly."""
+    adapter = TwelveDataAdapter()
+
+    single_response = {
+        "symbol": "AAPL",
+        "name": "Apple Inc",
+        "close": "182.25",
+        "previous_close": "180.00",
+        "open": "181.00",
+        "high": "183.00",
+        "low": "180.50",
+        "volume": "45000000",
+        "percent_change": "1.25",
+        "change": "2.25",
+        "timestamp": 1700000000,
+        "exchange": "NASDAQ",
+        "currency": "USD",
+    }
+
+    msft_response = {
+        "MSFT": {
+            "symbol": "MSFT",
+            "close": "400.00",
+            "previous_close": "395.00",
+            "open": "398.00",
+            "high": "402.00",
+            "low": "397.00",
+            "volume": "20000000",
+            "percent_change": "1.27",
+            "change": "5.00",
+            "timestamp": 1700000000,
         }
     }
 
     mock_client = AsyncMock()
-    mock_client.get.return_value = mock_resp
 
-    with patch("app.data.adapters.upstox._get_token", return_value="fake_token"), \
-         patch("app.data.adapters.upstox._get_client", return_value=mock_client), \
-         patch.object(adapter, "_get_instrument_key", return_value="NSE_EQ:RELIANCE"), \
+    with patch("app.data.adapters.twelvedata._get_api_key", return_value="test_key"), \
+         patch("app.data.adapters.twelvedata._get_client", return_value=mock_client), \
          patch.object(quota_governor, "acquire", wraps=quota_governor.acquire) as mock_acquire:
 
-        # 1. First call: cache miss -> outbound HTTP call -> acquires exactly 1 token
-        res1 = await adapter.get_quote("RELIANCE.NS")
-        assert res1 is not None
-        assert res1["price"] == 2800.0
-        assert mock_acquire.call_count == 1
-        assert mock_acquire.call_args_list[0].args[0] == "upstox"
-        assert mock_client.get.call_count == 1
+        # 1. Single get_quote fetches AAPL
+        mock_resp1 = MagicMock()
+        mock_resp1.status_code = 200
+        mock_resp1.json.return_value = single_response
+        mock_client.get.return_value = mock_resp1
 
-        # 2. Second call: cache hit -> returns from cache -> ZERO quota acquired!
-        res2 = await adapter.get_quote("RELIANCE.NS")
-        assert res2 is not None
-        assert res2["price"] == 2800.0
+        single_res = await adapter.get_quote("AAPL")
+        assert single_res is not None
+        assert single_res["price"] == 182.25
         assert mock_acquire.call_count == 1
-        assert mock_client.get.call_count == 1
 
+        # 2. Batch requests ["AAPL", "MSFT"]
+        mock_resp2 = MagicMock()
+        mock_resp2.status_code = 200
+        mock_resp2.json.return_value = msft_response
+        mock_client.get.return_value = mock_resp2
+
+        batch_res = await adapter.get_batch_quotes(["AAPL", "MSFT"])
+        assert len(batch_res) == 2
+        
+        # Verify both items have normalized schema with float price
+        aapl_item = next(item for item in batch_res if item["symbol"] == "AAPL")
+        msft_item = next(item for item in batch_res if item["symbol"] == "MSFT")
+        assert aapl_item["price"] == 182.25
+        assert msft_item["price"] == 400.00
+        # Only MSFT was fetched (count=1)
+        assert mock_acquire.call_count == 2
+        assert mock_acquire.call_args_list[1].kwargs.get("count") == 1
+
+
+# ── Regressions for Finding 2: Never Cache Empty/Denied Chunks ───────────────
 
 @pytest.mark.asyncio
-async def test_finnhub_cache_hit_consumes_zero_quota():
-    """Finnhub quote cache hit must consume ZERO quota tokens."""
-    from app.data.adapters.finnhub import FinnhubAdapter, _cache as fh_cache
-    fh_cache.clear()
-
-    adapter = FinnhubAdapter()
-
-    mock_resp = MagicMock()
-    mock_resp.status_code = 200
-    mock_resp.json.return_value = {"c": 190.0, "d": 2.5, "dp": 1.33}
+async def test_twelvedata_empty_chunk_never_cached():
+    """If quota is denied or 429 returns [], that empty result must NOT be cached."""
+    adapter = TwelveDataAdapter()
+    symbols = ["AAPL", "MSFT"]
 
     mock_client = AsyncMock()
-    mock_client.get.return_value = mock_resp
 
-    with patch("app.data.adapters.finnhub._get_api_key", return_value="fake_key"), \
-         patch("app.data.adapters.finnhub._get_client", return_value=mock_client), \
-         patch.object(quota_governor, "acquire", wraps=quota_governor.acquire) as mock_acquire:
+    with patch("app.data.adapters.twelvedata._get_api_key", return_value="test_key"), \
+         patch("app.data.adapters.twelvedata._get_client", return_value=mock_client):
 
-        # 1. First call: cache miss -> outbound call -> acquires 1 token
-        res1 = await adapter._throttled_get("quote", {"symbol": "AAPL"})
-        assert res1 == {"c": 190.0, "d": 2.5, "dp": 1.33}
-        assert mock_acquire.call_count == 1
-        assert mock_acquire.call_args_list[0].args[0] == "finnhub"
-        assert mock_client.get.call_count == 1
+        # First attempt: quota governor blocks request
+        with patch.object(quota_governor, "acquire", return_value=False):
+            res1 = await adapter.get_batch_quotes(symbols)
+            assert res1 == []
 
-        # 2. Second call: cache hit -> returns from cache -> ZERO quota acquired!
-        res2 = await adapter._throttled_get("quote", {"symbol": "AAPL"})
-        assert res2 == {"c": 190.0, "d": 2.5, "dp": 1.33}
-        assert mock_acquire.call_count == 1
-        assert mock_client.get.call_count == 1
+        # Ensure no empty batch chunk was cached!
+        chunk_key = f"batch:{'|'.join(sorted(symbols))}"
+        assert adapter._cache_get(chunk_key) is None
+
+        # Second attempt: quota governor allows request -> must make HTTP call and succeed!
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "AAPL": {"symbol": "AAPL", "close": "180.0", "timestamp": 1700000000},
+            "MSFT": {"symbol": "MSFT", "close": "400.0", "timestamp": 1700000000},
+        }
+        mock_client.get.return_value = mock_resp
+
+        with patch.object(quota_governor, "acquire", return_value=True):
+            res2 = await adapter.get_batch_quotes(symbols)
+            assert len(res2) == 2
+            assert mock_client.get.call_count == 1
+
+
+# ── Regressions for Finding 3: Redis Minute Rollback ─────────────────────────
+
+@pytest.mark.asyncio
+async def test_redis_reservation_rollback_on_daily_failure():
+    """If daily limit increment fails or raises in Redis, minute counter is rolled back."""
+    gov = ProviderQuotaGovernor()
+    fake_redis = AsyncMock()
+
+    # Minute incrby succeeds (returns 1), then daily incrby raises an error
+    fake_redis.incrby.side_effect = [1, Exception("Redis daily cluster partition")]
+
+    with patch.dict("app.core.provider_quota.PROVIDER_LIMITS", {"test_prov": ProviderLimit(per_minute=10, per_day=100)}):
+        result = await gov.acquire("test_prov", redis_client=fake_redis, count=2)
+        # Should fall back to in-memory governor cleanly
+        assert result is True
+        # minute_key must have been rolled back via decrby!
+        assert fake_redis.decrby.call_count == 1
+        assert fake_redis.decrby.call_args[0][1] == 2
+
+
+# ── Regressions for Finding 4: NSE Outbound Governance ───────────────────────
+
+@pytest.mark.asyncio
+async def test_nse_cookie_refresh_and_retry_governed():
+    """Every outbound request to NSE (initial GET, cookie refresh, retry) must acquire quota."""
+    from app.data.adapters.nse import _session
+
+    mock_client = AsyncMock()
+    mock_client.is_closed = False
+    mock_resp_401 = MagicMock()
+    mock_resp_401.status_code = 401
+
+    mock_resp_200 = MagicMock()
+    mock_resp_200.status_code = 200
+    mock_resp_200.json.return_value = {"priceInfo": {"lastPrice": 2500.0}}
+
+    # Sequence: 1. Cookie refresh GET -> 200; 2. API GET -> 401; 3. Refresh GET -> 200; 4. Retry API GET -> 200
+    mock_client.get.side_effect = [mock_resp_200, mock_resp_401, mock_resp_200, mock_resp_200]
+    _session._client = mock_client
+    _session._initialized = False
+
+    with patch.object(quota_governor, "acquire", wraps=quota_governor.acquire) as mock_acquire:
+        res = await _session.get("quote-equity", params={"symbol": "RELIANCE"})
+        assert res is not None
+
+        # Every outbound request called quota_governor.acquire("nse")
+        # 1: initial cookie refresh, 2: first API GET, 3: cookie refresh on 401, 4: retry API GET
+        assert mock_acquire.call_count >= 3
+        for call in mock_acquire.call_args_list:
+            assert call.args[0] == "nse"

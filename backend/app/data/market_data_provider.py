@@ -7,7 +7,6 @@ from enum import Enum
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Union
 from app.core.logging import get_logger
-from app.core.provider_quota import quota_governor
 from dataclasses import dataclass
 
 logger = get_logger(__name__)
@@ -351,7 +350,6 @@ class MarketDataProvider:
         symbol = self._normalize_symbol(symbol)
         is_indian = symbol.endswith(('.NS', '.BO'))
         chain = self._get_chain(symbol, "quote")
-        redis_client = await self._get_redis()
         for provider in chain:
             try:
                 # Quota is governed inside each adapter at the outbound HTTP boundary AFTER cache checks,
@@ -430,7 +428,6 @@ class MarketDataProvider:
     async def get_history(self, symbol: str, period: str = '1y', interval: str = '1d') -> DataResult:
         symbol = self._normalize_symbol(symbol)
         chain = self._get_chain(symbol, "history")
-        redis_client = await self._get_redis()
         for provider in chain:
             try:
                 if provider == "twelvedata":
@@ -459,7 +456,6 @@ class MarketDataProvider:
         symbol = self._normalize_symbol(symbol)
         is_indian = symbol.endswith(('.NS', '.BO'))
         chain = self._get_chain(symbol, "company_info")
-        redis_client = await self._get_redis()
         for provider in chain:
             try:
                 if provider == "finnhub":
@@ -521,7 +517,6 @@ class MarketDataProvider:
     async def get_fundamentals(self, symbol: str) -> DataResult:
         symbol = self._normalize_symbol(symbol)
         chain = self._get_chain(symbol, "fundamentals")
-        redis_client = await self._get_redis()
         for provider in chain:
             try:
                 if provider == "finnhub":

@@ -77,9 +77,9 @@ class ProviderQuotaGovernor:
 
         # ── 1. Redis Tier (Distributed) ──
         if redis_client is not None:
+            minute_key = None
             try:
                 # 1. Minute burst limit check FIRST (prevents leaking daily counter on burst rejection)
-                minute_key = None
                 if limits.per_minute is not None:
                     epoch_min = int(now_epoch // 60)
                     minute_key = f"quota:provider:{prov}:min:{epoch_min}"
@@ -91,6 +91,7 @@ class ProviderQuotaGovernor:
                             await redis_client.decrby(minute_key, count)
                         except Exception:
                             pass
+                        minute_key = None  # Rolled back
                         logger.warning(
                             "provider_minute_quota_exceeded",
                             provider=prov,
@@ -103,31 +104,47 @@ class ProviderQuotaGovernor:
                 # 2. Daily limit check (only reached if minute check passed)
                 if limits.per_day is not None:
                     daily_key = f"quota:provider:{prov}:daily:{today_str}"
-                    used_today = await redis_client.incrby(daily_key, count)
-                    if used_today == count:
-                        await redis_client.expire(daily_key, 90000)
-                    if used_today > limits.per_day:
-                        try:
-                            await redis_client.decrby(daily_key, count)
-                        except Exception:
-                            pass
-                        # Rollback minute counter since daily cap is hit
+                    try:
+                        used_today = await redis_client.incrby(daily_key, count)
+                        if used_today == count:
+                            await redis_client.expire(daily_key, 90000)
+                        if used_today > limits.per_day:
+                            try:
+                                await redis_client.decrby(daily_key, count)
+                            except Exception:
+                                pass
+                            if minute_key:
+                                try:
+                                    await redis_client.decrby(minute_key, count)
+                                except Exception:
+                                    pass
+                                minute_key = None
+                            logger.warning(
+                                "provider_daily_quota_exceeded",
+                                provider=prov,
+                                used=used_today,
+                                limit=limits.per_day,
+                                count=count,
+                            )
+                            return False
+                    except Exception as daily_err:
+                        # Rollback minute reservation if daily operation raises an error
                         if minute_key:
                             try:
                                 await redis_client.decrby(minute_key, count)
                             except Exception:
                                 pass
-                        logger.warning(
-                            "provider_daily_quota_exceeded",
-                            provider=prov,
-                            used=used_today,
-                            limit=limits.per_day,
-                            count=count,
-                        )
-                        return False
+                            minute_key = None
+                        raise daily_err
 
                 return True
             except Exception as e:
+                # Ensure minute reservation is rolled back if any uncaught error occurred
+                if minute_key:
+                    try:
+                        await redis_client.decrby(minute_key, count)
+                    except Exception:
+                        pass
                 logger.warning("provider_quota_redis_error_fallback", provider=prov, error=str(e))
                 # Fall through to in-memory governor
 
