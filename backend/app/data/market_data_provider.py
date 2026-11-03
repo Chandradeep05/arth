@@ -7,7 +7,6 @@ from enum import Enum
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Union
 from app.core.logging import get_logger
-from app.core.provider_quota import quota_governor
 from dataclasses import dataclass
 
 logger = get_logger(__name__)
@@ -351,12 +350,10 @@ class MarketDataProvider:
         symbol = self._normalize_symbol(symbol)
         is_indian = symbol.endswith(('.NS', '.BO'))
         chain = self._get_chain(symbol, "quote")
-        redis_client = await self._get_redis()
         for provider in chain:
             try:
-                if not await quota_governor.acquire(provider, redis_client=redis_client):
-                    logger.warning("provider_quota_governor_blocked", provider=provider, symbol=symbol)
-                    continue
+                # Quota is governed inside each adapter at the outbound HTTP boundary AFTER cache checks,
+                # ensuring that cache hits consume 0 quota tokens across all endpoints.
                 if provider == "twelvedata":
                     data = await self._twelve.get_quote(symbol)
                 elif provider == "nse":
@@ -431,12 +428,8 @@ class MarketDataProvider:
     async def get_history(self, symbol: str, period: str = '1y', interval: str = '1d') -> DataResult:
         symbol = self._normalize_symbol(symbol)
         chain = self._get_chain(symbol, "history")
-        redis_client = await self._get_redis()
         for provider in chain:
             try:
-                if not await quota_governor.acquire(provider, redis_client=redis_client):
-                    logger.warning("provider_quota_governor_blocked", provider=provider, symbol=symbol, call="history")
-                    continue
                 if provider == "twelvedata":
                     data = await self._twelve.get_ohlcv(symbol, period=period, interval=interval)
                 elif provider == "nse":
@@ -463,12 +456,8 @@ class MarketDataProvider:
         symbol = self._normalize_symbol(symbol)
         is_indian = symbol.endswith(('.NS', '.BO'))
         chain = self._get_chain(symbol, "company_info")
-        redis_client = await self._get_redis()
         for provider in chain:
             try:
-                if not await quota_governor.acquire(provider, redis_client=redis_client):
-                    logger.warning("provider_quota_governor_blocked", provider=provider, symbol=symbol, call="company_info")
-                    continue
                 if provider == "finnhub":
                     data = await self._finnhub.get_company_info(symbol)
                 elif provider == "twelvedata":
@@ -528,12 +517,8 @@ class MarketDataProvider:
     async def get_fundamentals(self, symbol: str) -> DataResult:
         symbol = self._normalize_symbol(symbol)
         chain = self._get_chain(symbol, "fundamentals")
-        redis_client = await self._get_redis()
         for provider in chain:
             try:
-                if not await quota_governor.acquire(provider, redis_client=redis_client):
-                    logger.warning("provider_quota_governor_blocked", provider=provider, symbol=symbol, call="fundamentals")
-                    continue
                 if provider == "finnhub":
                     data = await self._finnhub.get_fundamentals(symbol)
                 elif provider == "fmp":

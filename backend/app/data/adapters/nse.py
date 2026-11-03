@@ -78,22 +78,36 @@ class NSESession:
             )
             self._initialized = False
 
-    async def _refresh_cookies(self):
-        """Visit NSE homepage to get fresh session cookies."""
+    async def _refresh_cookies(self) -> bool:
+        """Visit NSE homepage to get fresh session cookies.
+        
+        Governed by central quota governor as an outbound request to NSE.
+        Returns True if cookies were refreshed successfully, False otherwise.
+        """
         if self._circuit_state == _CircuitState.OPEN:
-            return
+            return False
             
         await self._ensure_client()
+
+        # Cookie refresh is an outbound HTTP request to NSE and must be quota-governed
+        from app.core.provider_quota import quota_governor
+        if not await quota_governor.acquire("nse"):
+            logger.warning("nse_quota_governor_blocked_cookie_refresh")
+            return False
+
         try:
             resp = await self._client.get(_HOMEPAGE)
             if resp.status_code == 200:
                 self._cookie_time = time.monotonic()
                 self._initialized = True
                 logger.info("nse_cookies_refreshed")
+                return True
             else:
                 logger.warning("nse_cookie_refresh_failed", status=resp.status_code)
+                return False
         except Exception as e:
             logger.error("nse_cookie_refresh_error", error=str(e))
+            return False
 
     async def get(self, endpoint: str, params: Optional[dict] = None) -> Optional[dict]:
         """Make an authenticated API request to NSE."""
@@ -116,6 +130,12 @@ class NSESession:
             if not self._initialized or (now - self._cookie_time) > self._cookie_ttl:
                 await self._refresh_cookies()
 
+            # Outbound request boundary: check and acquire central quota governor
+            from app.core.provider_quota import quota_governor
+            if not await quota_governor.acquire("nse"):
+                logger.warning("nse_quota_governor_blocked", endpoint=endpoint)
+                return None
+
             try:
                 resp = await self._client.get(
                     f"{_API_BASE}/{endpoint}",
@@ -125,14 +145,19 @@ class NSESession:
 
                 if resp.status_code == 401 or resp.status_code == 403:
                     if self._circuit_state != _CircuitState.OPEN:
-                        # Cookies expired, refresh and retry once
+                        # Cookies expired, refresh and retry once if quota permits
                         logger.info("nse_cookies_expired_retrying")
-                        await self._refresh_cookies()
-                        resp = await self._client.get(
-                            f"{_API_BASE}/{endpoint}",
-                            params=params,
-                        )
-                        _last_request_time[0] = time.monotonic()
+                        refreshed = await self._refresh_cookies()
+                        if refreshed:
+                            # Retry request also consumes 1 quota token
+                            if await quota_governor.acquire("nse"):
+                                resp = await self._client.get(
+                                    f"{_API_BASE}/{endpoint}",
+                                    params=params,
+                                )
+                                _last_request_time[0] = time.monotonic()
+                            else:
+                                logger.warning("nse_quota_governor_blocked_retry", endpoint=endpoint)
 
                 # Process response and update circuit state
                 if resp.status_code == 200:
