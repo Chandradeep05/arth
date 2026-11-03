@@ -5,6 +5,10 @@ on:
     - cron: '*/5 * * * *'
   workflow_dispatch:
 
+concurrency:
+  group: alert-evaluator
+  cancel-in-progress: false
+
 jobs:
   evaluate-alerts:
     runs-on: ubuntu-latest
@@ -35,6 +39,38 @@ jobs:
           cat body.json 2>/dev/null || true
           echo
 
+          # Write structured markdown summary for GitHub Actions UI observability
+          if [ -f body.json ]; then
+            python3 -c "
+          import json, os, sys
+          try:
+              with open('body.json') as f:
+                  d = json.load(f)
+              summary = f'''### 📊 Alert Evaluation Evidence (Run: {d.get(\"run_id\", \"N/A\")})
+          | Metric | Value |
+          |---|---|
+          | **Execution Timestamp** | \`{d.get(\"at\", \"N/A\")}\` |
+          | **HTTP Status** | \`$http_code\` |
+          | **Active Alerts** | \`{d.get(\"active_alerts\", \"N/A\")}\` |
+          | **Symbols Requested** | \`{d.get(\"symbols_requested\", \"N/A\")}\` |
+          | **Quotes Obtained** | \`{d.get(\"quotes_obtained\", \"N/A\")}\` |
+          | **Alerts Evaluated** | \`{d.get(\"evaluated\", \"N/A\")}\` |
+          | **Alerts Triggered** | \`{d.get(\"triggered\", \"N/A\")}\` |
+          | **Notifications Created** | \`{d.get(\"notifications_created\", \"N/A\")}\` |
+          | **Market Closed Skips** | \`{d.get(\"skipped_market_closed\", \"N/A\")}\` |
+          | **Provider Errors** | \`{d.get(\"provider_errors\", \"N/A\")}\` |
+          | **Unpriced Symbols** | \`{d.get(\"unpriced_symbols\", [])}\` |
+          | **Evaluation Duration** | \`{d.get(\"duration_ms\", \"N/A\")} ms\` |
+          '''
+              step_summary = os.environ.get('GITHUB_STEP_SUMMARY')
+              if step_summary:
+                  with open(step_summary, 'a') as sf:
+                      sf.write(summary + '\n')
+          except Exception as e:
+              pass
+          " 2>/dev/null || true
+          fi
+
           if [ "$http_code" = "000" ]; then
             echo "::error::Network error -- backend unreachable"
             exit 1
@@ -48,3 +84,11 @@ jobs:
             exit 1
           fi
           echo "Alert evaluation completed."
+
+      - name: Upload evaluation evidence artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: alert-evaluation-${{ github.run_id }}
+          path: body.json
+          retention-days: 14
