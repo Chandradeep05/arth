@@ -16,13 +16,11 @@ from pydantic import BaseModel, field_validator
 
 from app.core.auth import UserContext, require_active_user
 from app.core.logging import get_logger
+from app.core.symbols import normalize_symbol, get_symbol_currency
 
 def _currency_for_symbol(symbol: str) -> str:
-    """Derive display currency from symbol suffix."""
-    s = symbol.upper()
-    if s.endswith('.NS') or s.endswith('.BO'):
-        return '₹'
-    return '$'
+    """Derive display currency from symbol suffix or canonical market."""
+    return get_symbol_currency(symbol)
 
 logger = get_logger(__name__)
 router = APIRouter(prefix="/user/alerts", tags=["alerts"])
@@ -37,7 +35,7 @@ class CreateAlertRequest(BaseModel):
     @field_validator("symbol")
     @classmethod
     def sym_upper(cls, v: str) -> str:
-        return v.strip().upper()
+        return normalize_symbol(v)
 
     @field_validator("alert_type")
     @classmethod

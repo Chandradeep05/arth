@@ -23,6 +23,7 @@ from fastapi import APIRouter, Depends, Request
 from app.core.auth import require_internal_secret
 from app.core.logging import get_logger
 from app.core.market_calendar import get_market_state
+from app.core.symbols import normalize_symbol, is_indian_symbol, get_symbol_currency
 
 logger = get_logger(__name__)
 router = APIRouter(prefix="/internal", tags=["internal"])
@@ -109,21 +110,36 @@ async def _run_eval(db, redis, now: datetime) -> dict:
         "SELECT id, user_id, symbol, alert_type, threshold, trigger_state FROM alerts WHERE is_active = true ORDER BY symbol"
     )
     if not alerts:
-        return {"run_id": run_id, "evaluated": 0, "triggered": 0, "skipped_no_cache": 0}
+        return {
+            "run_id": run_id,
+            "active_alerts": 0,
+            "symbols_requested": 0,
+            "quotes_obtained": 0,
+            "evaluated": 0,
+            "triggered": 0,
+            "notifications_created": 0,
+            "skipped_market_closed": 0,
+            "provider_errors": 0,
+            "skipped_no_cache": 0,
+            "unpriced_symbols": [],
+            "duration_ms": 0,
+            "at": now.isoformat(),
+        }
 
     all_symbols = list({row["symbol"] for row in alerts})
     active_symbols = set()
     skipped_market_closed = 0
 
     # Market-aware session gate: strictly evaluate symbols whose exchanges are currently OPEN
-    # Normalize symbol: symbols without an exchange suffix default to US market (no dot = NASDAQ/NYSE)
+    # Canonicalize symbols so bare Indian symbols (RELIANCE, TCS) evaluate against Indian market hours
     for sym in all_symbols:
-        mstate, _ = get_market_state(sym, now)
+        canonical_sym = normalize_symbol(sym)
+        mstate, _ = get_market_state(canonical_sym, now)
         if mstate != "open":
             skipped_market_closed += 1
-            logger.debug("alert_skipped_market_not_open", symbol=sym, state=mstate)
+            logger.debug("alert_skipped_market_not_open", symbol=sym, canonical=canonical_sym, state=mstate)
         else:
-            active_symbols.add(sym)
+            active_symbols.add(canonical_sym)
 
     symbols = list(active_symbols)
     prices = {}         # symbol -> price (float)
@@ -133,7 +149,12 @@ async def _run_eval(db, redis, now: datetime) -> dict:
     for symbol in symbols:
         price = None
         if redis:
-            for key in [f"quote:{symbol}", f"market:quote:{symbol}", f"tick:{symbol}"]:
+            bare = symbol.split(".")[0]
+            candidate_keys = [
+                f"quote:{symbol}", f"market:quote:{symbol}", f"tick:{symbol}",
+                f"quote:{bare}", f"market:quote:{bare}", f"tick:{bare}",
+            ]
+            for key in candidate_keys:
                 raw = await redis.get(key)
                 if raw:
                     try:
@@ -141,7 +162,7 @@ async def _run_eval(db, redis, now: datetime) -> dict:
                         price = (data.get("price") or data.get("close") or
                                  data.get("last_price") or
                                  (data.get("data") or {}).get("price"))
-                        if price:
+                        if price and float(price) > 0:
                             prices[symbol] = float(price)
                             quote_sources[symbol] = data.get("provider") or data.get("source") or "cache"
                             break
@@ -151,6 +172,7 @@ async def _run_eval(db, redis, now: datetime) -> dict:
             cache_miss += 1
 
     # For any symbols that missed the cache (or if Redis is not configured), fetch quote via MarketDataProvider
+    # For Indian symbols: NEVER fall back to NSE; if Upstox fails, skip safely and record in unpriced_symbols.
     provider_errors = 0
     if cache_miss > 0:
         from app.data.market_data_provider import market_data as provider
@@ -158,9 +180,13 @@ async def _run_eval(db, redis, now: datetime) -> dict:
             if symbol in prices:
                 continue
             try:
-                res = await provider.get_quote(symbol)
+                is_indian = is_indian_symbol(symbol)
+                try:
+                    res = await provider.get_quote(symbol, allow_nse_fallback=not is_indian)
+                except TypeError:
+                    res = await provider.get_quote(symbol)
                 quote_data = res.data if hasattr(res, "data") else res
-                actual_provider = getattr(res, "source", None) or "unknown"
+                actual_provider = getattr(res, "source", None) or ("Upstox" if is_indian else "unknown")
                 if quote_data and isinstance(quote_data, dict):
                     p = quote_data.get("price") or quote_data.get("close") or quote_data.get("last_price")
                     if p is not None and float(p) > 0:
@@ -176,6 +202,10 @@ async def _run_eval(db, redis, now: datetime) -> dict:
                                 await redis.set(f"quote:{symbol}", json.dumps(cache_blob, default=str), ex=300)
                             except Exception as cache_err:
                                 logger.warning("alert_eval_cache_write_failed", symbol=symbol, error=str(cache_err))
+                    else:
+                        logger.warning("alert_eval_quote_non_positive", symbol=symbol, quote=quote_data)
+                else:
+                    logger.warning("alert_eval_no_quote_data", symbol=symbol, provider=actual_provider)
             except Exception as sym_err:
                 provider_errors += 1
                 logger.warning("alert_eval_quote_fetch_failed", symbol=symbol, error=str(sym_err))
@@ -185,8 +215,10 @@ async def _run_eval(db, redis, now: datetime) -> dict:
 
     for alert in alerts:
         symbol = alert["symbol"]
-        current = prices.get(symbol)
-        if current is None:
+        canonical_sym = normalize_symbol(symbol)
+        current = prices.get(canonical_sym) or prices.get(symbol)
+        # Valid price invariant: price is not None and price > 0
+        if current is None or current <= 0:
             continue
 
         evaluated += 1
@@ -211,12 +243,12 @@ async def _run_eval(db, redis, now: datetime) -> dict:
                 )
                 # Only insert notification if we actually flipped the state
                 if updated and updated != "UPDATE 0":
-                    curr_sym = "₹" if symbol.endswith((".NS", ".BO")) else "$"
+                    curr_sym = get_symbol_currency(canonical_sym)
                     dir_sym = "≥" if direction == "above" else "≤"
                     # Use actual provider from DataResult, not guessed from symbol suffix
-                    actual_source = quote_sources.get(symbol, "unknown")
+                    actual_source = quote_sources.get(canonical_sym) or quote_sources.get(symbol) or "unknown"
                     # Get real session name from market state engine
-                    _, session_label = get_market_state(symbol, now)
+                    _, session_label = get_market_state(canonical_sym, now)
                     session_name = session_label if session_label else "Regular Trading"
                     # Build human-readable body with real provenance
                     body_text = (
@@ -227,11 +259,11 @@ async def _run_eval(db, redis, now: datetime) -> dict:
                     await db.execute(
                         "INSERT INTO notifications (user_id, alert_id, title, body) VALUES ($1, $2, $3, $4)",
                         alert["user_id"], alert["id"],
-                        f"{symbol} crossed {direction} {curr_sym}{threshold:.2f}",
+                        f"{canonical_sym} crossed {direction} {curr_sym}{threshold:.2f}",
                         body_text,
                     )
                     triggered += 1
-                    logger.info("alert_triggered", symbol=symbol, price=current, threshold=threshold)
+                    logger.info("alert_triggered", symbol=canonical_sym, raw_symbol=symbol, price=current, threshold=threshold)
         elif cleared and state == "triggered":
             await db.execute(
                 "UPDATE alerts SET trigger_state = $1, last_evaluated_value = $2 WHERE id = $3",
@@ -248,6 +280,7 @@ async def _run_eval(db, redis, now: datetime) -> dict:
     )
     return {
         "run_id": run_id,
+        "active_alerts": len(alerts),
         "symbols_requested": len(symbols),
         "quotes_obtained": len(prices),
         "evaluated": evaluated,
@@ -335,10 +368,15 @@ async def warm_alert_symbols(
             pass
 
         try:
-            res = await market_data.get_quote(symbol)
+            canonical_sym = normalize_symbol(symbol)
+            is_indian = is_indian_symbol(canonical_sym)
+            try:
+                res = await market_data.get_quote(canonical_sym, allow_nse_fallback=not is_indian)
+            except TypeError:
+                res = await market_data.get_quote(canonical_sym)
             if res.available and res.data:
                 await redis.set(
-                    f"quote:{symbol}",
+                    f"quote:{canonical_sym}",
                     json.dumps(res.data, default=str),
                     ex=1860,  # 31 minutes — survives between 30-min warmup cycles
                 )
