@@ -73,9 +73,9 @@ def test_market_data_singleton_exists_and_evaluator_does_not_use_missing_factory
 async def test_cache_miss_falls_back_to_provider_and_triggers(monkeypatch):
     calls = []
 
-    async def fake_get_quote(symbol):
+    async def fake_get_quote(symbol, allow_nse_fallback=True):
         calls.append(symbol)
-        return SimpleNamespace(available=True, data={"symbol": symbol, "price": 2900.0})
+        return SimpleNamespace(available=True, data={"symbol": symbol, "price": 2900.0}, source="Upstox")
 
     monkeypatch.setattr(mdp.market_data, "get_quote", fake_get_quote)
     db = FakeDB([_alert()])
@@ -94,8 +94,8 @@ async def test_cache_miss_falls_back_to_provider_and_triggers(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_condition_not_met_does_not_notify(monkeypatch):
-    async def fake_get_quote(symbol):
-        return SimpleNamespace(available=True, data={"price": 3100.0})
+    async def fake_get_quote(symbol, allow_nse_fallback=True):
+        return SimpleNamespace(available=True, data={"price": 3100.0}, source="Upstox")
 
     monkeypatch.setattr(mdp.market_data, "get_quote", fake_get_quote)
     db = FakeDB([_alert()])
@@ -110,10 +110,10 @@ async def test_condition_not_met_does_not_notify(monkeypatch):
 @pytest.mark.asyncio
 async def test_quote_with_datetime_is_cached_without_error(monkeypatch):
     """Upstox quotes carry a datetime timestamp; json.dumps must not fail."""
-    async def fake_get_quote(symbol):
+    async def fake_get_quote(symbol, allow_nse_fallback=True):
         return SimpleNamespace(available=True, data={
             "price": 2900.0, "timestamp": datetime.now(timezone.utc),
-        })
+        }, source="Upstox")
 
     monkeypatch.setattr(mdp.market_data, "get_quote", fake_get_quote)
     redis = FakeRedis()
@@ -128,7 +128,7 @@ async def test_quote_with_datetime_is_cached_without_error(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_provider_error_is_counted_not_crashing(monkeypatch):
-    async def boom(symbol):
+    async def boom(symbol, allow_nse_fallback=True):
         raise RuntimeError("provider down")
 
     monkeypatch.setattr(mdp.market_data, "get_quote", boom)
@@ -144,8 +144,8 @@ async def test_provider_error_is_counted_not_crashing(monkeypatch):
 @pytest.mark.asyncio
 async def test_zero_or_missing_price_is_not_evaluated(monkeypatch):
     """A 0 price must never trigger a price_below alert."""
-    async def zero(symbol):
-        return SimpleNamespace(available=True, data={"price": 0})
+    async def zero(symbol, allow_nse_fallback=True):
+        return SimpleNamespace(available=True, data={"price": 0}, source="Upstox")
 
     monkeypatch.setattr(mdp.market_data, "get_quote", zero)
     db = FakeDB([_alert()])
@@ -158,7 +158,7 @@ async def test_zero_or_missing_price_is_not_evaluated(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_cached_symbol_skips_provider(monkeypatch):
-    async def should_not_be_called(symbol):
+    async def should_not_be_called(symbol, allow_nse_fallback=True):
         raise AssertionError("provider called despite cache hit")
 
     monkeypatch.setattr(mdp.market_data, "get_quote", should_not_be_called)
@@ -445,3 +445,20 @@ async def test_atomic_trigger_state_transition_and_deduplication():
     assert result["triggered"] == 0
     assert result["notifications_created"] == 0
     assert _notifications(db) == []
+
+
+def test_ambiguous_symbol_requires_explicit_suffix():
+    """
+    HAL is ambiguous: HAL.NS on NSE, Halliburton on NYSE.
+    With the Stage 1 allowlist, bare HAL normalizes to HAL.NS (HAL is in COMMON_INDIAN_SYMBOLS).
+    This is a KNOWN LIMITATION documented for Stage 2 instrument master.
+    Users who mean Halliburton must use an explicit exchange-qualified symbol.
+    """
+    from app.core.symbols import normalize_symbol, is_indian_symbol
+
+    # HAL is in the 59-symbol allowlist -> normalizes to HAL.NS
+    assert normalize_symbol("HAL") == "HAL.NS"
+    assert is_indian_symbol("HAL") is True  # Stage 1 known limitation for Halliburton case
+
+    # Explicit NSE suffix always unambiguous
+    assert normalize_symbol("HAL.NS") == "HAL.NS"

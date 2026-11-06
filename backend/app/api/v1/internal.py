@@ -181,10 +181,7 @@ async def _run_eval(db, redis, now: datetime) -> dict:
                 continue
             try:
                 is_indian = is_indian_symbol(symbol)
-                try:
-                    res = await provider.get_quote(symbol, allow_nse_fallback=not is_indian)
-                except TypeError:
-                    res = await provider.get_quote(symbol)
+                res = await provider.get_quote(symbol, allow_nse_fallback=not is_indian)
                 quote_data = res.data if hasattr(res, "data") else res
                 actual_provider = getattr(res, "source", None) or ("Upstox" if is_indian else "unknown")
                 if quote_data and isinstance(quote_data, dict):
@@ -370,10 +367,12 @@ async def warm_alert_symbols(
         try:
             canonical_sym = normalize_symbol(symbol)
             is_indian = is_indian_symbol(canonical_sym)
-            try:
-                res = await market_data.get_quote(canonical_sym, allow_nse_fallback=not is_indian)
-            except TypeError:
-                res = await market_data.get_quote(canonical_sym)
+            # Skip fetch if market is closed -- avoids wasting Upstox/provider quota during after-hours
+            mstate, _ = get_market_state(canonical_sym, now)
+            if mstate not in ("open", "pre-market"):
+                logger.debug("warmup_market_closed_skip", symbol=canonical_sym, state=mstate)
+                continue
+            res = await market_data.get_quote(canonical_sym, allow_nse_fallback=not is_indian)
             if res.available and res.data:
                 await redis.set(
                     f"quote:{canonical_sym}",
