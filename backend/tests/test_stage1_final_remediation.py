@@ -225,6 +225,217 @@ class TestQuoteFreshnessValidation:
         }
         assert _is_quote_fresh(data, now, max_age_seconds=900.0) is True
 
+    def test_malformed_market_timestamp_with_fresh_ingestion_rejected(self):
+        """
+        CodeRabbit / Stage-1 Hardening: If a market timestamp is present but malformed
+        or unparseable, it MUST BE REJECTED IMMEDIATELY. It must NEVER fall back to ingested_at.
+        """
+        now = datetime(2026, 11, 13, 10, 0, 0, tzinfo=timezone.utc)
+        fresh_ingest = (now - timedelta(seconds=5)).isoformat()
+
+        # Unparseable string format
+        data_corrupt = {
+            "price": 100.0,
+            "timestamp": "not-a-valid-timestamp",
+            "ingested_at": fresh_ingest,
+        }
+        assert _is_quote_fresh(data_corrupt, now, max_age_seconds=900.0) is False
+
+        # Unparseable object / structure
+        data_struct = {
+            "price": 100.0,
+            "datetime": {"bad": "type"},
+            "ingested_at": fresh_ingest,
+        }
+        assert _is_quote_fresh(data_struct, now, max_age_seconds=900.0) is False
+
+    def test_empty_or_whitespace_market_timestamp_rejected_as_malformed(self):
+        """
+        DECISION & DOCUMENTATION: Empty or whitespace-only market timestamp fields.
+
+        In financial systems, an empty string ("") or whitespace-only ("   ") supplied
+        as a market timestamp coordinate is classified as MALFORMED (fail-closed -> rejected).
+
+        Rationale:
+        1. A market timestamp is a temporal coordinate; an empty string indicates data truncation,
+           corrupted upstream payload, or broken field extraction.
+        2. Treating empty strings as 'absent' would mask malfunctioning provider feeds by allowing
+           them to silently fall back to ingestion freshness.
+        3. Truly absent timestamps are represented solely by omitting the key (or explicitly None).
+           Any non-null string provided must parse into a valid datetime or fail closed.
+        """
+        now = datetime(2026, 11, 13, 10, 0, 0, tzinfo=timezone.utc)
+        fresh_ingest = (now - timedelta(seconds=5)).isoformat()
+
+        # Empty string
+        data_empty = {
+            "price": 100.0,
+            "timestamp": "",
+            "ingested_at": fresh_ingest,
+        }
+        assert _is_quote_fresh(data_empty, now, max_age_seconds=900.0) is False
+
+        # Whitespace-only string
+        data_ws = {
+            "price": 100.0,
+            "timestamp": "   \t\n ",
+            "ingested_at": fresh_ingest,
+        }
+        assert _is_quote_fresh(data_ws, now, max_age_seconds=900.0) is False
+
+    def test_truly_absent_market_timestamp_with_fresh_ingestion_accepted(self):
+        """
+        Preserve intended fallback: when no market timestamp is provided at all
+        (omitted key or explicit None), a valid fresh ingestion timestamp is accepted.
+        """
+        now = datetime(2026, 11, 13, 10, 0, 0, tzinfo=timezone.utc)
+        fresh_ingest = (now - timedelta(seconds=5)).isoformat()
+
+        # Completely absent market timestamp keys
+        data_absent = {
+            "price": 100.0,
+            "ingested_at": fresh_ingest,
+        }
+        assert _is_quote_fresh(data_absent, now, max_age_seconds=900.0) is True
+
+        # Explicit None (representing null / unavailable field)
+        data_none = {
+            "price": 100.0,
+            "timestamp": None,
+            "ingested_at": fresh_ingest,
+        }
+        assert _is_quote_fresh(data_none, now, max_age_seconds=900.0) is True
+
+    def test_valid_stale_market_timestamp_with_fresh_ingestion_rejected(self):
+        """
+        A valid, parseable market timestamp that is stale (older than max_age_seconds)
+        must be rejected even if ingested_at is fresh.
+        """
+        now = datetime(2026, 11, 13, 10, 0, 0, tzinfo=timezone.utc)
+        data = {
+            "price": 100.0,
+            "timestamp": (now - timedelta(minutes=20)).isoformat(),  # 20 min old > 15 min limit
+            "ingested_at": (now - timedelta(seconds=2)).isoformat(),  # 2 sec old
+        }
+        assert _is_quote_fresh(data, now, max_age_seconds=900.0) is False
+
+    def test_valid_fresh_market_timestamp_accepted(self):
+        """
+        A valid fresh market timestamp is accepted with or without an ingestion timestamp.
+        """
+        now = datetime(2026, 11, 13, 10, 0, 0, tzinfo=timezone.utc)
+        fresh_market = (now - timedelta(seconds=45)).isoformat()
+
+        # Without ingested_at
+        data_no_ingest = {
+            "price": 100.0,
+            "timestamp": fresh_market,
+        }
+        assert _is_quote_fresh(data_no_ingest, now, max_age_seconds=900.0) is True
+
+        # With fresh ingested_at
+        data_with_ingest = {
+            "price": 100.0,
+            "timestamp": fresh_market,
+            "ingested_at": (now - timedelta(seconds=10)).isoformat(),
+        }
+        assert _is_quote_fresh(data_with_ingest, now, max_age_seconds=900.0) is True
+
+    def test_boolean_market_timestamp_rejected_as_malformed(self):
+        """
+        Python booleans (True/False are subclasses of int) must not be parsed as
+        epoch timestamps (0 or 1); they must be rejected as malformed.
+        """
+        now = datetime(2026, 11, 13, 10, 0, 0, tzinfo=timezone.utc)
+        fresh_ingest = (now - timedelta(seconds=5)).isoformat()
+
+        assert _is_quote_fresh({"price": 100.0, "timestamp": False, "ingested_at": fresh_ingest}, now) is False
+        assert _is_quote_fresh({"price": 100.0, "timestamp": True, "ingested_at": fresh_ingest}, now) is False
+
+    def test_zero_epoch_market_timestamp_rejected_as_stale(self):
+        """
+        Timestamp value 0 (epoch 1970-01-01) is non-None, parseable, and 56 years old;
+        it must be rejected as stale even if ingested_at is fresh.
+        """
+        now = datetime(2026, 11, 13, 10, 0, 0, tzinfo=timezone.utc)
+        fresh_ingest = (now - timedelta(seconds=5)).isoformat()
+
+        assert _is_quote_fresh({"price": 100.0, "timestamp": 0, "ingested_at": fresh_ingest}, now) is False
+
+    def test_fresh_market_timestamp_with_malformed_ingested_at_rejected(self):
+        """
+        If a market timestamp is fresh, but an explicit non-null ingested_at is malformed,
+        it MUST BE REJECTED (fail-closed integrity).
+        """
+        now = datetime(2026, 11, 13, 10, 0, 0, tzinfo=timezone.utc)
+        data = {
+            "price": 100.0,
+            "timestamp": (now - timedelta(seconds=30)).isoformat(),
+            "ingested_at": "malformed_ingest_string",
+        }
+        assert _is_quote_fresh(data, now, max_age_seconds=900.0) is False
+
+    def test_fresh_market_timestamp_with_none_ingested_at_accepted(self):
+        """
+        If ingested_at is explicitly None, a valid fresh market timestamp is accepted.
+        """
+        now = datetime(2026, 11, 13, 10, 0, 0, tzinfo=timezone.utc)
+        data = {
+            "price": 100.0,
+            "timestamp": (now - timedelta(seconds=30)).isoformat(),
+            "ingested_at": None,
+        }
+        assert _is_quote_fresh(data, now, max_age_seconds=900.0) is True
+
+    def test_fresh_market_timestamp_with_missing_ingestion_metadata_accepted(self):
+        """
+        If ingestion metadata is completely absent, a valid fresh market timestamp is accepted.
+        """
+        now = datetime(2026, 11, 13, 10, 0, 0, tzinfo=timezone.utc)
+        data = {
+            "price": 100.0,
+            "timestamp": (now - timedelta(seconds=30)).isoformat(),
+        }
+        assert _is_quote_fresh(data, now, max_age_seconds=900.0) is True
+
+    def test_missing_market_timestamp_with_valid_fresh_cached_at_accepted(self):
+        """
+        When market timestamp is absent, _cached_at (from cache.py) provides a valid fallback.
+        """
+        now = datetime(2026, 11, 13, 10, 0, 0, tzinfo=timezone.utc)
+        data = {
+            "price": 100.0,
+            "_cached_at": (now - timedelta(seconds=5)).isoformat(),
+        }
+        assert _is_quote_fresh(data, now, max_age_seconds=900.0) is True
+
+    def test_missing_market_timestamp_malformed_ingested_at_with_valid_cached_at_rejected(self):
+        """
+        PRECISION & PRECEDENCE DECISION:
+        When market timestamp is missing, an explicit non-null 'ingested_at' that is malformed
+        MUST FAIL CLOSED immediately. It must NOT silently fall through to '_cached_at'.
+        """
+        now = datetime(2026, 11, 13, 10, 0, 0, tzinfo=timezone.utc)
+        data = {
+            "price": 100.0,
+            "ingested_at": "corrupt_metadata",
+            "_cached_at": (now - timedelta(seconds=5)).isoformat(),
+        }
+        assert _is_quote_fresh(data, now, max_age_seconds=900.0) is False
+
+    def test_stale_ingestion_timestamp_alongside_fresh_market_timestamp_rejected(self):
+        """
+        If market timestamp is fresh, but ingestion timestamp is stale (e.g. replayed cache entry),
+        the quote must be rejected.
+        """
+        now = datetime(2026, 11, 13, 10, 0, 0, tzinfo=timezone.utc)
+        data = {
+            "price": 100.0,
+            "timestamp": (now - timedelta(seconds=10)).isoformat(),
+            "ingested_at": (now - timedelta(hours=2)).isoformat(),
+        }
+        assert _is_quote_fresh(data, now, max_age_seconds=900.0) is False
+
 
 # =============================================================================
 # Finding C: Provider Quota Boundary Protection

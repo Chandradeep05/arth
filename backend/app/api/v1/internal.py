@@ -37,7 +37,7 @@ _last_eval_time = [0.0]
 
 def _parse_timestamp_to_utc(raw_ts: object) -> Optional[datetime]:
     """Parse various timestamp representations into an aware UTC datetime."""
-    if raw_ts is None:
+    if raw_ts is None or isinstance(raw_ts, bool):
         return None
     if isinstance(raw_ts, datetime):
         if raw_ts.tzinfo is None:
@@ -75,49 +75,82 @@ def _parse_timestamp_to_utc(raw_ts: object) -> Optional[datetime]:
     return None
 
 
+_MARKET_TIMESTAMP_KEYS = ("timestamp", "last_trade_time", "market_time", "datetime", "time", "t")
+
+
 def _is_quote_fresh(data: dict, now: datetime, max_age_seconds: float = 900.0) -> bool:
     """Strict UTC timestamp freshness validation.
     
-    Fail-closed:
-    - Rejects quotes if data is not a dict.
-    - Inspects market data timestamp: 'timestamp', 'last_trade_time', 'datetime', 'market_time', 'time', 't'.
-    - If market data timestamp is present, verifies it is not older than max_age_seconds
-      and not more than 60 seconds in the future (clock drift protection).
-    - If ingested_at is present (cache metadata), verifies it is also fresh.
-    - If NEITHER market data timestamp nor ingested_at is present or parseable, rejects.
+    Fail-closed policy:
+    1. Rejects quotes if data is not a dict.
+    2. Inspects market data timestamp candidates: 'timestamp', 'last_trade_time', 'market_time',
+       'datetime', 'time', 't'.
+    3. If a market timestamp field is present (key exists with non-null value):
+       - It must parse into an aware UTC datetime. If malformed or unparseable (including
+         empty, whitespace-only, or invalid format strings), the quote is REJECTED immediately.
+         It does NOT fall back to ingested_at.
+       - If valid, verifies it is not older than max_age_seconds and not more than 60s
+         in the future (clock drift protection).
+    4. Ingestion timestamp resolution ('ingested_at' primary, '_cached_at' fallback):
+       - If 'ingested_at' is present and non-null, it MUST parse successfully. If malformed
+         or unparseable, the quote is rejected immediately (fail-closed, does not fall through
+         to '_cached_at').
+       - If 'ingested_at' is absent or explicitly None, '_cached_at' may provide fallback.
+       - If an ingestion timestamp is resolved, enforces freshness and clock-skew limits.
+    5. Fallback & combination rules:
+       - If a valid fresh market timestamp exists without any ingestion metadata, it is accepted.
+       - If both market and ingestion timestamps exist, both must be valid and fresh.
+       - If NO market timestamp was provided, a valid, fresh ingestion timestamp is strictly required.
+       - If neither a usable market timestamp nor a valid ingestion timestamp exists, rejects.
     """
     if not isinstance(data, dict):
         return False
 
-    # 1. Market-data timestamp (actual market observation / trade time)
-    market_raw = (
-        data.get("timestamp")
-        or data.get("last_trade_time")
-        or data.get("market_time")
-        or data.get("datetime")
-        or data.get("time")
-        or data.get("t")
-    )
-    market_dt = _parse_timestamp_to_utc(market_raw)
+    # 1. Inspect candidate market-data timestamp fields
+    market_raw = None
+    has_market_field = False
+    for k in _MARKET_TIMESTAMP_KEYS:
+        if k in data and data[k] is not None:
+            market_raw = data[k]
+            has_market_field = True
+            break
 
-    # 2. Ingestion timestamp (when written to cache / memory)
-    ingested_raw = data.get("ingested_at") or data.get("_cached_at")
-    ingested_dt = _parse_timestamp_to_utc(ingested_raw)
-
-    if market_dt is None and ingested_dt is None:
-        return False
-
-    # Validate market timestamp if present
-    if market_dt is not None:
+    # If a market timestamp field was supplied, it must parse successfully and be fresh.
+    # An unparseable or malformed market timestamp must fail closed and NEVER fall back to ingested_at.
+    if has_market_field:
+        market_dt = _parse_timestamp_to_utc(market_raw)
+        if market_dt is None:
+            return False
         age = (now - market_dt).total_seconds()
         if age > max_age_seconds or age < -60.0:
             return False
 
-    # Validate ingestion timestamp if present
-    if ingested_dt is not None:
-        ingest_age = (now - ingested_dt).total_seconds()
+    # 2. Ingestion timestamp resolution ('ingested_at' primary, '_cached_at' fallback)
+    # If ingested_at is present and non-null, it must parse successfully.
+    # A malformed non-null ingested_at fails closed immediately rather than falling through.
+    ingest_raw = None
+    has_ingest_field = False
+
+    if "ingested_at" in data and data["ingested_at"] is not None:
+        ingest_raw = data["ingested_at"]
+        has_ingest_field = True
+    elif "_cached_at" in data and data["_cached_at"] is not None:
+        ingest_raw = data["_cached_at"]
+        has_ingest_field = True
+
+    if has_ingest_field:
+        ingest_dt = _parse_timestamp_to_utc(ingest_raw)
+        if ingest_dt is None:
+            return False
+        ingest_age = (now - ingest_dt).total_seconds()
         if ingest_age > max_age_seconds or ingest_age < -60.0:
             return False
+
+    # If no market timestamp was provided, a valid ingestion timestamp is strictly required.
+    if not has_market_field:
+        if not has_ingest_field:
+            return False
+        return True
 
     return True
 
@@ -409,7 +442,7 @@ async def _run_eval(db, redis, now: datetime) -> dict:
                     # For live provider responses without an explicit timestamp (e.g. mock objects),
                     # stamp ingested_at = now so newly fetched live data is accepted unless explicitly stale
                     quote_to_check = quote_data
-                    if not any(k in quote_data for k in ("timestamp", "last_trade_time", "market_time", "datetime", "time", "t", "ingested_at")):
+                    if not any(k in quote_data for k in _MARKET_TIMESTAMP_KEYS + ("ingested_at",)):
                         quote_to_check = dict(quote_data)
                         quote_to_check["ingested_at"] = now.isoformat()
 
