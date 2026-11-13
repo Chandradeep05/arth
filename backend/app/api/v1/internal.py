@@ -19,6 +19,7 @@ import time
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Request
+from fastapi.responses import JSONResponse
 
 from app.core.auth import require_internal_secret
 from app.core.logging import get_logger
@@ -34,6 +35,34 @@ _in_process_eval_lock = asyncio.Lock()
 _last_eval_time = [0.0]
 
 
+def _is_quote_fresh(data: dict, now: datetime, max_age_seconds: float = 900.0) -> bool:
+    """Strict UTC timestamp freshness validation.
+    
+    Fail-closed: Rejects quotes when:
+    - data is not a dict
+    - ingested_at is missing, empty, or not a string
+    - timestamp cannot be parsed into an ISO datetime
+    - quote is older than max_age_seconds (default: 15 minutes)
+    - timestamp is more than 60 seconds in the future (clock drift protection)
+    """
+    if not isinstance(data, dict):
+        return False
+    raw_ts = data.get("ingested_at")
+    if not raw_ts or not isinstance(raw_ts, str):
+        return False
+    try:
+        dt = datetime.fromisoformat(raw_ts)
+        if dt.tzinfo is None:
+            # Explicit normalization: treat naive timestamp as UTC
+            dt = dt.replace(tzinfo=timezone.utc)
+        age = (now - dt).total_seconds()
+        if age > max_age_seconds or age < -60.0:
+            return False
+        return True
+    except Exception:
+        return False
+
+
 @router.post("/jobs/evaluate-alerts")
 async def evaluate_alerts(
     request: Request,
@@ -44,7 +73,6 @@ async def evaluate_alerts(
     db = getattr(request.state, "db", None)
     if db is None:
         logger.error("alert_eval_no_db", reason="request.state.db is None")
-        from fastapi.responses import JSONResponse
         return JSONResponse(
             status_code=503,
             content={"skipped": True, "reason": "Database pool unavailable — check asyncpg connection"},
@@ -82,10 +110,13 @@ async def evaluate_alerts(
 
     if redis:
         try:
-            result = await _run_eval(db, redis, now)
+            result = await asyncio.wait_for(_run_eval(db, redis, now), timeout=90.0)
             # Record completion time AFTER successful eval so failures remain retryable
             await redis.set("alert_eval_last_run", str(now_epoch), ex=300)
             return result
+        except asyncio.TimeoutError:
+            logger.error("alert_eval_timed_out", timeout_sec=90)
+            return {"skipped": True, "reason": "Alert evaluation timed out after 90s"}
         finally:
             _RELEASE_LOCK_LUA = """
             if redis.call('get', KEYS[1]) == ARGV[1] then
@@ -97,10 +128,14 @@ async def evaluate_alerts(
             await redis.eval(_RELEASE_LOCK_LUA, 1, ALERT_EVAL_LOCK, lock_token)
     else:
         async with _in_process_eval_lock:
-            result = await _run_eval(db, redis, now)
-            # Record completion time AFTER successful eval so failures remain retryable
-            _last_eval_time[0] = now_epoch
-            return result
+            try:
+                result = await asyncio.wait_for(_run_eval(db, redis, now), timeout=90.0)
+                # Record completion time AFTER successful eval so failures remain retryable
+                _last_eval_time[0] = now_epoch
+                return result
+            except asyncio.TimeoutError:
+                logger.error("alert_eval_timed_out_in_process", timeout_sec=90)
+                return {"skipped": True, "reason": "Alert evaluation timed out after 90s (in-process)"}
 
 
 async def _run_eval(db, redis, now: datetime) -> dict:
@@ -159,23 +194,20 @@ async def _run_eval(db, redis, now: datetime) -> dict:
                 if raw:
                     try:
                         data = json.loads(raw)
-                        # Freshness guard: reject quotes older than 15 minutes (900s) during active evaluation
-                        ingested_at = data.get("ingested_at")
-                        if ingested_at:
-                            try:
-                                ingested_dt = datetime.fromisoformat(ingested_at)
-                                if (now - ingested_dt).total_seconds() > 900:
-                                    logger.debug("cached_quote_stale_skipped", symbol=symbol, age_sec=round((now - ingested_dt).total_seconds(), 1))
-                                    continue
-                            except Exception:
-                                pass
-                        price = (data.get("price") or data.get("close") or
-                                 data.get("last_price") or
-                                 (data.get("data") or {}).get("price"))
-                        if price and float(price) > 0:
-                            prices[symbol] = float(price)
-                            quote_sources[symbol] = data.get("provider") or data.get("source") or ("Upstox" if is_indian_symbol(symbol) else "cache")
-                            break
+                        # Strict fail-closed freshness guard: reject unvalidated, stale, or future quotes
+                        if not _is_quote_fresh(data, now, max_age_seconds=900.0):
+                            logger.debug("cached_quote_not_fresh_skipped", symbol=symbol)
+                            continue
+                        raw_price = (data.get("price") or data.get("close") or
+                                     data.get("last_price") or
+                                     (data.get("data") or {}).get("price"))
+                        if raw_price is not None:
+                            val = float(raw_price)
+                            import math
+                            if math.isfinite(val) and val > 0:
+                                prices[symbol] = val
+                                quote_sources[symbol] = data.get("provider") or data.get("source") or ("Upstox" if is_indian_symbol(symbol) else "cache")
+                                break
                     except Exception:
                         continue
         if symbol not in prices:
@@ -356,9 +388,35 @@ async def warm_alert_symbols(
         canonical_s = normalize_symbol(s)
         has_price = False
         for key in [f"quote:{canonical_s}", f"market:quote:{canonical_s}", f"tick:{canonical_s}", f"quote:{s}", f"market:quote:{s}", f"tick:{s}"]:
-            if await redis.exists(key):
-                has_price = True
-                break
+            try:
+                get_fn = getattr(redis, "get", None)
+                if get_fn:
+                    res = get_fn(key)
+                    if asyncio.iscoroutine(res):
+                        raw = await res
+                        if raw:
+                            data = json.loads(raw)
+                            if _is_quote_fresh(data, now, max_age_seconds=900.0):
+                                has_price = True
+                                break
+                    elif isinstance(res, (str, bytes)):
+                        data = json.loads(res)
+                        if _is_quote_fresh(data, now, max_age_seconds=900.0):
+                            has_price = True
+                            break
+
+                exists_fn = getattr(redis, "exists", None)
+                if exists_fn and not has_price:
+                    res_ex = exists_fn(key)
+                    if asyncio.iscoroutine(res_ex):
+                        if await res_ex:
+                            has_price = True
+                            break
+                    elif isinstance(res_ex, bool) and res_ex:
+                        has_price = True
+                        break
+            except Exception:
+                pass
         if not has_price:
             uncached.append(s)
 
@@ -437,7 +495,10 @@ async def evaluate_predictions(
 
     try:
         count = await outcome_tracker.evaluate_pending(fetch_price_func=_fetch_price)
-        return {"evaluated": count, "status": "ok"}
+        stats = getattr(count, "stats", None)
+        if isinstance(stats, dict):
+            return {"status": "ok", **stats}
+        return {"evaluated": int(count), "status": "ok"}
     except Exception as e:
         logger.error("evaluate_predictions_failed", error=str(e))
         return JSONResponse(status_code=500, content={"evaluated": 0, "status": "error", "error": str(e)})

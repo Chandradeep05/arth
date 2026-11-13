@@ -7,6 +7,7 @@ Resets to armed when condition reverses.
 """
 from __future__ import annotations
 
+import math
 import re
 
 from datetime import datetime, timezone
@@ -18,13 +19,13 @@ from pydantic import BaseModel, field_validator
 
 from app.core.auth import UserContext, require_active_user
 from app.core.logging import get_logger
-from app.core.symbols import normalize_symbol, get_symbol_currency
+from app.core.symbols import normalize_symbol, get_symbol_currency, AMBIGUOUS_SYMBOLS
 
 def _currency_for_symbol(symbol: str) -> str:
     """Derive display currency from symbol suffix or canonical market."""
     return get_symbol_currency(symbol)
 
-_SYMBOL_RE = re.compile(r"^[A-Z0-9._-]{1,20}$")
+_SYMBOL_RE = re.compile(r"^[A-Z0-9._&-]{1,20}$")
 
 logger = get_logger(__name__)
 router = APIRouter(prefix="/user/alerts", tags=["alerts"])
@@ -44,6 +45,11 @@ class CreateAlertRequest(BaseModel):
         cleaned = v.strip().upper()
         if not _SYMBOL_RE.match(cleaned):
             raise ValueError("symbol contains invalid characters or exceeds 20 characters")
+        if cleaned in AMBIGUOUS_SYMBOLS:
+            raise ValueError(
+                f"Symbol '{cleaned}' is ambiguous across exchanges (NSE: {cleaned}.NS vs NYSE: {cleaned}). "
+                f"Please specify an explicit exchange suffix (e.g. {cleaned}.NS)."
+            )
         return normalize_symbol(cleaned)
 
     @field_validator("alert_type")
@@ -56,8 +62,8 @@ class CreateAlertRequest(BaseModel):
     @field_validator("threshold")
     @classmethod
     def positive_threshold(cls, v: float) -> float:
-        if v <= 0:
-            raise ValueError("threshold must be positive")
+        if not math.isfinite(v) or v <= 0:
+            raise ValueError("threshold must be a finite, positive number")
         return v
 
 
@@ -75,8 +81,8 @@ class EditAlertRequest(BaseModel):
     @field_validator("threshold")
     @classmethod
     def positive_threshold(cls, v: Optional[float]) -> Optional[float]:
-        if v is not None and v <= 0:
-            raise ValueError("threshold must be positive")
+        if v is not None and (not math.isfinite(v) or v <= 0):
+            raise ValueError("threshold must be a finite, positive number")
         return v
 
 

@@ -36,11 +36,50 @@ PROVIDER_LIMITS: Dict[str, ProviderLimit] = {
     "twelvedata": ProviderLimit(per_minute=8, per_day=800),
     "finnhub": ProviderLimit(per_minute=60, per_day=10000),
     "fmp": ProviderLimit(per_minute=None, per_day=250),
-    "upstox": ProviderLimit(per_minute=600, per_day=10000),
+    "upstox": ProviderLimit(per_minute=300, per_day=10000),
     "nse": ProviderLimit(per_minute=30, per_day=3000),
 }
 
+_ATOMIC_QUOTA_LUA = """
+local count = tonumber(ARGV[1])
+local min_limit = tonumber(ARGV[2])
+local day_limit = tonumber(ARGV[3])
+local min_ttl = tonumber(ARGV[4])
+local day_ttl = tonumber(ARGV[5])
 
+local has_min = min_limit > 0
+local has_day = day_limit > 0
+
+if has_min then
+    local cur_min = tonumber(redis.call('get', KEYS[1]) or '0')
+    if cur_min + count > min_limit then
+        return 0 -- Rejected on minute burst
+    end
+end
+
+if has_day then
+    local cur_day = tonumber(redis.call('get', KEYS[2]) or '0')
+    if cur_day + count > day_limit then
+        return -1 -- Rejected on daily limit
+    end
+end
+
+if has_min then
+    local new_min = redis.call('incrby', KEYS[1], count)
+    if new_min == count then
+        redis.call('expire', KEYS[1], min_ttl)
+    end
+end
+
+if has_day then
+    local new_day = redis.call('incrby', KEYS[2], count)
+    if new_day == count then
+        redis.call('expire', KEYS[2], day_ttl)
+    end
+end
+
+return 1 -- Allowed
+"""
 
 
 class ProviderQuotaGovernor:
@@ -79,14 +118,50 @@ class ProviderQuotaGovernor:
 
         # ── 1. Redis Tier (Distributed) ──
         if redis_client is not None:
-            minute_key = None
-            daily_key = None
+            epoch_min = int(now_epoch // 60)
+            minute_key = f"quota:provider:{prov}:min:{epoch_min}" if limits.per_minute is not None else None
+            daily_key = f"quota:provider:{prov}:daily:{today_str}" if limits.per_day is not None else None
+
+            # Primary: Atomic check-and-reserve Lua script (eliminates partial reservation and immortal keys)
+            if hasattr(redis_client, "eval"):
+                try:
+                    res = await redis_client.eval(
+                        _ATOMIC_QUOTA_LUA,
+                        2,
+                        minute_key or "quota:noop:min",
+                        daily_key or "quota:noop:day",
+                        count,
+                        limits.per_minute if limits.per_minute is not None else -1,
+                        limits.per_day if limits.per_day is not None else -1,
+                        120,
+                        90000,
+                    )
+                    if res == 1:
+                        return True
+                    elif res == 0:
+                        logger.warning(
+                            "provider_minute_quota_exceeded",
+                            provider=prov,
+                            limit=limits.per_minute,
+                            count=count,
+                        )
+                        return False
+                    elif res == -1:
+                        logger.warning(
+                            "provider_daily_quota_exceeded",
+                            provider=prov,
+                            limit=limits.per_day,
+                            count=count,
+                        )
+                        return False
+                except Exception as lua_err:
+                    logger.debug("quota_lua_fallback_to_standard", error=str(lua_err))
+
+            # Fallback path (e.g. simplified test mock redis instances without Lua evaluation support)
             daily_incremented = False
             try:
-                # 1. Minute burst limit check FIRST (prevents leaking daily counter on burst rejection)
+                # 1. Minute burst limit check FIRST
                 if limits.per_minute is not None:
-                    epoch_min = int(now_epoch // 60)
-                    minute_key = f"quota:provider:{prov}:min:{epoch_min}"
                     used_min = await redis_client.incrby(minute_key, count)
                     if used_min == count:
                         try:
@@ -98,7 +173,7 @@ class ProviderQuotaGovernor:
                             await redis_client.decrby(minute_key, count)
                         except Exception:
                             pass
-                        minute_key = None  # Rolled back
+                        minute_key = None
                         logger.warning(
                             "provider_minute_quota_exceeded",
                             provider=prov,
@@ -108,9 +183,8 @@ class ProviderQuotaGovernor:
                         )
                         return False
 
-                # 2. Daily limit check (only reached if minute check passed)
+                # 2. Daily limit check
                 if limits.per_day is not None:
-                    daily_key = f"quota:provider:{prov}:daily:{today_str}"
                     try:
                         used_today = await redis_client.incrby(daily_key, count)
                         daily_incremented = True
@@ -156,7 +230,6 @@ class ProviderQuotaGovernor:
 
                 return True
             except Exception as e:
-                # Ensure daily and minute reservations are rolled back if any uncaught error occurred
                 if daily_incremented and daily_key:
                     try:
                         await redis_client.decrby(daily_key, count)

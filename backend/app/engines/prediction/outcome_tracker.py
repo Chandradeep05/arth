@@ -49,6 +49,14 @@ INDEX_PRUNE_BATCH = 500
 RECORD_TTL_SECONDS = 90 * 86400
 
 
+class EvaluationCount(int):
+    """Integer return representing evaluated count, augmented with execution metrics."""
+    def __new__(cls, val: int, stats: dict | None = None):
+        obj = super().__new__(cls, val)
+        obj.stats = stats or {}
+        return obj
+
+
 def _classify_direction(return_pct: float) -> str:
     """Classify a return percentage into bullish/bearish/neutral."""
     if return_pct > NEUTRAL_THRESHOLD_PCT:
@@ -232,6 +240,11 @@ class OutcomeTracker:
         records = await self._get_records_by_status("pending")
         now = datetime.now(timezone.utc)
         count = 0
+        ungradable_count = 0
+        skipped_immature = 0
+        eligible_count = 0
+        pending_unpriced = 0
+        provider_errors = 0
 
         # Also reclaim stale 'evaluating' records
         stale_records = await self._get_records_by_status("evaluating")
@@ -252,12 +265,16 @@ class OutcomeTracker:
             if record.reference_price is None:
                 record.evaluation_status = "ungradable"
                 await self._update_record(key, record)
+                ungradable_count += 1
                 continue
 
             # Check if horizon has elapsed (calendar-day approximation)
             predicted_at = datetime.fromisoformat(record.predicted_at)
             if now - predicted_at < timedelta(days=record.horizon_days + 2):
+                skipped_immature += 1
                 continue
+
+            eligible_count += 1
 
             # Atomic claim via Redis SET NX
             if self._redis:
@@ -280,6 +297,7 @@ class OutcomeTracker:
                     await self._update_record(key, record)
                     if self._redis:
                         await self._redis.delete(f"eval_claim:{key}")
+                    pending_unpriced += 1
                     continue
 
                 actual = (price - record.reference_price) / record.reference_price * 100
@@ -304,6 +322,7 @@ class OutcomeTracker:
                 )
             except Exception as e:
                 logger.warning("evaluation_failed", symbol=record.symbol, error=str(e))
+                provider_errors += 1
                 # Release claim on failure
                 record.evaluation_status = "pending"
                 record.evaluating_at = None
@@ -311,7 +330,15 @@ class OutcomeTracker:
                 if self._redis:
                     await self._redis.delete(f"eval_claim:{key}")
 
-        return count
+        stats = {
+            "evaluated": count,
+            "eligible": eligible_count,
+            "pending_unpriced": pending_unpriced,
+            "provider_errors": provider_errors,
+            "skipped_immature": skipped_immature,
+            "ungradable": ungradable_count,
+        }
+        return EvaluationCount(count, stats=stats)
 
     async def get_accuracy(
         self,

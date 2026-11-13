@@ -91,7 +91,7 @@ async def redeem_invite_code(
         if not invite:
             raise HTTPException(status_code=404, detail="Invite code not found")
 
-        if invite["used_by"] is not None:
+        if invite["used_by"] is not None or invite.get("used_at") is not None:
             raise HTTPException(
                 status_code=409,
                 detail="Invite code has already been used",

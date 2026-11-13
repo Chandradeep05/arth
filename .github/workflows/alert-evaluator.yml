@@ -41,13 +41,33 @@ jobs:
           cat body.json 2>/dev/null || true
           echo
 
-          # Write structured markdown summary for GitHub Actions UI observability
-          if [ -f body.json ]; then
-            python3 -c "
+          if [ "$http_code" = "000" ]; then
+            echo "::error::Network error -- backend unreachable"
+            exit 1
+          fi
+          if [ "$http_code" = "401" ] || [ "$http_code" = "403" ]; then
+            echo "::error::Auth rejected -- INTERNAL_JOB_SECRET in GitHub does not match Render env var"
+            exit 1
+          fi
+          if [ "$http_code" != "200" ]; then
+            echo "::error::Unexpected status $http_code"
+            exit 1
+          fi
+
+          # Strict semantic JSON validation & structured markdown summary
+          python3 -c "
           import json, os, sys
           try:
               with open('body.json') as f:
-                  d = json.load(f)
+                  content = f.read().strip()
+              if not content:
+                  print('::error::Empty response body received from evaluate-alerts')
+                  sys.exit(1)
+              d = json.loads(content)
+              if not isinstance(d, dict):
+                  print('::error::Expected JSON object in response, got ' + type(d).__name__)
+                  sys.exit(1)
+
               if d.get('skipped'):
                   summary = f'''### ⏸️ Alert Evaluation Skipped
           - **Reason:** \`{d.get('reason', 'N/A')}\`
@@ -75,22 +95,9 @@ jobs:
                   with open(step_summary, 'a') as sf:
                       sf.write(summary + '\n')
           except Exception as e:
-              pass
-          " 2>/dev/null || true
-          fi
-
-          if [ "$http_code" = "000" ]; then
-            echo "::error::Network error -- backend unreachable"
-            exit 1
-          fi
-          if [ "$http_code" = "401" ] || [ "$http_code" = "403" ]; then
-            echo "::error::Auth rejected -- INTERNAL_JOB_SECRET in GitHub does not match Render env var"
-            exit 1
-          fi
-          if [ "$http_code" != "200" ]; then
-            echo "::error::Unexpected status $http_code"
-            exit 1
-          fi
+              print(f'::error::Failed to validate response body: {e}')
+              sys.exit(1)
+          "
           echo "Alert evaluation completed."
 
       - name: Upload evaluation evidence artifact

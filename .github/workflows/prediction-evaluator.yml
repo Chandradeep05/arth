@@ -40,36 +40,6 @@ jobs:
           cat body.json 2>/dev/null || true
           echo
 
-          # Write structured markdown summary for GitHub Actions UI observability
-          if [ -f body.json ]; then
-            python3 -c "
-          import json, os, sys
-          try:
-              with open('body.json') as f:
-                  d = json.load(f)
-              status = d.get('status', 'unknown')
-              if status == 'error':
-                  summary = f'''### ❌ Prediction Evaluation Failed
-          - **Error:** \`{d.get('error', 'unknown error')}\`
-          - **HTTP Status:** \`$http_code\`
-          '''
-              else:
-                  summary = f'''### 🎯 Prediction Evaluation Evidence
-          | Metric | Value |
-          |---|---|
-          | **HTTP Status** | \`$http_code\` |
-          | **Predictions Evaluated** | \`{d.get('evaluated', 'N/A')}\` |
-          | **Status** | \`{status}\` |
-          '''
-              step_summary = os.environ.get('GITHUB_STEP_SUMMARY')
-              if step_summary:
-                  with open(step_summary, 'a') as sf:
-                      sf.write(summary + '\n')
-          except Exception as e:
-              pass
-          " 2>/dev/null || true
-          fi
-
           if [ "$http_code" = "000" ]; then
             echo "::error::Network error -- backend unreachable"
             exit 1
@@ -83,19 +53,45 @@ jobs:
             exit 1
           fi
 
-          # Semantic check: Fail workflow if backend reports an error
-          if [ -f body.json ]; then
-            python3 -c "
-          import json, sys
+          # Strict semantic JSON validation & structured markdown summary
+          python3 -c "
+          import json, os, sys
           try:
-              d = json.load(open('body.json'))
-              if d.get('status') == 'error':
-                  print(f'::error::Evaluation failed: {d.get(\"error\")}')
+              with open('body.json') as f:
+                  content = f.read().strip()
+              if not content:
+                  print('::error::Empty response body received from evaluate-predictions')
                   sys.exit(1)
+              d = json.loads(content)
+              if not isinstance(d, dict):
+                  print('::error::Expected JSON object in response, got ' + type(d).__name__)
+                  sys.exit(1)
+
+              status = d.get('status', 'unknown')
+              if status == 'error':
+                  print(f'::error::Prediction evaluation failed on backend: {d.get(\"error\")}')
+                  sys.exit(1)
+
+              summary = f'''### 🎯 Prediction Evaluation Evidence
+          | Metric | Value |
+          |---|---|
+          | **HTTP Status** | \`$http_code\` |
+          | **Status** | \`{status}\` |
+          | **Predictions Evaluated** | \`{d.get('evaluated', 'N/A')}\` |
+          | **Eligible Predictions** | \`{d.get('eligible', 'N/A')}\` |
+          | **Pending Unpriced** | \`{d.get('pending_unpriced', 'N/A')}\` |
+          | **Provider Errors** | \`{d.get('provider_errors', 'N/A')}\` |
+          | **Skipped (Immature)** | \`{d.get('skipped_immature', 'N/A')}\` |
+          | **Ungradable** | \`{d.get('ungradable', 'N/A')}\` |
+          '''
+              step_summary = os.environ.get('GITHUB_STEP_SUMMARY')
+              if step_summary:
+                  with open(step_summary, 'a') as sf:
+                      sf.write(summary + '\n')
           except Exception as e:
-              pass
+              print(f'::error::Failed to validate response body: {e}')
+              sys.exit(1)
           "
-          fi
 
           echo "Prediction evaluation completed."
 

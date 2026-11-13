@@ -39,36 +39,6 @@ jobs:
           cat body.json 2>/dev/null || true
           echo
 
-          # Write structured markdown summary for GitHub Actions UI observability
-          if [ -f body.json ]; then
-            python3 -c "
-          import json, os, sys
-          try:
-              with open('body.json') as f:
-                  d = json.load(f)
-              if d.get('skipped') and ('Redis' in str(d.get('reason', '')) or 'Database' in str(d.get('reason', ''))):
-                  summary = f'''### ❌ Warmup Failed (Infrastructure Outage)
-          - **Reason:** \`{d.get('reason')}\`
-          - **HTTP Status:** \`$http_code\`
-          '''
-              else:
-                  summary = f'''### ⚡ Alert Warmup Evidence
-          | Metric | Value |
-          |---|---|
-          | **HTTP Status** | \`$http_code\` |
-          | **Symbols Warmed** | \`{d.get('warmed', 'N/A')}\` |
-          | **Symbols Skipped (Cached)** | \`{d.get('skipped', 'N/A')}\` |
-          | **Uncached Remaining** | \`{d.get('uncached_remaining', 'N/A')}\` |
-          '''
-              step_summary = os.environ.get('GITHUB_STEP_SUMMARY')
-              if step_summary:
-                  with open(step_summary, 'a') as sf:
-                      sf.write(summary + '\n')
-          except Exception as e:
-              pass
-          " 2>/dev/null || true
-          fi
-
           if [ "$http_code" = "000" ]; then
             echo "::error::Network error -- backend unreachable"
             exit 1
@@ -82,19 +52,40 @@ jobs:
             exit 1
           fi
 
-          # Semantic check: Fail workflow if backend skipped due to missing infrastructure
-          if [ -f body.json ]; then
-            python3 -c "
-          import json, sys
+          # Strict semantic JSON validation & structured markdown summary
+          python3 -c "
+          import json, os, sys
           try:
-              d = json.load(open('body.json'))
-              if d.get('skipped') and ('Redis' in str(d.get('reason', '')) or 'Database' in str(d.get('reason', ''))):
-                  print(f'::error::Warmup failed: {d.get(\"reason\")}')
+              with open('body.json') as f:
+                  content = f.read().strip()
+              if not content:
+                  print('::error::Empty response body received from warm-alert-symbols')
                   sys.exit(1)
+              d = json.loads(content)
+              if not isinstance(d, dict):
+                  print('::error::Expected JSON object in response, got ' + type(d).__name__)
+                  sys.exit(1)
+
+              if d.get('skipped') and ('Redis' in str(d.get('reason', '')) or 'Database' in str(d.get('reason', ''))):
+                  print(f'::error::Warmup failed due to missing infrastructure: {d.get(\"reason\")}')
+                  sys.exit(1)
+
+              summary = f'''### ⚡ Alert Warmup Evidence
+          | Metric | Value |
+          |---|---|
+          | **HTTP Status** | \`$http_code\` |
+          | **Symbols Warmed** | \`{d.get('warmed', 'N/A')}\` |
+          | **Symbols Skipped (Cached)** | \`{d.get('skipped', 'N/A')}\` |
+          | **Uncached Remaining** | \`{d.get('uncached_remaining', 'N/A')}\` |
+          '''
+              step_summary = os.environ.get('GITHUB_STEP_SUMMARY')
+              if step_summary:
+                  with open(step_summary, 'a') as sf:
+                      sf.write(summary + '\n')
           except Exception as e:
-              pass
+              print(f'::error::Failed to validate response body: {e}')
+              sys.exit(1)
           "
-          fi
 
           echo "Alert warmup completed."
 

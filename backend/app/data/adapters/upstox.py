@@ -34,8 +34,14 @@ _http_client: Optional[httpx.AsyncClient] = None
 # Static index map
 _STATIC_INDEX_MAP = {
     "^NSEI": "NSE_INDEX|Nifty 50",
+    "NIFTY.NS": "NSE_INDEX|Nifty 50",
+    "NIFTY": "NSE_INDEX|Nifty 50",
     "^NSEBANK": "NSE_INDEX|Nifty Bank",
+    "BANKNIFTY.NS": "NSE_INDEX|Nifty Bank",
+    "BANKNIFTY": "NSE_INDEX|Nifty Bank",
     "^BSESN": "BSE_INDEX|SENSEX",
+    "SENSEX.BO": "BSE_INDEX|SENSEX",
+    "SENSEX": "BSE_INDEX|SENSEX",
 }
 
 def _get_client() -> httpx.AsyncClient:

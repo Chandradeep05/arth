@@ -164,7 +164,10 @@ async def test_cached_symbol_skips_provider(monkeypatch):
 
     monkeypatch.setattr(mdp.market_data, "get_quote", should_not_be_called)
     redis = FakeRedis()
-    redis.store["quote:RELIANCE.NS"] = json.dumps({"price": 2900.0})
+    redis.store["quote:RELIANCE.NS"] = json.dumps({
+        "price": 2900.0,
+        "ingested_at": _OPEN_TRADING_TIME.isoformat(),
+    })
     db = FakeDB([_alert()])
 
     result = await internal._run_eval(db, redis, _OPEN_TRADING_TIME)
@@ -438,7 +441,11 @@ async def test_atomic_trigger_state_transition_and_deduplication():
 
     db = RacingDB([_alert(symbol="RELIANCE.NS", atype="price_below", threshold=3000.0, state="armed")])
     redis = FakeRedis()
-    redis.store["quote:RELIANCE.NS"] = json.dumps({"price": 2500.0, "provider": "Upstox"})
+    redis.store["quote:RELIANCE.NS"] = json.dumps({
+        "price": 2500.0,
+        "provider": "Upstox",
+        "ingested_at": _OPEN_TRADING_TIME.isoformat(),
+    })
 
     result = await internal._run_eval(db, redis, _OPEN_TRADING_TIME)
 
@@ -491,7 +498,11 @@ async def test_decimal_threshold_passed_as_decimal_to_update(monkeypatch):
     }
     db = CapturingDB([alert])
     redis = FakeRedis()
-    redis.store["quote:RELIANCE.NS"] = json.dumps({"price": 2500.0, "provider": "Upstox"})
+    redis.store["quote:RELIANCE.NS"] = json.dumps({
+        "price": 2500.0,
+        "provider": "Upstox",
+        "ingested_at": _OPEN_TRADING_TIME.isoformat(),
+    })
 
     result = await internal._run_eval(db, redis, _OPEN_TRADING_TIME)
 
@@ -675,3 +686,132 @@ async def test_evaluate_predictions_uses_upstox_for_indian_symbols(monkeypatch):
     assert ("RELIANCE.NS", False) in calls
     # Verify US symbol had allow_nse_fallback=True
     assert ("AAPL", True) in calls
+
+
+# ── Additional Master Audit Hardening Tests ──────────────────────────
+
+@pytest.mark.asyncio
+async def test_jsonresponse_defined_on_infrastructure_skips():
+    """
+    JSONResponse must be imported at module level so that warmup and prediction
+    infrastructure failure paths do not raise NameError.
+    """
+    req_no_redis = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(redis=None)), state=SimpleNamespace(db=FakeDB([])))
+    resp_redis = await internal.warm_alert_symbols(req_no_redis, None)
+    assert resp_redis.status_code == 503
+    body = json.loads(resp_redis.body.decode("utf-8"))
+    assert body["reason"] == "Redis not configured"
+
+    req_no_db = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(redis=FakeRedis())), state=SimpleNamespace(db=None))
+    resp_db = await internal.warm_alert_symbols(req_no_db, None)
+    assert resp_db.status_code == 503
+    body_db = json.loads(resp_db.body.decode("utf-8"))
+    assert body_db["reason"] == "Database pool unavailable"
+
+
+def test_symbol_mm_allowed_and_hal_ambiguous_validation():
+    """
+    M&M must be allowed by symbol validation and normalized to M&M.NS.
+    Bare HAL must be rejected as ambiguous with explicit guidance.
+    HAL.NS must be accepted.
+    """
+    from app.api.v1.alerts import CreateAlertRequest
+    from pydantic import ValidationError
+
+    # M&M is valid
+    req_mm = CreateAlertRequest(symbol="M&M", alert_type="price_above", threshold=2800.0)
+    assert req_mm.symbol == "M&M.NS"
+
+    # Bare HAL is ambiguous
+    with pytest.raises(ValidationError) as exc:
+        CreateAlertRequest(symbol="HAL", alert_type="price_above", threshold=4200.0)
+    assert "ambiguous across exchanges" in str(exc.value)
+
+    # Qualified HAL.NS is accepted
+    req_hal_ns = CreateAlertRequest(symbol="HAL.NS", alert_type="price_above", threshold=4200.0)
+    assert req_hal_ns.symbol == "HAL.NS"
+
+
+def test_financial_numeric_validation_nan_and_inf():
+    """
+    Alert thresholds must reject NaN, positive infinity, and negative infinity.
+    """
+    from app.api.v1.alerts import CreateAlertRequest, EditAlertRequest
+    from pydantic import ValidationError
+
+    # NaN in CreateAlertRequest
+    with pytest.raises(ValidationError) as exc_nan:
+        CreateAlertRequest(symbol="RELIANCE", alert_type="price_above", threshold=float("nan"))
+    assert "finite, positive number" in str(exc_nan.value)
+
+    # Infinity in CreateAlertRequest
+    with pytest.raises(ValidationError) as exc_inf:
+        CreateAlertRequest(symbol="RELIANCE", alert_type="price_above", threshold=float("inf"))
+    assert "finite, positive number" in str(exc_inf.value)
+
+    # NaN in EditAlertRequest
+    with pytest.raises(ValidationError) as exc_edit:
+        EditAlertRequest(threshold=float("nan"))
+    assert "finite, positive number" in str(exc_edit.value)
+
+
+def test_internal_secret_unicode_and_type_safety():
+    """
+    Non-ASCII or invalid surrogate strings in X-Internal-Secret must return 403 Forbidden,
+    not an unhandled TypeError 500 error.
+    """
+    from fastapi import HTTPException
+    from app.config import Settings
+    from app.core.auth import require_internal_secret
+
+    settings = Settings(internal_job_secret="safe-secret-key")
+    # Non-ASCII surrogate string
+    req_bad = SimpleNamespace(headers={"X-Internal-Secret": "bad\ud800secret"})
+    with pytest.raises(HTTPException) as exc:
+        require_internal_secret(req_bad, settings)
+    assert exc.value.status_code == 403
+
+
+def test_quote_freshness_fail_closed_validation():
+    """
+    _is_quote_fresh must strictly validate UTC timestamps and reject:
+    - Missing ingested_at
+    - Stale (> 900s)
+    - Future (> 60s)
+    - Naive timestamps normalized safely
+    """
+    now = datetime(2026, 10, 21, 5, 30, tzinfo=timezone.utc)
+
+    # Missing ingested_at -> Rejected
+    assert internal._is_quote_fresh({"price": 2500.0}, now) is False
+
+    # Stale (> 900s, 1500s old) -> Rejected
+    stale_ts = datetime(2026, 10, 21, 5, 5, tzinfo=timezone.utc).isoformat()
+    assert internal._is_quote_fresh({"price": 2500.0, "ingested_at": stale_ts}, now) is False
+
+    # Implausibly future (> 60s, 5 minutes in future) -> Rejected
+    future_ts = datetime(2026, 10, 21, 5, 35, tzinfo=timezone.utc).isoformat()
+    assert internal._is_quote_fresh({"price": 2500.0, "ingested_at": future_ts}, now) is False
+
+    # Fresh timezone-aware (60s old) -> Accepted
+    fresh_ts = datetime(2026, 10, 21, 5, 29, tzinfo=timezone.utc).isoformat()
+    assert internal._is_quote_fresh({"price": 2500.0, "ingested_at": fresh_ts}, now) is True
+
+    # Fresh timezone-naive (60s old, normalized as UTC) -> Accepted
+    fresh_naive = "2026-10-21T05:29:00"
+    assert internal._is_quote_fresh({"price": 2500.0, "ingested_at": fresh_naive}, now) is True
+
+
+def test_upstox_static_index_keys():
+    """
+    Upstox adapter must map NIFTY, NIFTY.NS, BANKNIFTY, BANKNIFTY.NS, SENSEX to index keys.
+    """
+    from app.data.adapters.upstox import UpstoxAdapter
+
+    adapter = UpstoxAdapter()
+    assert adapter._symbol_to_key.get("NIFTY.NS") == "NSE_INDEX|Nifty 50"
+    assert adapter._symbol_to_key.get("NIFTY") == "NSE_INDEX|Nifty 50"
+    assert adapter._symbol_to_key.get("BANKNIFTY.NS") == "NSE_INDEX|Nifty Bank"
+    assert adapter._symbol_to_key.get("BANKNIFTY") == "NSE_INDEX|Nifty Bank"
+    assert adapter._symbol_to_key.get("SENSEX.BO") == "BSE_INDEX|SENSEX"
+    assert adapter._symbol_to_key.get("SENSEX") == "BSE_INDEX|SENSEX"

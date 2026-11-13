@@ -442,5 +442,12 @@ def require_internal_secret(
     secret = request.headers.get("X-Internal-Secret", "")
     if not settings.internal_job_secret:
         raise HTTPException(status_code=500, detail="INTERNAL_JOB_SECRET not configured")
-    if not hmac.compare_digest(secret, settings.internal_job_secret):
+    if not secret or not isinstance(secret, str):
+        raise HTTPException(status_code=403, detail="Invalid internal job secret")
+    try:
+        secret_bytes = secret.encode("utf-8")
+        expected_bytes = settings.internal_job_secret.encode("utf-8")
+        if not hmac.compare_digest(secret_bytes, expected_bytes):
+            raise HTTPException(status_code=403, detail="Invalid internal job secret")
+    except (UnicodeEncodeError, TypeError):
         raise HTTPException(status_code=403, detail="Invalid internal job secret")

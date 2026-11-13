@@ -39,6 +39,11 @@ COMMON_INDIAN_SYMBOLS: Set[str] = {
     "VBL", "VEDL", "WIPRO", "ZOMATO",
 }
 
+# Cross-market ticker collisions where bare symbol is ambiguous without exchange qualifier
+AMBIGUOUS_SYMBOLS: Set[str] = {
+    "HAL",  # Hindustan Aeronautics (NSE: HAL.NS) vs Halliburton (NYSE: HAL)
+}
+
 
 def is_indian_symbol(symbol: str) -> bool:
     """Return True if symbol corresponds to an Indian market equity/index."""
