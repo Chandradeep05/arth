@@ -68,12 +68,56 @@ jobs:
                   print('::error::Expected JSON object in response, got ' + type(d).__name__)
                   sys.exit(1)
 
-              if d.get('skipped'):
+              if d.get('status') == 'error' or 'error' in d:
+                  print(f'::error::Alert evaluation failed on backend: {d.get(\"error\") or d.get(\"reason\")}')
+                  sys.exit(1)
+
+              if d.get('skipped') is True:
+                  ALLOWED_SKIPS = {
+                      'Evaluated recently within 120s cooldown',
+                      'Another evaluation running',
+                      'Another evaluation running (in-process)',
+                  }
+                  reason = d.get('reason')
+                  if reason not in ALLOWED_SKIPS:
+                      print(f'::error::Unrecognized or illegal alert evaluation skip reason: {reason!r}')
+                      sys.exit(1)
                   summary = f'''### ⏸️ Alert Evaluation Skipped
-          - **Reason:** \`{d.get('reason', 'N/A')}\`
+          - **Reason:** \`{reason}\`
           - **HTTP Status:** \`$http_code\`
           '''
+              elif 'skipped' in d and d.get('skipped') is not False:
+                  print(f'::error::Invalid skipped value in alert evaluation response: {d.get(\"skipped\")!r}')
+                  sys.exit(1)
               else:
+                  # Validate all required completion fields and types
+                  if not d.get('run_id') or not isinstance(d['run_id'], str):
+                      print('::error::Missing or invalid run_id in alert evaluation response')
+                      sys.exit(1)
+                  if not d.get('at') or not isinstance(d['at'], str):
+                      print('::error::Missing or invalid at timestamp in alert evaluation response')
+                      sys.exit(1)
+
+                  required_metrics = [
+                      'active_alerts', 'symbols_requested', 'quotes_obtained',
+                      'evaluated', 'triggered', 'notifications_created',
+                      'skipped_market_closed', 'provider_errors'
+                  ]
+                  for metric in required_metrics:
+                      val = d.get(metric)
+                      if val is None or not isinstance(val, int) or isinstance(val, bool) or val < 0:
+                          print(f'::error::Invalid alert metric {metric}: expected non-negative integer, got {val!r}')
+                          sys.exit(1)
+
+                  if not isinstance(d.get('unpriced_symbols'), list):
+                      print(f'::error::Invalid unpriced_symbols: expected list, got {type(d.get(\"unpriced_symbols\")).__name__}')
+                      sys.exit(1)
+
+                  dur = d.get('duration_ms')
+                  if dur is None or not isinstance(dur, (int, float)) or dur < 0:
+                      print(f'::error::Invalid duration_ms: expected non-negative number, got {dur!r}')
+                      sys.exit(1)
+
                   summary = f'''### 📊 Alert Evaluation Evidence (Run: {d.get(\"run_id\", \"N/A\")})
           | Metric | Value |
           |---|---|

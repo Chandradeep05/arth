@@ -377,7 +377,7 @@ async def warm_alert_symbols(
         
     alerts = await db.fetch("SELECT DISTINCT symbol FROM alerts WHERE is_active = true")
     if not alerts:
-        return {"warmed": 0, "skipped": 0}
+        return {"warmed": 0, "skipped": 0, "uncached_remaining": 0}
 
     symbols = [row["symbol"] for row in alerts]
     now = datetime.now(timezone.utc)

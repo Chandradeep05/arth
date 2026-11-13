@@ -158,22 +158,25 @@ async def regenerate_invite_code(
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid invite ID")
 
-    row = await db.fetchrow(
-        "SELECT id, used_by, used_at FROM invite_codes WHERE id = $1", inv_uuid
-    )
-    if not row:
-        raise HTTPException(status_code=404, detail="Invite code not found")
-    if row["used_by"] is not None or row.get("used_at") is not None:
-        raise HTTPException(status_code=400, detail="Cannot regenerate an already used invite code")
+    async with db.transaction():
+        row = await db.fetchrow(
+            "SELECT id, used_by, used_at FROM invite_codes WHERE id = $1 FOR UPDATE", inv_uuid
+        )
+        if not row:
+            raise HTTPException(status_code=404, detail="Invite code not found")
+        if row["used_by"] is not None or row.get("used_at") is not None:
+            raise HTTPException(status_code=400, detail="Cannot regenerate an already used invite code")
 
-    raw_code = _gen_code()
-    code_hash = hash_invite_code(raw_code)
-    from datetime import timedelta
-    new_expires_at = datetime.now(timezone.utc) + timedelta(days=30)
-    await db.execute(
-        "UPDATE invite_codes SET code = $1, expires_at = $2 WHERE id = $3",
-        code_hash, new_expires_at, inv_uuid,
-    )
+        raw_code = _gen_code()
+        code_hash = hash_invite_code(raw_code)
+        from datetime import timedelta
+        new_expires_at = datetime.now(timezone.utc) + timedelta(days=30)
+        res = await db.execute(
+            "UPDATE invite_codes SET code = $1, expires_at = $2 WHERE id = $3 AND used_by IS NULL AND used_at IS NULL",
+            code_hash, new_expires_at, inv_uuid,
+        )
+        if res == "UPDATE 0":
+            raise HTTPException(status_code=409, detail="Invite code was concurrently redeemed or modified")
     logger.info("invite_regenerated", admin=str(admin.user_id), invite_id=invite_id)
     return {
         "success": True,

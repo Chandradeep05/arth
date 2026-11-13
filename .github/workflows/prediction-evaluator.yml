@@ -98,15 +98,33 @@ jobs:
                   print('::error::Expected JSON object in response, got ' + type(d).__name__)
                   sys.exit(1)
 
-              status = d.get('status', 'unknown')
+              status = d.get('status')
               if status == 'error':
                   print(f'::error::Prediction evaluation failed on backend: {d.get(\"error\")}')
                   sys.exit(1)
 
-              eligible = d.get('eligible', 0)
-              evaluated = d.get('evaluated', 0)
+              if status not in ('ok', 'stalled'):
+                  print(f'::error::Invalid or missing status in prediction evaluation response: {status!r}')
+                  sys.exit(1)
+
+              required_metrics = [
+                  'evaluated', 'eligible', 'pending_unpriced',
+                  'provider_errors', 'skipped_immature', 'ungradable'
+              ]
+              for metric in required_metrics:
+                  val = d.get(metric)
+                  if val is None or not isinstance(val, int) or isinstance(val, bool) or val < 0:
+                      print(f'::error::Invalid prediction metric {metric}: expected non-negative integer, got {val!r}')
+                      sys.exit(1)
+
+              eligible = d['eligible']
+              evaluated = d['evaluated']
+              if evaluated > eligible:
+                  print(f'::error::Inconsistent metrics: evaluated ({evaluated}) cannot exceed eligible ({eligible})')
+                  sys.exit(1)
+
               if status == 'stalled' or (eligible > 0 and evaluated == 0):
-                  print(f'::error::Prediction evaluation stalled: {eligible} eligible prediction(s) could not be evaluated (evaluated=0, pending_unpriced={d.get(\"pending_unpriced\", 0)}, provider_errors={d.get(\"provider_errors\", 0)})')
+                  print(f'::error::Prediction evaluation stalled: {eligible} eligible prediction(s) could not be evaluated (evaluated=0, pending_unpriced={d[\"pending_unpriced\"]}, provider_errors={d[\"provider_errors\"]})')
                   sys.exit(1)
           except Exception as e:
               print(f'::error::Failed to validate response body: {e}')

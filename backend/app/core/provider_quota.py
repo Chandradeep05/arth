@@ -26,55 +26,81 @@ logger = get_logger(__name__)
 
 
 class ProviderLimit:
-    def __init__(self, per_minute: Optional[int] = None, per_day: Optional[int] = None):
+    def __init__(
+        self,
+        per_second: Optional[int] = None,
+        per_minute: Optional[int] = None,
+        per_day: Optional[int] = None,
+    ):
+        self.per_second = per_second
         self.per_minute = per_minute
         self.per_day = per_day
 
 
 # Provider quota configuration
 PROVIDER_LIMITS: Dict[str, ProviderLimit] = {
-    "twelvedata": ProviderLimit(per_minute=8, per_day=800),
-    "finnhub": ProviderLimit(per_minute=60, per_day=10000),
-    "fmp": ProviderLimit(per_minute=None, per_day=250),
-    "upstox": ProviderLimit(per_minute=300, per_day=10000),
-    "nse": ProviderLimit(per_minute=30, per_day=3000),
+    "twelvedata": ProviderLimit(per_second=None, per_minute=8, per_day=800),
+    "finnhub": ProviderLimit(per_second=30, per_minute=60, per_day=10000),
+    "fmp": ProviderLimit(per_second=None, per_minute=None, per_day=250),
+    "upstox": ProviderLimit(per_second=10, per_minute=300, per_day=10000),
+    "nse": ProviderLimit(per_second=5, per_minute=30, per_day=3000),
 }
 
 _ATOMIC_QUOTA_LUA = """
 local count = tonumber(ARGV[1])
-local min_limit = tonumber(ARGV[2])
-local day_limit = tonumber(ARGV[3])
-local min_ttl = tonumber(ARGV[4])
-local day_ttl = tonumber(ARGV[5])
+local sec_limit = tonumber(ARGV[2])
+local min_limit = tonumber(ARGV[3])
+local day_limit = tonumber(ARGV[4])
+local sec_ttl = tonumber(ARGV[5])
+local min_ttl = tonumber(ARGV[6])
+local day_ttl = tonumber(ARGV[7])
 
+local has_sec = sec_limit > 0
 local has_min = min_limit > 0
 local has_day = day_limit > 0
 
+if has_sec then
+    local cur_sec = tonumber(redis.call('get', KEYS[1]) or '0')
+    if cur_sec + count > sec_limit then
+        return -2 -- Rejected on second burst
+    end
+end
+
 if has_min then
-    local cur_min = tonumber(redis.call('get', KEYS[1]) or '0')
+    local cur_min = tonumber(redis.call('get', KEYS[2]) or '0')
     if cur_min + count > min_limit then
         return 0 -- Rejected on minute burst
     end
 end
 
 if has_day then
-    local cur_day = tonumber(redis.call('get', KEYS[2]) or '0')
+    local cur_day = tonumber(redis.call('get', KEYS[3]) or '0')
     if cur_day + count > day_limit then
         return -1 -- Rejected on daily limit
     end
 end
 
+if has_sec then
+    redis.call('incrby', KEYS[1], count)
+    local ttl = redis.call('ttl', KEYS[1])
+    if ttl < 0 then
+        redis.call('expire', KEYS[1], sec_ttl)
+    end
+end
+
 if has_min then
-    local new_min = redis.call('incrby', KEYS[1], count)
-    if new_min == count then
-        redis.call('expire', KEYS[1], min_ttl)
+    redis.call('incrby', KEYS[2], count)
+    local ttl = redis.call('ttl', KEYS[2])
+    if ttl < 0 then
+        redis.call('expire', KEYS[2], min_ttl)
     end
 end
 
 if has_day then
-    local new_day = redis.call('incrby', KEYS[2], count)
-    if new_day == count then
-        redis.call('expire', KEYS[2], day_ttl)
+    redis.call('incrby', KEYS[3], count)
+    local ttl = redis.call('ttl', KEYS[3])
+    if ttl < 0 then
+        redis.call('expire', KEYS[3], day_ttl)
     end
 end
 
@@ -88,6 +114,7 @@ class ProviderQuotaGovernor:
     def __init__(self):
         self._lock = asyncio.Lock()
         # In-memory tracking: provider -> [(timestamp), ...]
+        self._sec_calls: Dict[str, list[float]] = {}
         self._minute_calls: Dict[str, list[float]] = {}
         # In-memory daily tracking: (provider, date_str) -> count
         self._daily_counts: Dict[Tuple[str, str], int] = {}
@@ -116,9 +143,22 @@ class ProviderQuotaGovernor:
         today_str = now_utc.strftime("%Y-%m-%d")
         now_epoch = time.time()
 
+        # Check fail-closed boundary in production
+        try:
+            from app.config import get_settings
+            is_prod = get_settings().is_production
+        except Exception:
+            is_prod = False
+
+        if redis_client is None and is_prod:
+            logger.error("provider_quota_redis_unavailable_in_production_fail_closed", provider=prov)
+            return False
+
         # ── 1. Redis Tier (Distributed) ──
         if redis_client is not None:
+            epoch_sec = int(now_epoch)
             epoch_min = int(now_epoch // 60)
+            sec_key = f"quota:provider:{prov}:sec:{epoch_sec}" if limits.per_second is not None else None
             minute_key = f"quota:provider:{prov}:min:{epoch_min}" if limits.per_minute is not None else None
             daily_key = f"quota:provider:{prov}:daily:{today_str}" if limits.per_day is not None else None
 
@@ -127,17 +167,28 @@ class ProviderQuotaGovernor:
                 try:
                     res = await redis_client.eval(
                         _ATOMIC_QUOTA_LUA,
-                        2,
+                        3,
+                        sec_key or "quota:noop:sec",
                         minute_key or "quota:noop:min",
                         daily_key or "quota:noop:day",
                         count,
+                        limits.per_second if limits.per_second is not None else -1,
                         limits.per_minute if limits.per_minute is not None else -1,
                         limits.per_day if limits.per_day is not None else -1,
+                        10,
                         120,
                         90000,
                     )
                     if res == 1:
                         return True
+                    elif res == -2:
+                        logger.warning(
+                            "provider_second_quota_exceeded",
+                            provider=prov,
+                            limit=limits.per_second,
+                            count=count,
+                        )
+                        return False
                     elif res == 0:
                         logger.warning(
                             "provider_minute_quota_exceeded",
@@ -158,10 +209,35 @@ class ProviderQuotaGovernor:
                     logger.warning("quota_lua_script_failed_fallback_to_commands", provider=prov, error=str(lua_err))
 
             # Fallback path (e.g. simplified test mock redis instances without Lua evaluation support)
+            sec_incremented = False
             daily_incremented = False
             try:
-                # 1. Minute burst limit check FIRST
-                if limits.per_minute is not None:
+                # 1. Second burst limit check
+                if limits.per_second is not None and sec_key:
+                    used_sec = await redis_client.incrby(sec_key, count)
+                    sec_incremented = True
+                    if used_sec == count:
+                        try:
+                            await redis_client.expire(sec_key, 10)
+                        except Exception:
+                            pass
+                    if used_sec > limits.per_second:
+                        try:
+                            await redis_client.decrby(sec_key, count)
+                        except Exception:
+                            pass
+                        sec_key = None
+                        logger.warning(
+                            "provider_second_quota_exceeded",
+                            provider=prov,
+                            used=used_sec,
+                            limit=limits.per_second,
+                            count=count,
+                        )
+                        return False
+
+                # 2. Minute burst limit check
+                if limits.per_minute is not None and minute_key:
                     used_min = await redis_client.incrby(minute_key, count)
                     if used_min == count:
                         try:
@@ -173,6 +249,11 @@ class ProviderQuotaGovernor:
                             await redis_client.decrby(minute_key, count)
                         except Exception:
                             pass
+                        if sec_key and sec_incremented:
+                            try:
+                                await redis_client.decrby(sec_key, count)
+                            except Exception:
+                                pass
                         minute_key = None
                         logger.warning(
                             "provider_minute_quota_exceeded",
@@ -183,8 +264,8 @@ class ProviderQuotaGovernor:
                         )
                         return False
 
-                # 2. Daily limit check
-                if limits.per_day is not None:
+                # 3. Daily limit check
+                if limits.per_day is not None and daily_key:
                     try:
                         used_today = await redis_client.incrby(daily_key, count)
                         daily_incremented = True
@@ -199,6 +280,11 @@ class ProviderQuotaGovernor:
                             except Exception:
                                 pass
                             daily_incremented = False
+                            if sec_key and sec_incremented:
+                                try:
+                                    await redis_client.decrby(sec_key, count)
+                                except Exception:
+                                    pass
                             if minute_key:
                                 try:
                                     await redis_client.decrby(minute_key, count)
@@ -220,6 +306,11 @@ class ProviderQuotaGovernor:
                             except Exception:
                                 pass
                             daily_incremented = False
+                        if sec_key and sec_incremented:
+                            try:
+                                await redis_client.decrby(sec_key, count)
+                            except Exception:
+                                pass
                         if minute_key:
                             try:
                                 await redis_client.decrby(minute_key, count)
@@ -235,15 +326,23 @@ class ProviderQuotaGovernor:
                         await redis_client.decrby(daily_key, count)
                     except Exception:
                         pass
+                if sec_key and sec_incremented:
+                    try:
+                        await redis_client.decrby(sec_key, count)
+                    except Exception:
+                        pass
                 if minute_key:
                     try:
                         await redis_client.decrby(minute_key, count)
                     except Exception:
                         pass
                 logger.warning("provider_quota_redis_error_fallback", provider=prov, error=str(e))
-                # Fall through to in-memory governor
+                if is_prod:
+                    logger.error("provider_quota_redis_failure_in_production_fail_closed", provider=prov, error=str(e))
+                    return False
+                # Fall through to in-memory governor (dev/test only)
 
-        # ── 2. In-Memory Tier (Process-local fallback) ──
+        # ── 2. In-Memory Tier (Process-local fallback for dev/test) ──
         async with self._lock:
             # Check daily
             if limits.per_day is not None:
@@ -258,6 +357,25 @@ class ProviderQuotaGovernor:
                         count=count,
                     )
                     return False
+
+            # Check second sliding window
+            if limits.per_second is not None:
+                window_sec = now_epoch - 1.0
+                sec_calls = self._sec_calls.get(prov, [])
+                sec_calls = [t for t in sec_calls if t > window_sec]
+                if len(sec_calls) + count > limits.per_second:
+                    logger.warning(
+                        "provider_in_memory_second_quota_exceeded",
+                        provider=prov,
+                        used=len(sec_calls),
+                        limit=limits.per_second,
+                        count=count,
+                    )
+                    self._sec_calls[prov] = sec_calls
+                    return False
+                for _ in range(count):
+                    sec_calls.append(now_epoch)
+                self._sec_calls[prov] = sec_calls
 
             # Check minute sliding window
             if limits.per_minute is not None:
@@ -287,6 +405,7 @@ class ProviderQuotaGovernor:
 
     def reset(self) -> None:
         """Reset in-memory counters (useful for unit testing)."""
+        self._sec_calls.clear()
         self._minute_calls.clear()
         self._daily_counts.clear()
 

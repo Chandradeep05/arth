@@ -907,14 +907,21 @@ async def test_invite_redemption_rejects_used_at_with_null_used_by():
             return "pending"  # current user access_status
 
         async def fetchrow(self, sql, *args):
-            # Simulate invite row where used_by is NULL (account deleted) but used_at is preserved
-            return {
+            # Inspect the SQL passed: verify that 'used_at' is explicitly requested in SELECT.
+            # If the production code omits 'used_at' from the query, the returned row lacks
+            # 'used_at', failing the test and proving that SQL column selection is verified.
+            sql_clean = sql.replace("\n", " ")
+            select_clause = sql_clean.split("FROM")[0].lower()
+            cols = [c.strip() for c in select_clause.replace("select", "").split(",")]
+            row = {
                 "id": uuid4(),
                 "used_by": None,
-                "used_at": datetime.now(timezone.utc),
                 "expires_at": datetime(2099, 1, 1, tzinfo=timezone.utc),
                 "created_by": None,
             }
+            if "used_at" in cols:
+                row["used_at"] = datetime.now(timezone.utc)
+            return row
 
         async def execute(self, sql, *args):
             pass
@@ -947,11 +954,25 @@ async def test_admin_cannot_regenerate_used_invite_with_null_used_by():
 
     class MockAdminDB:
         async def fetchrow(self, sql, *args):
-            return {
+            # Verify row-locking and used_at column selection
+            assert "for update" in sql.lower(), "Admin query must use FOR UPDATE row lock"
+            sql_clean = sql.replace("\n", " ")
+            select_clause = sql_clean.split("FROM")[0].lower()
+            cols = [c.strip() for c in select_clause.replace("select", "").split(",")]
+            row = {
                 "id": uuid4(),
                 "used_by": None,
-                "used_at": datetime.now(timezone.utc),
             }
+            if "used_at" in cols:
+                row["used_at"] = datetime.now(timezone.utc)
+            return row
+
+        async def execute(self, sql, *args):
+            return "UPDATE 1"
+
+        @asynccontextmanager
+        async def transaction(self):
+            yield
 
     db = MockAdminDB()
     admin_user = SimpleNamespace(user_id=uuid4(), role="admin")
@@ -961,6 +982,43 @@ async def test_admin_cannot_regenerate_used_invite_with_null_used_by():
         await admin.regenerate_invite_code(str(uuid4()), req, admin_user)
     assert exc.value.status_code == 400
     assert "Cannot regenerate an already used invite code" in exc.value.detail
+
+
+@pytest.mark.asyncio
+async def test_admin_regenerate_concurrency_conflict():
+    """
+    Critical Area E: If an invite is concurrently redeemed or modified between
+    the lock read and update, the atomic conditional update returns 'UPDATE 0'
+    and raises HTTP 409 Conflict.
+    """
+    from app.api.v1 import admin
+    from fastapi import HTTPException
+    from uuid import uuid4
+
+    class MockConflictDB:
+        async def fetchrow(self, sql, *args):
+            return {
+                "id": uuid4(),
+                "used_by": None,
+                "used_at": None,
+            }
+
+        async def execute(self, sql, *args):
+            # Simulate concurrent redemption: zero rows updated because used_by/used_at was set
+            return "UPDATE 0"
+
+        @asynccontextmanager
+        async def transaction(self):
+            yield
+
+    db = MockConflictDB()
+    admin_user = SimpleNamespace(user_id=uuid4(), role="admin")
+    req = SimpleNamespace(state=SimpleNamespace(db=db))
+
+    with pytest.raises(HTTPException) as exc:
+        await admin.regenerate_invite_code(str(uuid4()), req, admin_user)
+    assert exc.value.status_code == 409
+    assert "concurrently redeemed" in exc.value.detail
 
 
 @pytest.mark.asyncio
@@ -1190,3 +1248,271 @@ def test_prediction_evaluator_workflow_yaml_syntax_and_summary_generation(tmp_pa
     assert "| **HTTP Status** | `502` |" in summary
     assert "| **Status** | `stalled` |" in summary
     assert "| **Eligible Predictions** | `4` |" in summary
+
+
+@pytest.mark.asyncio
+async def test_provider_quota_burst_per_second_enforcement():
+    """
+    Critical Area A: Enforce per-second burst limits across providers.
+    Upstox allows 10 req/s. The 11th request in the same second window must be rejected.
+    """
+    from app.core.provider_quota import ProviderQuotaGovernor
+
+    gov = ProviderQuotaGovernor()
+    gov.reset()
+
+    # In dev/test in-memory mode
+    # First 10 requests within the same second should succeed
+    for i in range(10):
+        ok = await gov.acquire("upstox", count=1)
+        assert ok is True, f"Request {i+1} should have succeeded within 10 req/s limit"
+
+    # 11th request in same second window must fail
+    rejected = await gov.acquire("upstox", count=1)
+    assert rejected is False, "11th request must be rejected on per-second quota limit"
+
+    # Also test batch count exceeding limit
+    gov.reset()
+    ok_batch = await gov.acquire("upstox", count=11)
+    assert ok_batch is False, "Batch acquire of 11 must be rejected against 10 req/s limit"
+
+
+@pytest.mark.asyncio
+async def test_provider_quota_production_fail_closed_on_redis_unavailable(monkeypatch):
+    """
+    Critical Area A: In production, missing Redis or Redis failure must FAIL CLOSED.
+    It must not silently fall back to process-local in-memory state.
+    """
+    from app.core.provider_quota import ProviderQuotaGovernor
+    import app.config as config_mod
+
+    gov = ProviderQuotaGovernor()
+    gov.reset()
+
+    class FakeSettings:
+        is_production = True
+
+    monkeypatch.setattr(config_mod, "get_settings", lambda: FakeSettings())
+
+    # 1. When redis_client is None in production -> Fail closed (False)
+    ok = await gov.acquire("upstox", redis_client=None, count=1)
+    assert ok is False, "Must fail closed when Redis is None in production"
+
+    # 2. When redis throws an exception in production -> Fail closed (False)
+    class BrokenRedis:
+        async def eval(self, *args, **kwargs):
+            raise ConnectionError("Redis connection lost")
+
+        async def incrby(self, *args, **kwargs):
+            raise ConnectionError("Redis connection lost")
+
+    ok_broken = await gov.acquire("upstox", redis_client=BrokenRedis(), count=1)
+    assert ok_broken is False, "Must fail closed when Redis throws an exception in production"
+
+    # 3. In non-production (dev/test), redis_client=None falls back to in-memory and succeeds
+    FakeSettings.is_production = False
+    ok_dev = await gov.acquire("upstox", redis_client=None, count=1)
+    assert ok_dev is True, "In non-production, missing Redis can use in-memory fallback"
+
+
+@pytest.mark.asyncio
+async def test_provider_quota_atomic_lua_contract():
+    """
+    Critical Area A: Verify the Lua script handles 3 keys (sec, min, daily),
+    enforces all three levels, and returns expected status codes:
+    1: Allowed
+    -2: Rejected on second burst
+    0: Rejected on minute limit
+    -1: Rejected on daily limit
+    """
+    from app.core.provider_quota import _ATOMIC_QUOTA_LUA, ProviderQuotaGovernor
+    assert "KEYS[1]" in _ATOMIC_QUOTA_LUA
+    assert "KEYS[2]" in _ATOMIC_QUOTA_LUA
+    assert "KEYS[3]" in _ATOMIC_QUOTA_LUA
+    assert "sec_limit" in _ATOMIC_QUOTA_LUA
+    assert "min_limit" in _ATOMIC_QUOTA_LUA
+    assert "day_limit" in _ATOMIC_QUOTA_LUA
+    assert "return -2" in _ATOMIC_QUOTA_LUA
+    assert "return 0" in _ATOMIC_QUOTA_LUA
+    assert "return -1" in _ATOMIC_QUOTA_LUA
+    assert "return 1" in _ATOMIC_QUOTA_LUA
+    assert "ttl < 0 then" in _ATOMIC_QUOTA_LUA  # TTL repair contract
+
+    # Simulate Redis eval dispatch
+    class MockRedisEval:
+        def __init__(self, return_code):
+            self.return_code = return_code
+            self.eval_called_with = None
+
+        async def eval(self, script, numkeys, *args):
+            self.eval_called_with = (script, numkeys, args)
+            return self.return_code
+
+    gov = ProviderQuotaGovernor()
+
+    # Test allowed
+    mock_redis = MockRedisEval(1)
+    ok = await gov.acquire("upstox", redis_client=mock_redis, count=1)
+    assert ok is True
+    assert mock_redis.eval_called_with[1] == 3
+
+    # Test second burst exceeded (-2)
+    mock_redis_sec = MockRedisEval(-2)
+    assert await gov.acquire("upstox", redis_client=mock_redis_sec, count=1) is False
+
+    # Test minute limit exceeded (0)
+    mock_redis_min = MockRedisEval(0)
+    assert await gov.acquire("upstox", redis_client=mock_redis_min, count=1) is False
+
+    # Test daily limit exceeded (-1)
+    mock_redis_day = MockRedisEval(-1)
+    assert await gov.acquire("upstox", redis_client=mock_redis_day, count=1) is False
+
+
+def test_workflow_semantic_validation_rejects_malformed_and_empty_payloads(tmp_path):
+    """
+    Critical Areas B, C, D: Workflow response validation scripts must reject
+    empty payloads '{}', missing fields, negative integers, invalid types,
+    and unrecognized skip reasons with sys.exit(1).
+    """
+    import subprocess
+    import sys
+    from pathlib import Path
+    import yaml
+
+    repo_root = Path(__file__).resolve().parent.parent.parent
+
+    def extract_python_snippet(step_run: str) -> str:
+        parts = step_run.split('python3 -c "')
+        after_c = parts[-1]
+        code = after_c.split('\n"\n')[0]
+        return code.replace('\\"', '"').replace('\\$', '$')
+
+    def run_validation_script(code, body_content, http_code="200"):
+        script_file = tmp_path / "validator.py"
+        body_file = tmp_path / "body.json"
+        body_file.write_text(body_content, encoding="utf-8")
+        script_file.write_text(code.replace("$http_code", http_code), encoding="utf-8")
+        res = subprocess.run([sys.executable, str(script_file)], cwd=str(tmp_path), capture_output=True, text=True)
+        return res.returncode, res.stdout, res.stderr
+
+    # 1. Test alert-evaluator.yml python script
+    alert_eval_yml = repo_root / ".github" / "workflows" / "alert-evaluator.yml"
+    with open(alert_eval_yml, "r", encoding="utf-8") as f:
+        y_data = yaml.safe_load(f)
+    steps = y_data["jobs"]["evaluate-alerts"]["steps"]
+    step = next(s for s in steps if "python3 -c" in s.get("run", ""))
+    py_code = extract_python_snippet(step["run"])
+
+    # Empty payload '{}' must exit 1 on alert evaluator
+    code, out, err = run_validation_script(py_code, "{}")
+    assert code != 0, f"Alert evaluator must reject empty payload '{{}}', got code {code}"
+
+    # Non-dictionary payload must exit 1
+    code, _, _ = run_validation_script(py_code, '["not", "a", "dict"]')
+    assert code != 0, "Alert evaluator must reject non-dict JSON"
+
+    # Unrecognized skip reason must exit 1
+    code, _, _ = run_validation_script(py_code, '{"skipped": true, "reason": "Random reason"}')
+    assert code != 0, "Alert evaluator must reject illegal skip reasons"
+
+    # Legitimate skip reason must exit 0
+    code, _, _ = run_validation_script(py_code, '{"skipped": true, "reason": "Evaluated recently within 120s cooldown"}')
+    assert code == 0, "Alert evaluator must accept valid skip reason"
+
+    # Valid completion payload must exit 0
+    valid_payload = json.dumps({
+        "run_id": "test-run-123",
+        "at": "2026-11-13T12:00:00Z",
+        "active_alerts": 10,
+        "symbols_requested": 5,
+        "quotes_obtained": 5,
+        "evaluated": 10,
+        "triggered": 0,
+        "notifications_created": 0,
+        "skipped_market_closed": 0,
+        "provider_errors": 0,
+        "unpriced_symbols": [],
+        "duration_ms": 142.5,
+    })
+    code, _, _ = run_validation_script(py_code, valid_payload)
+    assert code == 0, "Alert evaluator must accept valid evaluation payload"
+
+    # Negative metric must exit 1
+    invalid_metric_payload = json.dumps({
+        "run_id": "test-run-123",
+        "at": "2026-11-13T12:00:00Z",
+        "active_alerts": -1,
+        "symbols_requested": 5,
+        "quotes_obtained": 5,
+        "evaluated": 10,
+        "triggered": 0,
+        "notifications_created": 0,
+        "skipped_market_closed": 0,
+        "provider_errors": 0,
+        "unpriced_symbols": [],
+        "duration_ms": 142.5,
+    })
+    code, _, _ = run_validation_script(py_code, invalid_metric_payload)
+    assert code != 0, "Alert evaluator must reject negative integer metrics"
+
+    # 2. Test prediction-evaluator.yml python script
+    pred_eval_yml = repo_root / ".github" / "workflows" / "prediction-evaluator.yml"
+    with open(pred_eval_yml, "r", encoding="utf-8") as f:
+        p_data = yaml.safe_load(f)
+    # The second python3 -c step is the validation step
+    p_steps = [s for s in p_data["jobs"]["evaluate-predictions"]["steps"] if "python3 -c" in s.get("run", "")]
+    p_step = p_steps[-1]
+    p_py_code = extract_python_snippet(p_step["run"])
+
+    # Empty payload '{}' must exit 1 on prediction evaluator
+    code, _, _ = run_validation_script(p_py_code, "{}")
+    assert code != 0, "Prediction evaluator must reject empty payload '{}'"
+
+    # Stalled payload must exit 1
+    stalled_payload = json.dumps({
+        "status": "stalled",
+        "error": "Eligible predictions could not be evaluated",
+        "evaluated": 0,
+        "eligible": 5,
+        "pending_unpriced": 5,
+        "provider_errors": 0,
+        "skipped_immature": 0,
+        "ungradable": 0,
+    })
+    code, _, _ = run_validation_script(p_py_code, stalled_payload, http_code="502")
+    assert code != 0, "Prediction evaluator must exit 1 on stalled status"
+
+    # Valid OK payload must exit 0
+    ok_payload = json.dumps({
+        "status": "ok",
+        "evaluated": 3,
+        "eligible": 3,
+        "pending_unpriced": 0,
+        "provider_errors": 0,
+        "skipped_immature": 1,
+        "ungradable": 0,
+    })
+    code, _, _ = run_validation_script(p_py_code, ok_payload, http_code="200")
+    assert code == 0, "Prediction evaluator must exit 0 on valid ok payload"
+
+    # 3. Test alert-warmup.yml python script
+    warmup_yml = repo_root / ".github" / "workflows" / "alert-warmup.yml"
+    with open(warmup_yml, "r", encoding="utf-8") as f:
+        w_data = yaml.safe_load(f)
+    w_step = next(s for s in w_data["jobs"]["warmup-alerts"]["steps"] if "python3 -c" in s.get("run", ""))
+    w_py_code = extract_python_snippet(w_step["run"])
+
+    # Empty payload '{}' must exit 1 on warmup
+    code, _, _ = run_validation_script(w_py_code, "{}")
+    assert code != 0, "Alert warmup must reject empty payload '{}'"
+
+    # Valid warmup payload must exit 0
+    warmup_valid = json.dumps({
+        "warmed": 10,
+        "skipped": 2,
+        "uncached_remaining": 0,
+        "duration_ms": 320.0,
+    })
+    code, _, _ = run_validation_script(w_py_code, warmup_valid, http_code="200")
+    assert code == 0, "Alert warmup must exit 0 on valid warmup payload"
