@@ -24,7 +24,7 @@ from fastapi.responses import JSONResponse
 from app.core.auth import require_internal_secret
 from app.core.logging import get_logger
 from app.core.market_calendar import get_market_state
-from app.core.symbols import normalize_symbol, is_indian_symbol, get_symbol_currency
+from app.core.symbols import normalize_symbol, is_indian_symbol, get_symbol_currency, AMBIGUOUS_SYMBOLS
 
 logger = get_logger(__name__)
 router = APIRouter(prefix="/internal", tags=["internal"])
@@ -35,32 +35,189 @@ _in_process_eval_lock = asyncio.Lock()
 _last_eval_time = [0.0]
 
 
+def _parse_timestamp_to_utc(raw_ts: object) -> Optional[datetime]:
+    """Parse various timestamp representations into an aware UTC datetime."""
+    if raw_ts is None:
+        return None
+    if isinstance(raw_ts, datetime):
+        if raw_ts.tzinfo is None:
+            return raw_ts.replace(tzinfo=timezone.utc)
+        return raw_ts.astimezone(timezone.utc)
+    if isinstance(raw_ts, (int, float)):
+        val = float(raw_ts)
+        if val > 1e11:  # milliseconds
+            val = val / 1000.0
+        try:
+            return datetime.fromtimestamp(val, tz=timezone.utc)
+        except (ValueError, OSError, OverflowError):
+            return None
+    if isinstance(raw_ts, str):
+        s = raw_ts.strip()
+        if not s:
+            return None
+        # Try numeric epoch string
+        try:
+            val = float(s)
+            if val > 1e11:
+                val = val / 1000.0
+            return datetime.fromtimestamp(val, tz=timezone.utc)
+        except (ValueError, OSError, OverflowError):
+            pass
+        # Try ISO / datetime format
+        try:
+            clean = s.replace("Z", "+00:00")
+            dt = datetime.fromisoformat(clean)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt.astimezone(timezone.utc)
+        except Exception:
+            pass
+    return None
+
+
 def _is_quote_fresh(data: dict, now: datetime, max_age_seconds: float = 900.0) -> bool:
     """Strict UTC timestamp freshness validation.
     
-    Fail-closed: Rejects quotes when:
-    - data is not a dict
-    - ingested_at is missing, empty, or not a string
-    - timestamp cannot be parsed into an ISO datetime
-    - quote is older than max_age_seconds (default: 15 minutes)
-    - timestamp is more than 60 seconds in the future (clock drift protection)
+    Fail-closed:
+    - Rejects quotes if data is not a dict.
+    - Inspects market data timestamp: 'timestamp', 'last_trade_time', 'datetime', 'market_time', 'time', 't'.
+    - If market data timestamp is present, verifies it is not older than max_age_seconds
+      and not more than 60 seconds in the future (clock drift protection).
+    - If ingested_at is present (cache metadata), verifies it is also fresh.
+    - If NEITHER market data timestamp nor ingested_at is present or parseable, rejects.
     """
     if not isinstance(data, dict):
         return False
-    raw_ts = data.get("ingested_at")
-    if not raw_ts or not isinstance(raw_ts, str):
+
+    # 1. Market-data timestamp (actual market observation / trade time)
+    market_raw = (
+        data.get("timestamp")
+        or data.get("last_trade_time")
+        or data.get("market_time")
+        or data.get("datetime")
+        or data.get("time")
+        or data.get("t")
+    )
+    market_dt = _parse_timestamp_to_utc(market_raw)
+
+    # 2. Ingestion timestamp (when written to cache / memory)
+    ingested_raw = data.get("ingested_at") or data.get("_cached_at")
+    ingested_dt = _parse_timestamp_to_utc(ingested_raw)
+
+    if market_dt is None and ingested_dt is None:
         return False
-    try:
-        dt = datetime.fromisoformat(raw_ts)
-        if dt.tzinfo is None:
-            # Explicit normalization: treat naive timestamp as UTC
-            dt = dt.replace(tzinfo=timezone.utc)
-        age = (now - dt).total_seconds()
+
+    # Validate market timestamp if present
+    if market_dt is not None:
+        age = (now - market_dt).total_seconds()
         if age > max_age_seconds or age < -60.0:
             return False
-        return True
-    except Exception:
+
+    # Validate ingestion timestamp if present
+    if ingested_dt is not None:
+        ingest_age = (now - ingested_dt).total_seconds()
+        if ingest_age > max_age_seconds or ingest_age < -60.0:
+            return False
+
+    return True
+
+
+def _is_quote_identity_valid(data: dict, requested_symbol: str) -> bool:
+    """Validate that the quote data matches the requested symbol, exchange, and currency.
+
+    Prevents cross-market and cross-exchange contamination:
+    - Indian equities/indices must not match US exchange quotes or USD currency.
+    - US equities must not match Indian exchange quotes or INR currency.
+    - Ambiguous symbols (e.g. HAL) must not match across exchanges (HAL.NS vs HAL NYSE).
+    - Fails closed when an ambiguous instrument's exchange/market identity cannot be established.
+    """
+    if not isinstance(data, dict):
         return False
+
+    requested_sym = (requested_symbol or "").strip().upper()
+    requested_canon = normalize_symbol(requested_sym)
+    is_indian = is_indian_symbol(requested_canon)
+    bare_req = requested_sym.split(".")[0]
+
+    quote_ex = str(data.get("exchange") or "").strip().upper()
+    quote_curr = str(data.get("currency") or "").strip().upper()
+    quote_market = str(data.get("market") or "").strip().lower()
+    quote_prov = str(data.get("provider") or data.get("source") or "").strip().lower()
+
+    # 1. Symbol identity check
+    quote_sym = data.get("symbol")
+    if quote_sym and isinstance(quote_sym, str):
+        quote_clean = quote_sym.strip().upper()
+        quote_canon = normalize_symbol(quote_clean)
+        bare_quote = quote_clean.split(".")[0]
+
+        # For cross-market ambiguous tickers (e.g. HAL)
+        if bare_req in AMBIGUOUS_SYMBOLS or bare_quote in AMBIGUOUS_SYMBOLS:
+            # If canonical symbols don't match, immediate rejection
+            if requested_canon != quote_canon:
+                return False
+
+            if is_indian:
+                # Immediate rejection on foreign metadata
+                if quote_ex in ("NYSE", "NASDAQ", "AMEX", "US", "BATS", "ARCA") or quote_curr in ("USD", "$"):
+                    return False
+                # If quote symbol does NOT carry explicit Indian suffix (.NS/.BO),
+                # it MUST establish Indian identity via exchange, currency, market, or provider
+                if not quote_clean.endswith((".NS", ".BO")):
+                    has_indian_id = (
+                        quote_ex in ("NSE", "BSE")
+                        or quote_curr in ("INR", "\u20b9")
+                        or quote_market in ("india", "in")
+                        or quote_prov in ("upstox", "nse")
+                    )
+                    if not has_indian_id:
+                        # Fail-closed: cannot verify that bare HAL is Indian HAL.NS
+                        return False
+            else:
+                # US ambiguous symbol
+                if quote_ex in ("NSE", "BSE", "INDIA") or quote_curr in ("INR", "\u20b9"):
+                    return False
+                if quote_clean.endswith((".NS", ".BO")):
+                    return False
+        else:
+            if requested_canon != quote_canon:
+                return False
+    else:
+        # Quote data omits symbol entirely
+        if bare_req in AMBIGUOUS_SYMBOLS:
+            if is_indian:
+                has_indian_id = (
+                    quote_ex in ("NSE", "BSE")
+                    or quote_curr in ("INR", "\u20b9")
+                    or quote_market in ("india", "in")
+                    or quote_prov in ("upstox", "nse")
+                )
+                if not has_indian_id:
+                    return False
+            else:
+                return False
+
+    # 2. Exchange / Currency / Market integrity check
+    if is_indian:
+        if quote_ex in ("NYSE", "NASDAQ", "AMEX", "US", "BATS", "ARCA"):
+            return False
+        if quote_curr in ("USD", "$", "EUR", "GBP"):
+            return False
+        if quote_market in ("us", "usa", "united states"):
+            return False
+        if requested_sym.endswith(".NS") and quote_ex == "BSE":
+            return False
+        if requested_sym.endswith(".BO") and quote_ex == "NSE":
+            return False
+    else:
+        if quote_ex in ("NSE", "BSE", "INDIA"):
+            return False
+        if quote_curr in ("INR", "\u20b9"):
+            return False
+        if quote_market in ("india", "in"):
+            return False
+
+    return True
 
 
 @router.post("/jobs/evaluate-alerts")
@@ -190,19 +347,30 @@ async def _run_eval(db, redis, now: datetime) -> dict:
     for symbol in symbols:
         price = None
         if redis:
+            canonical_sym = normalize_symbol(symbol)
             bare = symbol.split(".")[0]
             candidate_keys = [
-                f"quote:{symbol}", f"market:quote:{symbol}", f"tick:{symbol}",
-                f"quote:{bare}", f"market:quote:{bare}", f"tick:{bare}",
+                f"quote:{canonical_sym}", f"quote:{symbol}",
+                f"market:quote:{canonical_sym}", f"market:quote:{symbol}",
+                f"tick:{canonical_sym}", f"tick:{symbol}",
+                f"upstox:quote:{canonical_sym}", f"upstox:quote:{symbol}",
             ]
+            # Exclude bare keys for tickers with cross-exchange ambiguities (e.g. HAL)
+            if bare not in AMBIGUOUS_SYMBOLS and bare != symbol and bare != canonical_sym:
+                candidate_keys.extend([f"quote:{bare}", f"market:quote:{bare}", f"tick:{bare}"])
+
             for key in candidate_keys:
                 raw = await redis.get(key)
                 if raw:
                     try:
                         data = json.loads(raw)
+                        # Strict fail-closed quote identity guard: reject wrong-exchange/wrong-currency quotes
+                        if not _is_quote_identity_valid(data, requested_symbol=symbol):
+                            logger.debug("cached_quote_identity_mismatch_skipped", symbol=symbol, key=key)
+                            continue
                         # Strict fail-closed freshness guard: reject unvalidated, stale, or future quotes
                         if not _is_quote_fresh(data, now, max_age_seconds=900.0):
-                            logger.debug("cached_quote_not_fresh_skipped", symbol=symbol)
+                            logger.debug("cached_quote_not_fresh_skipped", symbol=symbol, key=key)
                             continue
                         raw_price = (data.get("price") or data.get("close") or
                                      data.get("last_price") or
@@ -233,6 +401,21 @@ async def _run_eval(db, redis, now: datetime) -> dict:
                 quote_data = res.data if hasattr(res, "data") else res
                 actual_provider = getattr(res, "source", None) or ("Upstox" if is_indian else "unknown")
                 if quote_data and isinstance(quote_data, dict):
+                    # Strict fail-closed identity & freshness validation on provider response
+                    if not _is_quote_identity_valid(quote_data, requested_symbol=symbol):
+                        logger.warning("alert_eval_provider_quote_identity_mismatch", symbol=symbol)
+                        continue
+
+                    # For live provider responses without an explicit timestamp (e.g. mock objects),
+                    # stamp ingested_at = now so newly fetched live data is accepted unless explicitly stale
+                    quote_to_check = quote_data
+                    if not any(k in quote_data for k in ("timestamp", "last_trade_time", "market_time", "datetime", "time", "t", "ingested_at")):
+                        quote_to_check = dict(quote_data)
+                        quote_to_check["ingested_at"] = now.isoformat()
+
+                    if not _is_quote_fresh(quote_to_check, now, max_age_seconds=900.0):
+                        logger.warning("alert_eval_provider_quote_stale", symbol=symbol)
+                        continue
                     p = quote_data.get("price") or quote_data.get("close") or quote_data.get("last_price")
                     if p is not None:
                         try:
@@ -256,7 +439,7 @@ async def _run_eval(db, redis, now: datetime) -> dict:
                                             json.dumps(cache_blob, default=str),
                                             ex=300,
                                         )
-                                        if symbol != canonical_sym:
+                                        if symbol != canonical_sym and symbol.split(".")[0] not in AMBIGUOUS_SYMBOLS:
                                             await redis.set(
                                                 f"quote:{symbol}",
                                                 json.dumps(cache_blob, default=str),
@@ -415,7 +598,7 @@ async def warm_alert_symbols(
     for s in scheduled_symbols:
         canonical_s = normalize_symbol(s)
         has_price = False
-        for key in [f"quote:{canonical_s}", f"market:quote:{canonical_s}", f"tick:{canonical_s}", f"quote:{s}", f"market:quote:{s}", f"tick:{s}"]:
+        for key in [f"quote:{canonical_s}", f"market:quote:{canonical_s}", f"tick:{canonical_s}", f"upstox:quote:{canonical_s}", f"quote:{s}", f"market:quote:{s}", f"tick:{s}", f"upstox:quote:{s}"]:
             try:
                 get_fn = getattr(redis, "get", None)
                 if get_fn:
@@ -424,7 +607,7 @@ async def warm_alert_symbols(
                     if raw:
                         try:
                             data = json.loads(raw)
-                            if _is_quote_fresh(data, now, max_age_seconds=900.0):
+                            if _is_quote_identity_valid(data, requested_symbol=s) and _is_quote_fresh(data, now, max_age_seconds=900.0):
                                 has_price = True
                                 break
                         except Exception:

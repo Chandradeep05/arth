@@ -92,18 +92,21 @@ local has_sec = sec_limit > 0
 local has_min = min_limit > 0
 local has_day = day_limit > 0
 
--- 1. Check per-second rolling sliding window (window: [now_ms - 1000, now_ms])
+-- 1. Check per-second rolling sliding window (window: (now_ms - 1000, now_ms])
+-- Uses exclusive lower boundary '(' to strictly retain members until > 1000ms has elapsed,
+-- preventing boundary burst amplification where members at t and t+1000ms could both be admitted.
 if has_sec then
-    redis.call('ZREMRANGEBYSCORE', sec_key, '-inf', now_ms - 1000)
+    redis.call('ZREMRANGEBYSCORE', sec_key, '-inf', '(' .. (now_ms - 1000))
     local cur_sec = redis.call('ZCARD', sec_key)
     if cur_sec + count > sec_limit then
         return -2 -- Rejected on second burst limit
     end
 end
 
--- 2. Check per-minute rolling sliding window (window: [now_ms - 60000, now_ms])
+-- 2. Check per-minute rolling sliding window (window: (now_ms - 60000, now_ms])
+-- Uses exclusive lower boundary '(' to strictly retain members until > 60000ms has elapsed.
 if has_min then
-    redis.call('ZREMRANGEBYSCORE', min_key, '-inf', now_ms - 60000)
+    redis.call('ZREMRANGEBYSCORE', min_key, '-inf', '(' .. (now_ms - 60000))
     local cur_min = redis.call('ZCARD', min_key)
     if cur_min + count > min_limit then
         return 0 -- Rejected on minute limit

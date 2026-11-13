@@ -113,7 +113,7 @@ async def test_quote_with_datetime_is_cached_without_error(monkeypatch):
     """Upstox quotes carry a datetime timestamp; json.dumps must not fail."""
     async def fake_get_quote(symbol, allow_nse_fallback=True):
         return SimpleNamespace(available=True, data={
-            "price": 2900.0, "timestamp": datetime.now(timezone.utc),
+            "price": 2900.0, "timestamp": _OPEN_TRADING_TIME,
         }, source="Upstox")
 
     monkeypatch.setattr(mdp.market_data, "get_quote", fake_get_quote)
