@@ -1291,6 +1291,7 @@ async def test_provider_quota_production_fail_closed_on_redis_unavailable(monkey
 
     class FakeSettings:
         is_production = True
+        app_env = config_mod.Environment.PRODUCTION
 
     monkeypatch.setattr(config_mod, "get_settings", lambda: FakeSettings())
 
@@ -1311,6 +1312,7 @@ async def test_provider_quota_production_fail_closed_on_redis_unavailable(monkey
 
     # 3. In non-production (dev/test), redis_client=None falls back to in-memory and succeeds
     FakeSettings.is_production = False
+    FakeSettings.app_env = config_mod.Environment.DEVELOPMENT
     ok_dev = await gov.acquire("upstox", redis_client=None, count=1)
     assert ok_dev is True, "In non-production, missing Redis can use in-memory fallback"
 
@@ -1319,24 +1321,27 @@ async def test_provider_quota_production_fail_closed_on_redis_unavailable(monkey
 async def test_provider_quota_atomic_lua_contract():
     """
     Critical Area A: Verify the Lua script handles 3 keys (sec, min, daily),
-    enforces all three levels, and returns expected status codes:
+    enforces sliding-window sorted sets and daily limits, and returns expected status codes:
     1: Allowed
     -2: Rejected on second burst
     0: Rejected on minute limit
     -1: Rejected on daily limit
     """
-    from app.core.provider_quota import _ATOMIC_QUOTA_LUA, ProviderQuotaGovernor
-    assert "KEYS[1]" in _ATOMIC_QUOTA_LUA
-    assert "KEYS[2]" in _ATOMIC_QUOTA_LUA
-    assert "KEYS[3]" in _ATOMIC_QUOTA_LUA
-    assert "sec_limit" in _ATOMIC_QUOTA_LUA
-    assert "min_limit" in _ATOMIC_QUOTA_LUA
-    assert "day_limit" in _ATOMIC_QUOTA_LUA
-    assert "return -2" in _ATOMIC_QUOTA_LUA
-    assert "return 0" in _ATOMIC_QUOTA_LUA
-    assert "return -1" in _ATOMIC_QUOTA_LUA
-    assert "return 1" in _ATOMIC_QUOTA_LUA
-    assert "ttl < 0 then" in _ATOMIC_QUOTA_LUA  # TTL repair contract
+    from app.core.provider_quota import _ATOMIC_SLIDING_QUOTA_LUA, ProviderQuotaGovernor
+    assert "KEYS[1]" in _ATOMIC_SLIDING_QUOTA_LUA
+    assert "KEYS[2]" in _ATOMIC_SLIDING_QUOTA_LUA
+    assert "KEYS[3]" in _ATOMIC_SLIDING_QUOTA_LUA
+    assert "sec_limit" in _ATOMIC_SLIDING_QUOTA_LUA
+    assert "min_limit" in _ATOMIC_SLIDING_QUOTA_LUA
+    assert "day_limit" in _ATOMIC_SLIDING_QUOTA_LUA
+    assert "ZREMRANGEBYSCORE" in _ATOMIC_SLIDING_QUOTA_LUA
+    assert "ZCARD" in _ATOMIC_SLIDING_QUOTA_LUA
+    assert "ZADD" in _ATOMIC_SLIDING_QUOTA_LUA
+    assert "return -2" in _ATOMIC_SLIDING_QUOTA_LUA
+    assert "return 0" in _ATOMIC_SLIDING_QUOTA_LUA
+    assert "return -1" in _ATOMIC_SLIDING_QUOTA_LUA
+    assert "return 1" in _ATOMIC_SLIDING_QUOTA_LUA
+    assert "ttl < 0 then" in _ATOMIC_SLIDING_QUOTA_LUA  # TTL repair contract
 
     # Simulate Redis eval dispatch
     class MockRedisEval:
