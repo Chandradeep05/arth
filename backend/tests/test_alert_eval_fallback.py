@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 from decimal import Decimal
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -815,3 +815,314 @@ def test_upstox_static_index_keys():
     assert adapter._symbol_to_key.get("BANKNIFTY") == "NSE_INDEX|Nifty Bank"
     assert adapter._symbol_to_key.get("SENSEX.BO") == "BSE_INDEX|SENSEX"
     assert adapter._symbol_to_key.get("SENSEX") == "BSE_INDEX|SENSEX"
+
+
+# =============================================================================
+# Stage 1 Final Remediation Pass: Regression Test Battery (FIX 01 - FIX 07)
+# =============================================================================
+
+@pytest.mark.asyncio
+async def test_warmup_ignores_stale_quote_even_if_key_exists(monkeypatch):
+    """
+    FIX 01: Warmup must reject stale quotes via _is_quote_fresh and must NOT
+    fall back to exists_fn to treat a stale key as having a price.
+    """
+    now = datetime(2026, 10, 21, 5, 30, tzinfo=timezone.utc)
+    stale_ts = datetime(2026, 10, 21, 4, 30, tzinfo=timezone.utc).isoformat()  # 1 hr old (> 900s)
+
+    warmed_symbols = []
+
+    class MockRedisWithStaleQuote:
+        def __init__(self):
+            # Key exists in Redis with stale quote data
+            self._data = {
+                "quote:RELIANCE.NS": json.dumps({"price": 2500.0, "ingested_at": stale_ts})
+            }
+
+        async def zrange(self, *args, **kwargs):
+            return ["RELIANCE.NS"]
+
+        async def zadd(self, *args, **kwargs):
+            return 1
+
+        async def zrem(self, *args, **kwargs):
+            return 1
+
+        async def get(self, key):
+            return self._data.get(key)
+
+        async def exists(self, key):
+            # Simulates the existence check that previously caused the bug
+            return 1 if key in self._data else 0
+
+        async def set(self, key, value, ex=None):
+            self._data[key] = value
+            return True
+
+    mock_redis = MockRedisWithStaleQuote()
+
+    class MockDB:
+        async def fetch(self, query):
+            return [{"symbol": "RELIANCE.NS"}]
+
+    async def fake_get_quote(symbol, allow_nse_fallback=False):
+        warmed_symbols.append(symbol)
+        return SimpleNamespace(
+            available=True,
+            data={"price": 2550.0, "symbol": symbol},
+            source="Upstox",
+        )
+
+    monkeypatch.setattr(mdp.market_data, "get_quote", fake_get_quote)
+    monkeypatch.setattr(internal, "get_market_state", lambda sym, now: ("open", None))
+
+    req = SimpleNamespace(
+        app=SimpleNamespace(state=SimpleNamespace(redis=mock_redis)),
+        state=SimpleNamespace(db=MockDB()),
+    )
+
+    res = await internal.warm_alert_symbols(req, _=None)
+    # The stale quote must be ignored and refreshed via market_data.get_quote
+    assert res["warmed"] == 1
+    assert "RELIANCE.NS" in warmed_symbols
+
+
+@pytest.mark.asyncio
+async def test_invite_redemption_rejects_used_at_with_null_used_by():
+    """
+    FIX 02: Account deletion clears used_by but preserves used_at.
+    Invite redemption must reject when used_at is NOT NULL even if used_by is NULL.
+    """
+    from app.api.v1 import invite
+    from app.models.schemas.user import RedeemInviteRequest
+    from fastapi import HTTPException
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    class MockInviteDB:
+        def __init__(self):
+            self.tx_entered = False
+
+        async def fetchval(self, sql, *args):
+            return "pending"  # current user access_status
+
+        async def fetchrow(self, sql, *args):
+            # Simulate invite row where used_by is NULL (account deleted) but used_at is preserved
+            return {
+                "id": uuid4(),
+                "used_by": None,
+                "used_at": datetime.now(timezone.utc),
+                "expires_at": datetime(2099, 1, 1, tzinfo=timezone.utc),
+                "created_by": None,
+            }
+
+        async def execute(self, sql, *args):
+            pass
+
+        @asynccontextmanager
+        async def transaction(self):
+            self.tx_entered = True
+            yield
+
+    db = MockInviteDB()
+    user = SimpleNamespace(user_id=uuid4(), email="tester@example.com")
+    req = SimpleNamespace(state=SimpleNamespace(db=db))
+    body = RedeemInviteRequest(code="TEST-CODE-1234")
+
+    with pytest.raises(HTTPException) as exc:
+        await invite.redeem_invite_code(body, req, user)
+    assert exc.value.status_code == 409
+    assert "already been used" in exc.value.detail
+
+
+@pytest.mark.asyncio
+async def test_admin_cannot_regenerate_used_invite_with_null_used_by():
+    """
+    FIX 02: Admin regeneration must reject invites where used_at is NOT NULL,
+    preventing resurrecting an invite after account deletion.
+    """
+    from app.api.v1 import admin
+    from fastapi import HTTPException
+    from uuid import uuid4
+
+    class MockAdminDB:
+        async def fetchrow(self, sql, *args):
+            return {
+                "id": uuid4(),
+                "used_by": None,
+                "used_at": datetime.now(timezone.utc),
+            }
+
+    db = MockAdminDB()
+    admin_user = SimpleNamespace(user_id=uuid4(), role="admin")
+    req = SimpleNamespace(state=SimpleNamespace(db=db))
+
+    with pytest.raises(HTTPException) as exc:
+        await admin.regenerate_invite_code(str(uuid4()), req, admin_user)
+    assert exc.value.status_code == 400
+    assert "Cannot regenerate an already used invite code" in exc.value.detail
+
+
+@pytest.mark.asyncio
+async def test_alert_eval_rejects_non_finite_price(monkeypatch):
+    """
+    FIX 04: Evaluator must reject NaN, Infinity, -Infinity, and <= 0.
+    """
+    test_cases = [float("inf"), float("-inf"), float("nan"), -50.0, 0.0]
+
+    for bad_price in test_cases:
+        async def fake_get_quote(symbol, allow_nse_fallback=True):
+            return SimpleNamespace(available=True, data={"price": bad_price, "symbol": symbol}, source="Upstox")
+
+        monkeypatch.setattr(mdp.market_data, "get_quote", fake_get_quote)
+        db = FakeDB([_alert()])
+
+        res = await internal._run_eval(db, None, _OPEN_TRADING_TIME)
+        assert res["evaluated"] == 0, f"Failed to reject non-finite/non-positive price: {bad_price}"
+        assert res["triggered"] == 0
+        assert "RELIANCE.NS" in res["unpriced_symbols"]
+
+
+@pytest.mark.asyncio
+async def test_outcome_tracker_rejects_non_finite_price(monkeypatch):
+    """
+    FIX 04: Outcome tracker evaluate_pending must reject non-finite prices.
+    """
+    from app.engines.prediction.outcome_tracker import OutcomeTracker, PredictionRecord
+    from uuid import uuid4
+
+    tracker = OutcomeTracker()
+    now = datetime.now(timezone.utc)
+    key = f"{tracker._PREFIX}{uuid4().hex}"
+
+    record = PredictionRecord(
+        prediction_id=str(uuid4()),
+        symbol="TCS.NS",
+        predicted_class="bullish",
+        predicted_return_pct=5.0,
+        confidence_score=0.85,
+        confidence_band="high",
+        horizon_days=7,
+        reference_price=3500.0,
+        predicted_at=(now - timedelta(days=10)).isoformat(),
+        evaluation_status="pending",
+    )
+    tracker._memory_store[key] = record
+
+    async def fake_fetch_bad_price(symbol):
+        return float("inf")
+
+    count = await tracker.evaluate_pending(fetch_price_func=fake_fetch_bad_price)
+    assert count == 0
+    assert count.stats["evaluated"] == 0
+    assert count.stats["pending_unpriced"] == 1
+
+    # Record must still be pending, not evaluated
+    reloaded = tracker._memory_store[key]
+    assert reloaded.evaluation_status == "pending"
+    assert reloaded.evaluation_price is None
+
+
+@pytest.mark.asyncio
+async def test_evaluator_cache_write_includes_freshness_metadata(monkeypatch):
+    """
+    FIX 05: Live fallback cache writes must include ingested_at, provider, and canonical symbol.
+    """
+    cached_writes = {}
+
+    class TrackingRedis:
+        async def get(self, key):
+            return None
+
+        async def set(self, key, val, ex=None):
+            cached_writes[key] = json.loads(val)
+            return True
+
+    async def fake_get_quote(symbol, allow_nse_fallback=False):
+        return SimpleNamespace(
+            available=True,
+            data={"price": 2800.0, "symbol": symbol},
+            source="Upstox",
+        )
+
+    monkeypatch.setattr(mdp.market_data, "get_quote", fake_get_quote)
+    db = FakeDB([_alert(symbol="RELIANCE.NS", atype="price_above", threshold=2500.0)])
+    redis_instance = TrackingRedis()
+
+    res = await internal._run_eval(db, redis_instance, _OPEN_TRADING_TIME)
+    assert res["evaluated"] == 1
+
+    assert "quote:RELIANCE.NS" in cached_writes
+    payload = cached_writes["quote:RELIANCE.NS"]
+    assert "ingested_at" in payload
+    assert payload["provider"] == "Upstox"
+    assert payload["symbol"] == "RELIANCE.NS"
+    assert payload["price"] == 2800.0
+
+
+@pytest.mark.asyncio
+async def test_alert_eval_timeout_returns_504(monkeypatch):
+    """
+    FIX 06: Evaluator timeout must return HTTP 504 with structured error,
+    while safely releasing the Redis lock.
+    """
+    import asyncio
+    eval_lock_released = []
+
+    class MockRedisTimeout:
+        async def get(self, key):
+            return None
+
+        async def set(self, key, val, nx=False, ex=None):
+            return True
+
+        async def eval(self, script, numkeys, *args):
+            eval_lock_released.append((script, args))
+            return 1
+
+    async def hanging_run_eval(*args, **kwargs):
+        raise asyncio.TimeoutError()
+
+    monkeypatch.setattr(internal, "_run_eval", hanging_run_eval)
+
+    req = SimpleNamespace(
+        app=SimpleNamespace(state=SimpleNamespace(redis=MockRedisTimeout())),
+        state=SimpleNamespace(db=FakeDB([])),
+    )
+
+    response = await internal.evaluate_alerts(req, _=None)
+    assert response.status_code == 504
+    body = json.loads(response.body)
+    assert body["status"] == "error"
+    assert "timed out" in body["reason"]
+    assert len(eval_lock_released) == 1  # Redis lock released via finally
+
+
+@pytest.mark.asyncio
+async def test_evaluate_predictions_stalled_semantics(monkeypatch):
+    """
+    FIX 03: When eligible > 0 and evaluated == 0, evaluate_predictions returns
+    HTTP 502 with status: stalled.
+    """
+    from app.engines.prediction.outcome_tracker import EvaluationCount
+
+    async def fake_evaluate_pending(*args, **kwargs):
+        return EvaluationCount(0, stats={
+            "evaluated": 0,
+            "eligible": 5,
+            "pending_unpriced": 5,
+            "provider_errors": 0,
+            "skipped_immature": 0,
+            "ungradable": 0,
+        })
+
+    from app.engines.prediction.outcome_tracker import outcome_tracker
+    monkeypatch.setattr(outcome_tracker, "evaluate_pending", fake_evaluate_pending)
+
+    req = SimpleNamespace()
+    res = await internal.evaluate_predictions(req, _=None)
+    assert res.status_code == 502
+    body = json.loads(res.body)
+    assert body["status"] == "stalled"
+    assert body["eligible"] == 5
+    assert body["evaluated"] == 0

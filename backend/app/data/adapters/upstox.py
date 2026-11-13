@@ -588,14 +588,18 @@ class UpstoxAdapter(BaseDataAdapter):
 
     @staticmethod
     def _safe_num(val: Any) -> Optional[float]:
-        """Safely convert Upstox values (including formatted strings) to float."""
+        """Safely convert Upstox values (including formatted strings) to finite float."""
         if val is None or val == "":
             return None
         try:
             if isinstance(val, (int, float)):
-                return float(val)
+                res = float(val)
+                import math
+                return res if math.isfinite(res) else None
             clean = str(val).replace(",", "").replace("%", "").strip()
-            return float(clean)
+            res = float(clean)
+            import math
+            return res if math.isfinite(res) else None
         except (ValueError, TypeError):
             return None
 

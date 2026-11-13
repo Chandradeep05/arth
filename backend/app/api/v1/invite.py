@@ -79,7 +79,7 @@ async def redeem_invite_code(
         # Lock the invite code row for this transaction (support both hashed and legacy unhashed codes)
         invite = await db.fetchrow(
             """
-            SELECT id, used_by, expires_at, created_by
+            SELECT id, used_by, used_at, expires_at, created_by
             FROM invite_codes
             WHERE code = $1 OR code = $2
             FOR UPDATE

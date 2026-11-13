@@ -116,7 +116,10 @@ async def evaluate_alerts(
             return result
         except asyncio.TimeoutError:
             logger.error("alert_eval_timed_out", timeout_sec=90)
-            return {"skipped": True, "reason": "Alert evaluation timed out after 90s"}
+            return JSONResponse(
+                status_code=504,
+                content={"status": "error", "error": "Gateway Timeout", "reason": "Alert evaluation timed out after 90s"}
+            )
         finally:
             _RELEASE_LOCK_LUA = """
             if redis.call('get', KEYS[1]) == ARGV[1] then
@@ -135,7 +138,10 @@ async def evaluate_alerts(
                 return result
             except asyncio.TimeoutError:
                 logger.error("alert_eval_timed_out_in_process", timeout_sec=90)
-                return {"skipped": True, "reason": "Alert evaluation timed out after 90s (in-process)"}
+                return JSONResponse(
+                    status_code=504,
+                    content={"status": "error", "error": "Gateway Timeout", "reason": "Alert evaluation timed out after 90s (in-process)"}
+                )
 
 
 async def _run_eval(db, redis, now: datetime) -> dict:
@@ -228,21 +234,42 @@ async def _run_eval(db, redis, now: datetime) -> dict:
                 actual_provider = getattr(res, "source", None) or ("Upstox" if is_indian else "unknown")
                 if quote_data and isinstance(quote_data, dict):
                     p = quote_data.get("price") or quote_data.get("close") or quote_data.get("last_price")
-                    if p is not None and float(p) > 0:
-                        prices[symbol] = float(p)
-                        # Use provider name from DataResult, not symbol suffix
-                        quote_sources[symbol] = actual_provider
-                        cache_miss = max(0, cache_miss - 1)
-                        if redis:
-                            try:
-                                # Include provider so cache reads can recover source
-                                cache_blob = dict(quote_data)
-                                cache_blob["provider"] = actual_provider
-                                await redis.set(f"quote:{symbol}", json.dumps(cache_blob, default=str), ex=300)
-                            except Exception as cache_err:
-                                logger.warning("alert_eval_cache_write_failed", symbol=symbol, error=str(cache_err))
+                    if p is not None:
+                        try:
+                            val = float(p)
+                            import math
+                            if math.isfinite(val) and val > 0:
+                                prices[symbol] = val
+                                # Use provider name from DataResult, not symbol suffix
+                                quote_sources[symbol] = actual_provider
+                                cache_miss = max(0, cache_miss - 1)
+                                if redis:
+                                    try:
+                                        canonical_sym = normalize_symbol(symbol)
+                                        # Include provider and ingestion timestamp so cache reads can validate freshness
+                                        cache_blob = dict(quote_data)
+                                        cache_blob["provider"] = actual_provider
+                                        cache_blob["ingested_at"] = now.isoformat()
+                                        cache_blob["symbol"] = canonical_sym
+                                        await redis.set(
+                                            f"quote:{canonical_sym}",
+                                            json.dumps(cache_blob, default=str),
+                                            ex=300,
+                                        )
+                                        if symbol != canonical_sym:
+                                            await redis.set(
+                                                f"quote:{symbol}",
+                                                json.dumps(cache_blob, default=str),
+                                                ex=300,
+                                            )
+                                    except Exception as cache_err:
+                                        logger.warning("alert_eval_cache_write_failed", symbol=symbol, error=str(cache_err))
+                            else:
+                                logger.warning("alert_eval_quote_non_positive_or_non_finite", symbol=symbol, price=val)
+                        except (ValueError, TypeError):
+                            logger.warning("alert_eval_quote_invalid_price_format", symbol=symbol, raw_price=p)
                     else:
-                        logger.warning("alert_eval_quote_non_positive", symbol=symbol, quote=quote_data)
+                        logger.warning("alert_eval_quote_price_missing", symbol=symbol, quote=quote_data)
                 else:
                     logger.warning("alert_eval_no_quote_data", symbol=symbol, provider=actual_provider)
             except Exception as sym_err:
@@ -256,8 +283,9 @@ async def _run_eval(db, redis, now: datetime) -> dict:
         symbol = alert["symbol"]
         canonical_sym = normalize_symbol(symbol)
         current = prices.get(canonical_sym) or prices.get(symbol)
-        # Valid price invariant: price is not None and price > 0
-        if current is None or current <= 0:
+        # Valid price invariant: price is not None, finite, and price > 0
+        import math
+        if current is None or not math.isfinite(current) or current <= 0:
             continue
 
         evaluated += 1
@@ -392,29 +420,28 @@ async def warm_alert_symbols(
                 get_fn = getattr(redis, "get", None)
                 if get_fn:
                     res = get_fn(key)
-                    if asyncio.iscoroutine(res):
-                        raw = await res
-                        if raw:
+                    raw = await res if asyncio.iscoroutine(res) else res
+                    if raw:
+                        try:
                             data = json.loads(raw)
                             if _is_quote_fresh(data, now, max_age_seconds=900.0):
                                 has_price = True
                                 break
-                    elif isinstance(res, (str, bytes)):
-                        data = json.loads(res)
-                        if _is_quote_fresh(data, now, max_age_seconds=900.0):
-                            has_price = True
-                            break
+                        except Exception:
+                            pass
+                        # Key was present in Redis but failed freshness validation (stale or corrupted).
+                        # Fail-closed: NEVER fall back to exists_fn for this key -- it is known to be stale!
+                        continue
 
-                exists_fn = getattr(redis, "exists", None)
-                if exists_fn and not has_price:
-                    res_ex = exists_fn(key)
-                    if asyncio.iscoroutine(res_ex):
-                        if await res_ex:
+                # Only consult exists_fn if get_fn is completely absent (e.g. minimal test mock without get)
+                if not get_fn:
+                    exists_fn = getattr(redis, "exists", None)
+                    if exists_fn:
+                        res_ex = exists_fn(key)
+                        ex = await res_ex if asyncio.iscoroutine(res_ex) else res_ex
+                        if ex:
                             has_price = True
                             break
-                    elif isinstance(res_ex, bool) and res_ex:
-                        has_price = True
-                        break
             except Exception:
                 pass
         if not has_price:
@@ -488,7 +515,15 @@ async def evaluate_predictions(
             is_ind = is_indian_symbol(canonical_s)
             result = await market_data.get_quote(canonical_s, allow_nse_fallback=not is_ind)
             if result.available and result.data:
-                return result.data.get("price")
+                raw_p = result.data.get("price")
+                if raw_p is not None:
+                    try:
+                        p_float = float(raw_p)
+                        import math
+                        if math.isfinite(p_float) and p_float > 0:
+                            return p_float
+                    except (ValueError, TypeError):
+                        pass
         except Exception as e:
             logger.warning("eval_price_fetch_failed", symbol=symbol, error=str(e))
         return None
@@ -497,6 +532,18 @@ async def evaluate_predictions(
         count = await outcome_tracker.evaluate_pending(fetch_price_func=_fetch_price)
         stats = getattr(count, "stats", None)
         if isinstance(stats, dict):
+            eligible = stats.get("eligible", 0)
+            evaluated = stats.get("evaluated", 0)
+            if eligible > 0 and evaluated == 0:
+                logger.warning("evaluate_predictions_stalled", eligible=eligible, evaluated=evaluated, stats=stats)
+                return JSONResponse(
+                    status_code=502,
+                    content={
+                        "status": "stalled",
+                        "error": "Eligible predictions could not be evaluated due to pricing failures",
+                        **stats
+                    }
+                )
             return {"status": "ok", **stats}
         return {"evaluated": int(count), "status": "ok"}
     except Exception as e:

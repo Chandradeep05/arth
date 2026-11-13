@@ -155,7 +155,7 @@ class ProviderQuotaGovernor:
                         )
                         return False
                 except Exception as lua_err:
-                    logger.debug("quota_lua_fallback_to_standard", error=str(lua_err))
+                    logger.warning("quota_lua_script_failed_fallback_to_commands", provider=prov, error=str(lua_err))
 
             # Fallback path (e.g. simplified test mock redis instances without Lua evaluation support)
             daily_incremented = False

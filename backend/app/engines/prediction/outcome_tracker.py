@@ -290,7 +290,17 @@ class OutcomeTracker:
 
             try:
                 price = await fetch_price_func(record.symbol)
-                if not price or price <= 0:
+                valid_price = None
+                if price is not None:
+                    try:
+                        p_val = float(price)
+                        import math
+                        if math.isfinite(p_val) and p_val > 0:
+                            valid_price = p_val
+                    except (ValueError, TypeError):
+                        pass
+
+                if valid_price is None:
                     # Can't evaluate — release claim
                     record.evaluation_status = "pending"
                     record.evaluating_at = None
@@ -300,6 +310,7 @@ class OutcomeTracker:
                     pending_unpriced += 1
                     continue
 
+                price = valid_price
                 actual = (price - record.reference_price) / record.reference_price * 100
                 actual_class = _classify_direction(actual)
 
