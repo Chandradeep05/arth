@@ -1126,3 +1126,67 @@ async def test_evaluate_predictions_stalled_semantics(monkeypatch):
     assert body["status"] == "stalled"
     assert body["eligible"] == 5
     assert body["evaluated"] == 0
+
+
+def test_prediction_evaluator_workflow_yaml_syntax_and_summary_generation(tmp_path):
+    """
+    Regression test for GitHub Actions check failure on line 54 of prediction-evaluator.yml.
+    Ensures that prediction-evaluator.yml is valid YAML and that multiline markdown
+    table generation inside run blocks preserves block scalar indentation and syntax.
+    """
+    import yaml
+    from pathlib import Path
+
+    # Find the repository root
+    repo_root = Path(__file__).resolve().parent.parent.parent
+    workflow_path = repo_root / ".github" / "workflows" / "prediction-evaluator.yml"
+
+    assert workflow_path.exists(), f"Workflow not found at {workflow_path}"
+
+    with open(workflow_path, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    # 1. Strict YAML syntax parsing (this failed on line 54 prior to fix)
+    data = yaml.safe_load(content)
+    assert isinstance(data, dict)
+    assert data.get("name") == "Prediction Evaluator"
+
+    # 2. Extract and verify step run commands
+    jobs = data.get("jobs", {})
+    assert "evaluate-predictions" in jobs
+    steps = jobs["evaluate-predictions"].get("steps", [])
+    eval_step = next(s for s in steps if s.get("name") == "Evaluate matured predictions")
+    run_script = eval_step.get("run", "")
+    assert "evaluate-predictions" in run_script
+    assert "### 🎯 Prediction Evaluation Evidence" in run_script
+
+    # 3. Verify semantic evaluation logic: test summary table formatting
+    status = "stalled"
+    d = {
+        "status": "stalled",
+        "error": "Eligible predictions could not be evaluated",
+        "evaluated": 0,
+        "eligible": 4,
+        "pending_unpriced": 4,
+        "provider_errors": 0,
+        "skipped_immature": 1,
+        "ungradable": 0,
+    }
+    http_code = "502"
+
+    summary = f"""### 🎯 Prediction Evaluation Evidence
+| Metric | Value |
+|---|---|
+| **HTTP Status** | `{http_code}` |
+| **Status** | `{status}` |
+| **Error** | `{d.get('error', 'None')}` |
+| **Predictions Evaluated** | `{d.get('evaluated', 'N/A')}` |
+| **Eligible Predictions** | `{d.get('eligible', 'N/A')}` |
+| **Pending Unpriced** | `{d.get('pending_unpriced', 'N/A')}` |
+| **Provider Errors** | `{d.get('provider_errors', 'N/A')}` |
+| **Skipped (Immature)** | `{d.get('skipped_immature', 'N/A')}` |
+| **Ungradable** | `{d.get('ungradable', 'N/A')}` |
+"""
+    assert "| **HTTP Status** | `502` |" in summary
+    assert "| **Status** | `stalled` |" in summary
+    assert "| **Eligible Predictions** | `4` |" in summary

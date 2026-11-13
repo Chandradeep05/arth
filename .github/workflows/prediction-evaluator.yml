@@ -51,18 +51,18 @@ jobs:
                   if isinstance(d, dict):
                       status = d.get('status', 'unknown')
                       summary = f'''### 🎯 Prediction Evaluation Evidence
-| Metric | Value |
-|---|---|
-| **HTTP Status** | \`$http_code\` |
-| **Status** | \`{status}\` |
-| **Error** | \`{d.get('error', 'None')}\` |
-| **Predictions Evaluated** | \`{d.get('evaluated', 'N/A')}\` |
-| **Eligible Predictions** | \`{d.get('eligible', 'N/A')}\` |
-| **Pending Unpriced** | \`{d.get('pending_unpriced', 'N/A')}\` |
-| **Provider Errors** | \`{d.get('provider_errors', 'N/A')}\` |
-| **Skipped (Immature)** | \`{d.get('skipped_immature', 'N/A')}\` |
-| **Ungradable** | \`{d.get('ungradable', 'N/A')}\` |
-'''
+          | Metric | Value |
+          |---|---|
+          | **HTTP Status** | \`$http_code\` |
+          | **Status** | \`{status}\` |
+          | **Error** | \`{d.get('error', 'None')}\` |
+          | **Predictions Evaluated** | \`{d.get('evaluated', 'N/A')}\` |
+          | **Eligible Predictions** | \`{d.get('eligible', 'N/A')}\` |
+          | **Pending Unpriced** | \`{d.get('pending_unpriced', 'N/A')}\` |
+          | **Provider Errors** | \`{d.get('provider_errors', 'N/A')}\` |
+          | **Skipped (Immature)** | \`{d.get('skipped_immature', 'N/A')}\` |
+          | **Ungradable** | \`{d.get('ungradable', 'N/A')}\` |
+          '''
                       step_summary = os.environ.get('GITHUB_STEP_SUMMARY')
                       if step_summary:
                           with open(step_summary, 'a') as sf:
