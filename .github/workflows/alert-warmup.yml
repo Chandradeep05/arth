@@ -5,6 +5,10 @@ on:
     - cron: '*/30 * * * *'
   workflow_dispatch:
 
+concurrency:
+  group: alert-warmup
+  cancel-in-progress: false
+
 jobs:
   warmup-alerts:
     runs-on: ubuntu-latest
@@ -47,4 +51,58 @@ jobs:
             echo "::error::Unexpected status $http_code"
             exit 1
           fi
+
+          # Strict semantic JSON validation & structured markdown summary
+          python3 -c "
+          import json, os, sys
+          try:
+              with open('body.json') as f:
+                  content = f.read().strip()
+              if not content:
+                  print('::error::Empty response body received from warm-alert-symbols')
+                  sys.exit(1)
+              d = json.loads(content)
+              if not isinstance(d, dict):
+                  print('::error::Expected JSON object in response, got ' + type(d).__name__)
+                  sys.exit(1)
+
+              if d.get('status') == 'error' or 'error' in d:
+                  print(f'::error::Warmup failed on backend: {d.get(\"error\")}')
+                  sys.exit(1)
+
+              if d.get('skipped') and ('Redis' in str(d.get('reason', '')) or 'Database' in str(d.get('reason', ''))):
+                  print(f'::error::Warmup failed due to missing infrastructure: {d.get(\"reason\")}')
+                  sys.exit(1)
+
+              for field in ['warmed', 'skipped', 'uncached_remaining']:
+                  val = d.get(field)
+                  if val is None or not isinstance(val, int) or isinstance(val, bool) or val < 0:
+                      print(f'::error::Invalid warmup metric {field}: expected non-negative integer, got {val!r}')
+                      sys.exit(1)
+
+              summary = f'''### ⚡ Alert Warmup Evidence
+          | Metric | Value |
+          |---|---|
+          | **HTTP Status** | \`$http_code\` |
+          | **Symbols Warmed** | \`{d.get('warmed', 'N/A')}\` |
+          | **Symbols Skipped (Cached)** | \`{d.get('skipped', 'N/A')}\` |
+          | **Uncached Remaining** | \`{d.get('uncached_remaining', 'N/A')}\` |
+          '''
+              step_summary = os.environ.get('GITHUB_STEP_SUMMARY')
+              if step_summary:
+                  with open(step_summary, 'a') as sf:
+                      sf.write(summary + '\n')
+          except Exception as e:
+              print(f'::error::Failed to validate response body: {e}')
+              sys.exit(1)
+          "
+
           echo "Alert warmup completed."
+
+      - name: Upload warmup evidence artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: alert-warmup-${{ github.run_id }}
+          path: body.json
+          retention-days: 14

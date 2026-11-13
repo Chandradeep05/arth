@@ -202,23 +202,27 @@ async def _resolve_or_create_profile(
         return row["access_status"], row["role"]
 
     # First-time user -- create profile atomically (includes email for admin queries)
-    logger.info("profile_auto_creating", user_id=str(user_id), email=email)
+    # Respects invite_only_mode: 'pending' when invite-only, 'active' when open signup.
+    from app.config import get_settings as _get_settings
+    _settings = _get_settings()
+    initial_status = "pending" if _settings.invite_only_mode else "active"
+
+    logger.info("profile_auto_creating", user_id=str(user_id), email=email, initial_status=initial_status)
     inserted = await db.fetchrow(
         """
         INSERT INTO profiles (id, email, display_name, access_status, role, last_login)
-        VALUES ($1, $2, $3, 'pending', 'user', now())
+        VALUES ($1, $2, $3, $4, 'user', now())
         ON CONFLICT (id) DO NOTHING
         RETURNING id
         """,
         user_id,
         email,
         display_name or email.split("@")[0],
+        initial_status,
     )
     is_new_user = inserted is not None
 
     # Check if this email should be auto-promoted to admin
-    from app.config import get_settings as _get_settings
-    _settings = _get_settings()
     if _settings.initial_admin_email and email == _settings.initial_admin_email:
         # One-time bootstrap: atomic UPDATE that only promotes if no admin exists.
         # The NOT EXISTS subquery prevents the race where two concurrent first
@@ -240,13 +244,6 @@ async def _resolve_or_create_profile(
     if not row:
         logger.error("profile_create_failed", user_id=str(user_id))
         raise HTTPException(status_code=500, detail="Could not provision user profile")
-
-    # Auto-generate an invite code ONLY for genuinely new pending users so admin can share it
-    if is_new_user and row["access_status"] == "pending":
-        try:
-            await _auto_generate_invite(user_id, email, db)
-        except Exception as e:
-            logger.warning("auto_invite_generation_failed", error=str(e), email=email)
 
     logger.info(
         "profile_created",
@@ -442,5 +439,12 @@ def require_internal_secret(
     secret = request.headers.get("X-Internal-Secret", "")
     if not settings.internal_job_secret:
         raise HTTPException(status_code=500, detail="INTERNAL_JOB_SECRET not configured")
-    if not hmac.compare_digest(secret, settings.internal_job_secret):
+    if not secret or not isinstance(secret, str):
+        raise HTTPException(status_code=403, detail="Invalid internal job secret")
+    try:
+        secret_bytes = secret.encode("utf-8")
+        expected_bytes = settings.internal_job_secret.encode("utf-8")
+        if not hmac.compare_digest(secret_bytes, expected_bytes):
+            raise HTTPException(status_code=403, detail="Invalid internal job secret")
+    except (UnicodeEncodeError, TypeError):
         raise HTTPException(status_code=403, detail="Invalid internal job secret")

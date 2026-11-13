@@ -6,16 +6,33 @@ on:
     - cron: '*/14 * * * *'
   workflow_dispatch:
 
+concurrency:
+  group: keep-alive
+  cancel-in-progress: false
+
 jobs:
   ping:
     name: Ping /health
     runs-on: ubuntu-latest
-    timeout-minutes: 2
+    timeout-minutes: 3
     steps:
       - name: Ping ARTH backend
+        env:
+          BACKEND_URL: ${{ secrets.BACKEND_URL || 'https://arth-rdd5.onrender.com' }}
         run: |
-          STATUS=$(curl -sf -o /dev/null -w "%{http_code}" https://arth-rdd5.onrender.com/health || echo "000")
-          echo "Health endpoint responded: $STATUS"
-          if [ "$STATUS" != "200" ]; then
-            echo "Warning: Backend returned $STATUS -- may be cold-starting"
-          fi
+          BASE="${BACKEND_URL%/}"
+          MAX_RETRIES=3
+          for i in $(seq 1 $MAX_RETRIES); do
+            STATUS=$(curl -sf -o /dev/null -w "%{http_code}" --max-time 30 "$BASE/health" || echo "000")
+            echo "Attempt $i/$MAX_RETRIES: Health endpoint responded $STATUS"
+            if [ "$STATUS" = "200" ]; then
+              echo "Backend healthy (200)"
+              exit 0
+            fi
+            if [ "$i" -lt "$MAX_RETRIES" ]; then
+              echo "Waiting 20s for possible cold start..."
+              sleep 20
+            fi
+          done
+          echo "::error::Backend health check failed after $MAX_RETRIES attempts (Last status: $STATUS)"
+          exit 1

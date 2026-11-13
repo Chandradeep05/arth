@@ -34,8 +34,14 @@ _http_client: Optional[httpx.AsyncClient] = None
 # Static index map
 _STATIC_INDEX_MAP = {
     "^NSEI": "NSE_INDEX|Nifty 50",
+    "NIFTY.NS": "NSE_INDEX|Nifty 50",
+    "NIFTY": "NSE_INDEX|Nifty 50",
     "^NSEBANK": "NSE_INDEX|Nifty Bank",
+    "BANKNIFTY.NS": "NSE_INDEX|Nifty Bank",
+    "BANKNIFTY": "NSE_INDEX|Nifty Bank",
     "^BSESN": "BSE_INDEX|SENSEX",
+    "SENSEX.BO": "BSE_INDEX|SENSEX",
+    "SENSEX": "BSE_INDEX|SENSEX",
 }
 
 def _get_client() -> httpx.AsyncClient:
@@ -582,14 +588,18 @@ class UpstoxAdapter(BaseDataAdapter):
 
     @staticmethod
     def _safe_num(val: Any) -> Optional[float]:
-        """Safely convert Upstox values (including formatted strings) to float."""
+        """Safely convert Upstox values (including formatted strings) to finite float."""
         if val is None or val == "":
             return None
         try:
             if isinstance(val, (int, float)):
-                return float(val)
+                res = float(val)
+                import math
+                return res if math.isfinite(res) else None
             clean = str(val).replace(",", "").replace("%", "").strip()
-            return float(clean)
+            res = float(clean)
+            import math
+            return res if math.isfinite(res) else None
         except (ValueError, TypeError):
             return None
 

@@ -18,6 +18,8 @@ from datetime import date, datetime, time, timezone
 from typing import Optional, Set, Tuple
 from zoneinfo import ZoneInfo
 
+from app.core.symbols import is_indian_symbol
+
 # ── Official Exchange Holidays (YYYY, MM, DD) ──────────────────────────
 
 # Official National Stock Exchange of India (NSE) Trading Holidays (Equity Segment)
@@ -128,12 +130,12 @@ def get_market_state(
         e.g., ("open", "Regular Trading"), ("closed", "Market Holiday"), ("closed", "Weekend")
 
     Supported markets / symbols:
-        - "india", "nse", "bse", or symbol ending in ".NS" / ".BO" -> NSE (IST)
-        - "us", "nyse", "nasdaq", or any US symbol -> NYSE (ET)
+        - "india", "nse", "bse", or Indian symbols (e.g., 'RELIANCE', 'TCS', 'INFY', 'RELIANCE.NS') -> NSE (IST)
+        - "us", "nyse", "nasdaq", or any US symbol ('AAPL', 'TSLA', 'MSFT') -> NYSE (ET)
     """
     now_utc = dt or datetime.now(timezone.utc)
     sym = (market_or_symbol or "us").upper()
-    is_indian = sym.endswith((".NS", ".BO")) or sym in ("INDIA", "NSE", "BSE")
+    is_indian = is_indian_symbol(sym)
 
     if is_indian:
         now_local = now_utc.astimezone(TZ_IST)

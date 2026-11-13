@@ -5,26 +5,138 @@ on:
     - cron: '0 */6 * * 1-5'   # Every 6 hours on weekdays (market days)
   workflow_dispatch:
 
+concurrency:
+  group: prediction-evaluator
+  cancel-in-progress: false
+
 jobs:
   evaluate-predictions:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - name: Evaluate matured predictions
+        env:
+          BACKEND_URL: ${{ secrets.BACKEND_URL }}
+          INTERNAL_JOB_SECRET: ${{ secrets.INTERNAL_JOB_SECRET }}
         run: |
-          response=$(curl -s -o /dev/null -w "%{http_code}" \
+          if [ -z "$BACKEND_URL" ] || [ -z "$INTERNAL_JOB_SECRET" ]; then
+            echo "::error::BACKEND_URL or INTERNAL_JOB_SECRET secret is not set in GitHub repo secrets"
+            exit 1
+          fi
+          BASE="${BACKEND_URL%/}"
+
+          # Wake backend first (Render cold start)
+          curl -s -o /dev/null --max-time 90 "$BASE/health" || true
+
+          http_code=$(curl -s -o body.json -w "%{http_code}" --max-time 120 \
             -X POST \
-            -H "X-Internal-Secret: ${{ secrets.INTERNAL_JOB_SECRET }}" \
+            -H "X-Internal-Secret: $INTERNAL_JOB_SECRET" \
             -H "Content-Type: application/json" \
-            "${{ secrets.BACKEND_URL }}/api/v1/internal/jobs/evaluate-predictions" \
+            "$BASE/api/v1/internal/jobs/evaluate-predictions" \
             || echo "000")
-          echo "Response: $response"
-          if [ "$response" = "000" ]; then
-            echo "Network error -- backend unreachable"
+
+          echo "HTTP status: $http_code"
+          echo "Response body:"
+          cat body.json 2>/dev/null || true
+          echo
+
+          # Parse and record step summary regardless of status code if body is JSON
+          python3 -c "
+          import json, os, sys
+          try:
+              with open('body.json') as f:
+                  content = f.read().strip()
+              if content:
+                  d = json.loads(content)
+                  if isinstance(d, dict):
+                      status = d.get('status', 'unknown')
+                      summary = f'''### 🎯 Prediction Evaluation Evidence
+          | Metric | Value |
+          |---|---|
+          | **HTTP Status** | \`$http_code\` |
+          | **Status** | \`{status}\` |
+          | **Error** | \`{d.get('error', 'None')}\` |
+          | **Predictions Evaluated** | \`{d.get('evaluated', 'N/A')}\` |
+          | **Eligible Predictions** | \`{d.get('eligible', 'N/A')}\` |
+          | **Pending Unpriced** | \`{d.get('pending_unpriced', 'N/A')}\` |
+          | **Provider Errors** | \`{d.get('provider_errors', 'N/A')}\` |
+          | **Skipped (Immature)** | \`{d.get('skipped_immature', 'N/A')}\` |
+          | **Ungradable** | \`{d.get('ungradable', 'N/A')}\` |
+          '''
+                      step_summary = os.environ.get('GITHUB_STEP_SUMMARY')
+                      if step_summary:
+                          with open(step_summary, 'a') as sf:
+                              sf.write(summary + '\n')
+          except Exception:
+              pass
+          " 2>/dev/null || true
+
+          if [ "$http_code" = "000" ]; then
+            echo "::error::Network error -- backend unreachable"
             exit 1
           fi
-          if [ "$response" != "200" ]; then
-            echo "Unexpected status $response"
+          if [ "$http_code" = "401" ] || [ "$http_code" = "403" ]; then
+            echo "::error::Auth rejected -- INTERNAL_JOB_SECRET in GitHub does not match Render env var"
             exit 1
           fi
+          if [ "$http_code" != "200" ]; then
+            echo "::error::Prediction evaluation endpoint failed with HTTP $http_code"
+            exit 1
+          fi
+
+          # Strict semantic JSON validation
+          python3 -c "
+          import json, os, sys
+          try:
+              with open('body.json') as f:
+                  content = f.read().strip()
+              if not content:
+                  print('::error::Empty response body received from evaluate-predictions')
+                  sys.exit(1)
+              d = json.loads(content)
+              if not isinstance(d, dict):
+                  print('::error::Expected JSON object in response, got ' + type(d).__name__)
+                  sys.exit(1)
+
+              status = d.get('status')
+              if status == 'error':
+                  print(f'::error::Prediction evaluation failed on backend: {d.get(\"error\")}')
+                  sys.exit(1)
+
+              if status not in ('ok', 'stalled'):
+                  print(f'::error::Invalid or missing status in prediction evaluation response: {status!r}')
+                  sys.exit(1)
+
+              required_metrics = [
+                  'evaluated', 'eligible', 'pending_unpriced',
+                  'provider_errors', 'skipped_immature', 'ungradable'
+              ]
+              for metric in required_metrics:
+                  val = d.get(metric)
+                  if val is None or not isinstance(val, int) or isinstance(val, bool) or val < 0:
+                      print(f'::error::Invalid prediction metric {metric}: expected non-negative integer, got {val!r}')
+                      sys.exit(1)
+
+              eligible = d['eligible']
+              evaluated = d['evaluated']
+              if evaluated > eligible:
+                  print(f'::error::Inconsistent metrics: evaluated ({evaluated}) cannot exceed eligible ({eligible})')
+                  sys.exit(1)
+
+              if status == 'stalled' or (eligible > 0 and evaluated == 0):
+                  print(f'::error::Prediction evaluation stalled: {eligible} eligible prediction(s) could not be evaluated (evaluated=0, pending_unpriced={d[\"pending_unpriced\"]}, provider_errors={d[\"provider_errors\"]})')
+                  sys.exit(1)
+          except Exception as e:
+              print(f'::error::Failed to validate response body: {e}')
+              sys.exit(1)
+          "
+
           echo "Prediction evaluation completed."
+
+      - name: Upload evaluation evidence artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: prediction-evaluation-${{ github.run_id }}
+          path: body.json
+          retention-days: 14

@@ -7,6 +7,8 @@ from enum import Enum
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Union
 from app.core.logging import get_logger
+from app.core.symbols import COMMON_INDIAN_SYMBOLS, is_indian_symbol, normalize_symbol
+
 from dataclasses import dataclass
 
 logger = get_logger(__name__)
@@ -79,17 +81,7 @@ CAPABILITIES = {
     },
 }
 
-_COMMON_INDIAN_SYMBOLS = {
-    "RELIANCE", "TCS", "HDFCBANK", "INFY", "ICICIBANK", "SBIN", "BHARTIARTL",
-    "ITC", "KOTAKBANK", "LT", "HINDUNILVR", "AXISBANK", "BAJFINANCE", "MARUTI",
-    "ASIANPAINT", "TITAN", "TATAMOTORS", "SUNPHARMA", "ULTRACEMCO", "NTPC",
-    "ONGC", "POWERGRID", "JSWSTEEL", "ADANIENT", "ADANIPORTS", "COALINDIA",
-    "TATASTEEL", "M&M", "BAJAJFINSV", "WIPRO", "HCLTECH", "NESTLEIND", "BPCL",
-    "EICHERMOT", "GRASIM", "HEROMOTOCO", "HINDALCO", "CIPLA", "APOLLOHOSP",
-    "DRREDDY", "DIVISLAB", "TATACONSUM", "BRITANNIA", "BAJAJ-AUTO", "SBILIFE",
-    "HDFCLIFE", "SHRIRAMFIN", "INDUSINDBK", "BEL", "VEDL", "ZOMATO", "PAYTM",
-    "JIOFIN", "TRENT", "HAL", "VBL", "NIFTY", "BANKNIFTY"
-}
+_COMMON_INDIAN_SYMBOLS = COMMON_INDIAN_SYMBOLS
 
 @dataclass(frozen=True)
 class ShareAuditRecord:
@@ -294,14 +286,7 @@ class MarketDataProvider:
         return self._upstox
 
     def _normalize_symbol(self, symbol: str) -> str:
-        if not symbol or not isinstance(symbol, str):
-            return symbol or ""
-        s = symbol.strip().upper()
-        if s.endswith((".NS", ".BO")):
-            return s
-        if s in _COMMON_INDIAN_SYMBOLS:
-            return f"{s}.NS"
-        return s
+        return normalize_symbol(symbol)
 
     def _check_capability(self, symbol: str, capability: str) -> DataResult | None:
         symbol = self._normalize_symbol(symbol)
@@ -316,17 +301,17 @@ class MarketDataProvider:
             )
         return None
 
-    def _get_chain(self, symbol: str, capability: str) -> List[str]:
+    def _get_chain(self, symbol: str, capability: str, allow_nse_fallback: bool = True) -> List[str]:
         s = self._normalize_symbol(symbol)
-        is_indian = s.endswith(('.NS', '.BO'))
+        is_indian = is_indian_symbol(s)
         if is_indian:
             chain = []
             upstox = self._get_upstox()
             # Upstox is primary if enabled and has capability
             if upstox and CAPABILITIES.get("upstox", {}).get(capability):
                 chain.append("upstox")
-            # NSE as fallback for quote, history, company_info, fundamentals
-            if capability in ["quote", "history", "company_info", "fundamentals"]:
+            # NSE as fallback for quote, history, company_info, fundamentals only if allowed
+            if allow_nse_fallback and capability in ["quote", "history", "company_info", "fundamentals"]:
                 chain.append("nse")
             return chain
 
@@ -346,10 +331,10 @@ class MarketDataProvider:
         }
         return chains.get(capability, ["twelvedata"])
 
-    async def get_quote(self, symbol: str) -> DataResult:
+    async def get_quote(self, symbol: str, allow_nse_fallback: bool = True) -> DataResult:
         symbol = self._normalize_symbol(symbol)
-        is_indian = symbol.endswith(('.NS', '.BO'))
-        chain = self._get_chain(symbol, "quote")
+        is_indian = is_indian_symbol(symbol)
+        chain = self._get_chain(symbol, "quote", allow_nse_fallback=allow_nse_fallback)
         for provider in chain:
             try:
                 # Quota is governed inside each adapter at the outbound HTTP boundary AFTER cache checks,
@@ -357,6 +342,8 @@ class MarketDataProvider:
                 if provider == "twelvedata":
                     data = await self._twelve.get_quote(symbol)
                 elif provider == "nse":
+                    if not allow_nse_fallback:
+                        continue
                     data = await self._nse.get_quote(symbol)
                 elif provider == "finnhub":
                     clean_sym = symbol.split(".")[0]
@@ -395,22 +382,23 @@ class MarketDataProvider:
                     data = None
 
                 if data:
-                    # Enrich Indian quotes with market_cap and pe_ratio from NSE if missing
+                    # Enrich Indian quotes with market_cap and pe_ratio from NSE if missing AND allowed
                     if is_indian and data.get("market_cap") is None:
-                        try:
-                            nse_quote = await self._nse.get_quote(symbol)
-                            if nse_quote:
-                                if nse_quote.get("market_cap"):
-                                    data["market_cap"] = nse_quote["market_cap"]
-                                    logger.debug("nse_enrichment_market_cap", symbol=symbol, market_cap=nse_quote["market_cap"])
-                                if not data.get("pe_ratio") and nse_quote.get("pe_ratio"):
-                                    data["pe_ratio"] = nse_quote["pe_ratio"]
-                            else:
-                                logger.debug("nse_enrichment_no_data", symbol=symbol)
-                        except Exception as enrich_err:
-                            logger.warning("nse_enrichment_failed", symbol=symbol, error=str(enrich_err))
+                        if allow_nse_fallback:
+                            try:
+                                nse_quote = await self._nse.get_quote(symbol)
+                                if nse_quote:
+                                    if nse_quote.get("market_cap"):
+                                        data["market_cap"] = nse_quote["market_cap"]
+                                        logger.debug("nse_enrichment_market_cap", symbol=symbol, market_cap=nse_quote["market_cap"])
+                                    if not data.get("pe_ratio") and nse_quote.get("pe_ratio"):
+                                        data["pe_ratio"] = nse_quote["pe_ratio"]
+                                else:
+                                    logger.debug("nse_enrichment_no_data", symbol=symbol)
+                            except Exception as enrich_err:
+                                logger.warning("nse_enrichment_failed", symbol=symbol, error=str(enrich_err))
 
-                        # Authoritative fallback from shares outstanding if exchange scraping failed
+                        # Authoritative fallback from shares outstanding if exchange scraping failed or not permitted
                         if data.get("market_cap") is None:
                             calc_res = _calculate_fallback_market_cap(symbol, data.get("price"))
                             if calc_res:
@@ -753,7 +741,7 @@ class MarketDataProvider:
 
     def _get_provider(self, symbol: str) -> str:
         s = self._normalize_symbol(symbol)
-        if s.endswith(('.NS', '.BO')):
+        if is_indian_symbol(s):
             return 'upstox' if self._get_upstox() else 'nse'
         return 'twelvedata'
 

@@ -88,8 +88,11 @@ async def delete_account(
         "UPDATE invite_codes SET created_by = NULL WHERE created_by = $1",
         user.user_id,
     )
+    # Disassociate user from redeemed invite codes while permanently invalidating the code
+    # Setting used_by = NULL satisfies the foreign key, while setting expires_at = now
+    # and retaining used_at prevents code reuse while preserving administrative audit history.
     await db.execute(
-        "UPDATE invite_codes SET used_by = NULL WHERE used_by = $1",
+        "UPDATE invite_codes SET used_by = NULL, expires_at = now() WHERE used_by = $1",
         user.user_id,
     )
     await db.execute("DELETE FROM profiles WHERE id = $1", user.user_id)
