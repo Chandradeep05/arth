@@ -2,6 +2,8 @@ name: Alert Evaluator
 
 on:
   schedule:
+    # Every 5 minutes, 24/7. The backend market calendar automatically skips
+    # evaluation when all target exchanges are closed.
     - cron: '*/5 * * * *'
   workflow_dispatch:
 
@@ -12,7 +14,7 @@ concurrency:
 jobs:
   evaluate-alerts:
     runs-on: ubuntu-latest
-    timeout-minutes: 4
+    timeout-minutes: 5
     steps:
       - name: Evaluate price alerts
         env:
@@ -25,7 +27,7 @@ jobs:
           fi
           BASE="${BACKEND_URL%/}"
 
-          # Wake the backend first (Render free tier may be asleep; cold start can take ~60s)
+          # Wake backend first (Render cold start)
           curl -s -o /dev/null --max-time 90 "$BASE/health" || true
 
           http_code=$(curl -s -o body.json -w "%{http_code}" --max-time 120 \
@@ -46,7 +48,13 @@ jobs:
           try:
               with open('body.json') as f:
                   d = json.load(f)
-              summary = f'''### 📊 Alert Evaluation Evidence (Run: {d.get(\"run_id\", \"N/A\")})
+              if d.get('skipped'):
+                  summary = f'''### ⏸️ Alert Evaluation Skipped
+          - **Reason:** \`{d.get('reason', 'N/A')}\`
+          - **HTTP Status:** \`$http_code\`
+          '''
+              else:
+                  summary = f'''### 📊 Alert Evaluation Evidence (Run: {d.get(\"run_id\", \"N/A\")})
           | Metric | Value |
           |---|---|
           | **Execution Timestamp** | \`{d.get(\"at\", \"N/A\")}\` |

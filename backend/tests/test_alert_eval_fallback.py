@@ -10,6 +10,7 @@ fake DB so that class of bug cannot pass CI silently again.
 from __future__ import annotations
 
 import json
+from decimal import Decimal
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -462,3 +463,215 @@ def test_ambiguous_symbol_requires_explicit_suffix():
 
     # Explicit NSE suffix always unambiguous
     assert normalize_symbol("HAL.NS") == "HAL.NS"
+
+
+# ── Production Hardening & Security Regression Tests ─────────────────
+
+@pytest.mark.asyncio
+async def test_decimal_threshold_passed_as_decimal_to_update(monkeypatch):
+    """
+    PostgreSQL NUMERIC = FLOAT8 fails equality in PostgreSQL (e.g. 2450.70).
+    The evaluator must pass the exact DB threshold (Decimal) to $6 in UPDATE alerts.
+    """
+    executed_params = []
+
+    class CapturingDB(FakeDB):
+        async def execute(self, sql, *args):
+            self.executed.append((sql, args))
+            if "UPDATE alerts SET trigger_state" in sql:
+                executed_params.append(args)
+                return "UPDATE 1"
+            return "INSERT 0 1"
+
+    # Simulate asyncpg returning a Decimal for NUMERIC column
+    decimal_threshold = Decimal("2450.75")
+    alert = {
+        "id": "a_dec", "user_id": "u1", "symbol": "RELIANCE.NS",
+        "alert_type": "price_above", "threshold": decimal_threshold, "trigger_state": "armed",
+    }
+    db = CapturingDB([alert])
+    redis = FakeRedis()
+    redis.store["quote:RELIANCE.NS"] = json.dumps({"price": 2500.0, "provider": "Upstox"})
+
+    result = await internal._run_eval(db, redis, _OPEN_TRADING_TIME)
+
+    assert result["evaluated"] == 1
+    assert result["triggered"] == 1
+    assert len(executed_params) == 1
+    # Check that $6 parameter in UPDATE is Decimal, preserving exact PostgreSQL NUMERIC type
+    assert executed_params[0][5] == decimal_threshold
+    assert isinstance(executed_params[0][5], Decimal)
+
+
+@pytest.mark.asyncio
+async def test_stale_cache_rejected_and_falls_back_to_provider(monkeypatch):
+    """
+    A quote in Redis with ingested_at older than 900 seconds must be rejected as stale,
+    forcing the evaluator to fall back to a fresh provider quote.
+    """
+    calls = []
+
+    async def fake_get_quote(symbol, allow_nse_fallback=True):
+        calls.append(symbol)
+        return SimpleNamespace(available=True, data={"price": 2950.0}, source="Upstox")
+
+    monkeypatch.setattr(mdp.market_data, "get_quote", fake_get_quote)
+    redis = FakeRedis()
+    # Cache entry from 25 minutes ago (1500 seconds old)
+    stale_time = datetime(2026, 10, 21, 5, 5, tzinfo=timezone.utc).isoformat()
+    redis.store["quote:RELIANCE.NS"] = json.dumps({
+        "price": 2900.0,
+        "provider": "Upstox",
+        "ingested_at": stale_time,
+    })
+    db = FakeDB([_alert(symbol="RELIANCE.NS", atype="price_above", threshold=2920.0)])
+
+    result = await internal._run_eval(db, redis, _OPEN_TRADING_TIME)
+
+    # Provider must have been called because cached quote was stale
+    assert "RELIANCE.NS" in calls
+    assert result["triggered"] == 1
+    # Notification contains fresh price (2950.00), not stale cached price (2900.00)
+    notifs = _notifications(db)
+    assert len(notifs) == 1
+    assert "2950.00" in notifs[0][1][3]
+
+
+@pytest.mark.asyncio
+async def test_fresh_cache_with_provider_provenance_accepted():
+    """
+    A fresh cached quote (< 900s old) with 'provider' metadata must be accepted
+    and its provider correctly recorded in the notification provenance.
+    """
+    redis = FakeRedis()
+    # Cache entry from 2 minutes ago
+    fresh_time = datetime(2026, 10, 21, 5, 28, tzinfo=timezone.utc).isoformat()
+    redis.store["quote:RELIANCE.NS"] = json.dumps({
+        "price": 2950.0,
+        "provider": "Upstox",
+        "ingested_at": fresh_time,
+    })
+    db = FakeDB([_alert(symbol="RELIANCE.NS", atype="price_above", threshold=2900.0)])
+
+    result = await internal._run_eval(db, redis, _OPEN_TRADING_TIME)
+
+    assert result["evaluated"] == 1
+    assert result["triggered"] == 1
+    notifs = _notifications(db)
+    assert len(notifs) == 1
+    body = notifs[0][1][3]
+    assert "Source: Upstox" in body
+    assert "2950.00" in body
+
+
+def test_symbol_validation_rejects_injection_and_invalid_chars():
+    """
+    CreateAlertRequest must reject malformed symbols, colons, spaces, newlines,
+    and strings exceeding 20 characters to prevent Redis key injection.
+    """
+    from app.api.v1.alerts import CreateAlertRequest
+    from pydantic import ValidationError
+
+    # Valid symbols
+    valid_1 = CreateAlertRequest(symbol="RELIANCE", alert_type="price_above", threshold=2500.0)
+    assert valid_1.symbol == "RELIANCE.NS"
+
+    valid_2 = CreateAlertRequest(symbol="AAPL", alert_type="price_above", threshold=150.0)
+    assert valid_2.symbol == "AAPL"
+
+    valid_3 = CreateAlertRequest(symbol="TCS.BO", alert_type="price_below", threshold=3000.0)
+    assert valid_3.symbol == "TCS.BO"
+
+    # Invalid: colon (Redis namespace pollution)
+    with pytest.raises(ValidationError):
+        CreateAlertRequest(symbol="RELIANCE:exploit", alert_type="price_above", threshold=100.0)
+
+    # Invalid: spaces
+    with pytest.raises(ValidationError):
+        CreateAlertRequest(symbol="REL IANCE", alert_type="price_above", threshold=100.0)
+
+    # Invalid: newlines
+    with pytest.raises(ValidationError):
+        CreateAlertRequest(symbol="RELIANCE\nINJECT", alert_type="price_above", threshold=100.0)
+
+    # Invalid: over 20 chars
+    with pytest.raises(ValidationError):
+        CreateAlertRequest(symbol="A" * 25, alert_type="price_above", threshold=100.0)
+
+
+@pytest.mark.asyncio
+async def test_quota_atomic_incr_expire_and_rollback(monkeypatch):
+    """
+    _atomic_incr_expire must increment key and set expiration.
+    When daily limit is exceeded, daily counter is rolled back.
+    """
+    from app.core.provider_quota import ProviderQuotaGovernor, ProviderLimit, PROVIDER_LIMITS
+
+    class MockRedisQuota:
+        def __init__(self):
+            self.store = {}
+            self.ttls = {}
+
+        async def eval(self, script, numkeys, key, count, ttl):
+            val = self.store.get(key, 0) + int(count)
+            self.store[key] = val
+            if val == int(count):
+                self.ttls[key] = int(ttl)
+            return val
+
+        async def incrby(self, key, count):
+            self.store[key] = self.store.get(key, 0) + count
+            return self.store[key]
+
+        async def decrby(self, key, count):
+            self.store[key] = self.store.get(key, 0) - count
+            return self.store[key]
+
+        async def expire(self, key, ttl):
+            self.ttls[key] = ttl
+            return True
+
+    mock_redis = MockRedisQuota()
+    governor = ProviderQuotaGovernor()
+
+    # Allow 2 per day
+    monkeypatch.setitem(PROVIDER_LIMITS, "test_prov", ProviderLimit(per_minute=10, per_day=2))
+
+    assert await governor.acquire("test_prov", redis_client=mock_redis, count=1) is True
+    assert await governor.acquire("test_prov", redis_client=mock_redis, count=1) is True
+    # Third request must exceed daily limit and roll back
+    assert await governor.acquire("test_prov", redis_client=mock_redis, count=1) is False
+
+
+@pytest.mark.asyncio
+async def test_evaluate_predictions_uses_upstox_for_indian_symbols(monkeypatch):
+    """
+    evaluate_predictions must fetch quotes with allow_nse_fallback=False for Indian symbols.
+    """
+    calls = []
+
+    async def fake_get_quote(symbol, allow_nse_fallback=True):
+        calls.append((symbol, allow_nse_fallback))
+        return SimpleNamespace(available=True, data={"price": 2800.0})
+
+    monkeypatch.setattr(mdp.market_data, "get_quote", fake_get_quote)
+
+    from app.engines.prediction.outcome_tracker import outcome_tracker
+    async def fake_evaluate_pending(fetch_price_func):
+        # Call fetch_price_func on Indian symbol
+        price_ind = await fetch_price_func("RELIANCE")
+        # Call fetch_price_func on US symbol
+        price_us = await fetch_price_func("AAPL")
+        return 2
+
+    monkeypatch.setattr(outcome_tracker, "evaluate_pending", fake_evaluate_pending)
+
+    fake_request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace()))
+    res = await internal.evaluate_predictions(fake_request, None)
+
+    assert res["status"] == "ok"
+    assert res["evaluated"] == 2
+    # Verify Indian symbol was normalized to RELIANCE.NS and allow_nse_fallback=False
+    assert ("RELIANCE.NS", False) in calls
+    # Verify US symbol had allow_nse_fallback=True
+    assert ("AAPL", True) in calls

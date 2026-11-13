@@ -88,8 +88,9 @@ async def delete_account(
         "UPDATE invite_codes SET created_by = NULL WHERE created_by = $1",
         user.user_id,
     )
+    # Delete redeemed invite code so it cannot be resurrected or reused
     await db.execute(
-        "UPDATE invite_codes SET used_by = NULL WHERE used_by = $1",
+        "DELETE FROM invite_codes WHERE used_by = $1",
         user.user_id,
     )
     await db.execute("DELETE FROM profiles WHERE id = $1", user.user_id)

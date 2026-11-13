@@ -117,6 +117,11 @@ async def lifespan(app: FastAPI):
                 "ADMIN_API_KEY is required in production but is not set. "
                 "Set it in the Render environment variables and redeploy."
             )
+        if not settings.internal_job_secret:
+            raise RuntimeError(
+                "INTERNAL_JOB_SECRET is required in production but is not set. "
+                "Set it in the Render environment variables and redeploy."
+            )
 
     # Initialize SQLAlchemy (Phase 1-3 endpoints)
     try:

@@ -159,12 +159,22 @@ async def _run_eval(db, redis, now: datetime) -> dict:
                 if raw:
                     try:
                         data = json.loads(raw)
+                        # Freshness guard: reject quotes older than 15 minutes (900s) during active evaluation
+                        ingested_at = data.get("ingested_at")
+                        if ingested_at:
+                            try:
+                                ingested_dt = datetime.fromisoformat(ingested_at)
+                                if (now - ingested_dt).total_seconds() > 900:
+                                    logger.debug("cached_quote_stale_skipped", symbol=symbol, age_sec=round((now - ingested_dt).total_seconds(), 1))
+                                    continue
+                            except Exception:
+                                pass
                         price = (data.get("price") or data.get("close") or
                                  data.get("last_price") or
                                  (data.get("data") or {}).get("price"))
                         if price and float(price) > 0:
                             prices[symbol] = float(price)
-                            quote_sources[symbol] = data.get("provider") or data.get("source") or "cache"
+                            quote_sources[symbol] = data.get("provider") or data.get("source") or ("Upstox" if is_indian_symbol(symbol) else "cache")
                             break
                     except Exception:
                         continue
@@ -236,7 +246,7 @@ async def _run_eval(db, redis, now: datetime) -> dict:
                 updated = await db.execute(
                     "UPDATE alerts SET trigger_state = $1, last_evaluated_value = $2, last_triggered_at = $3 "
                     "WHERE id = $4 AND trigger_state = 'armed' AND alert_type = $5 AND threshold = $6",
-                    "triggered", current, now, alert["id"], atype, threshold,
+                    "triggered", current, now, alert["id"], atype, alert["threshold"],
                 )
                 # Only insert notification if we actually flipped the state
                 if updated and updated != "UPDATE 0":
@@ -263,7 +273,7 @@ async def _run_eval(db, redis, now: datetime) -> dict:
                     logger.info("alert_triggered", symbol=canonical_sym, raw_symbol=symbol, price=current, threshold=threshold)
         elif cleared and state == "triggered":
             await db.execute(
-                "UPDATE alerts SET trigger_state = $1, last_evaluated_value = $2 WHERE id = $3",
+                "UPDATE alerts SET trigger_state = $1, last_evaluated_value = $2 WHERE id = $3 AND trigger_state = 'triggered' AND is_active = true",
                 "armed", current, alert["id"],
             )
 
@@ -301,9 +311,9 @@ async def warm_alert_symbols(
     redis = getattr(request.app.state, "redis", None)
     db = getattr(request.state, "db", None)
     if not redis:
-        return {"skipped": True, "reason": "Redis not configured"}
+        return JSONResponse(status_code=503, content={"skipped": True, "reason": "Redis not configured"})
     if db is None:
-        return {"skipped": True, "reason": "Database pool unavailable"}
+        return JSONResponse(status_code=503, content={"skipped": True, "reason": "Database pool unavailable"})
         
     alerts = await db.fetch("SELECT DISTINCT symbol FROM alerts WHERE is_active = true")
     if not alerts:
@@ -343,8 +353,9 @@ async def warm_alert_symbols(
     # Check which symbols currently lack a cached price in Redis
     uncached = []
     for s in scheduled_symbols:
+        canonical_s = normalize_symbol(s)
         has_price = False
-        for key in [f"quote:{s}", f"market:quote:{s}", f"tick:{s}"]:
+        for key in [f"quote:{canonical_s}", f"market:quote:{canonical_s}", f"tick:{canonical_s}", f"quote:{s}", f"market:quote:{s}", f"tick:{s}"]:
             if await redis.exists(key):
                 has_price = True
                 break
@@ -374,9 +385,14 @@ async def warm_alert_symbols(
                 continue
             res = await market_data.get_quote(canonical_sym, allow_nse_fallback=not is_indian)
             if res.available and res.data:
+                actual_prov = getattr(res, "source", None) or ("Upstox" if is_indian else "unknown")
+                cache_blob = dict(res.data)
+                cache_blob["provider"] = actual_prov
+                cache_blob["ingested_at"] = now.isoformat()
+                cache_blob["symbol"] = canonical_sym
                 await redis.set(
                     f"quote:{canonical_sym}",
-                    json.dumps(res.data, default=str),
+                    json.dumps(cache_blob, default=str),
                     ex=1860,  # 31 minutes — survives between 30-min warmup cycles
                 )
                 warmed += 1
@@ -410,7 +426,9 @@ async def evaluate_predictions(
     async def _fetch_price(symbol: str) -> float | None:
         """Fetch current price for evaluation."""
         try:
-            result = await market_data.get_quote(symbol)
+            canonical_s = normalize_symbol(symbol)
+            is_ind = is_indian_symbol(canonical_s)
+            result = await market_data.get_quote(canonical_s, allow_nse_fallback=not is_ind)
             if result.available and result.data:
                 return result.data.get("price")
         except Exception as e:
@@ -422,5 +440,5 @@ async def evaluate_predictions(
         return {"evaluated": count, "status": "ok"}
     except Exception as e:
         logger.error("evaluate_predictions_failed", error=str(e))
-        return {"evaluated": 0, "status": "error", "error": str(e)}
+        return JSONResponse(status_code=500, content={"evaluated": 0, "status": "error", "error": str(e)})
 

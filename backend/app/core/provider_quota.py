@@ -41,6 +41,8 @@ PROVIDER_LIMITS: Dict[str, ProviderLimit] = {
 }
 
 
+
+
 class ProviderQuotaGovernor:
     """Centralized governor ensuring ARTH never exceeds external provider API quotas."""
 
@@ -78,6 +80,8 @@ class ProviderQuotaGovernor:
         # ── 1. Redis Tier (Distributed) ──
         if redis_client is not None:
             minute_key = None
+            daily_key = None
+            daily_incremented = False
             try:
                 # 1. Minute burst limit check FIRST (prevents leaking daily counter on burst rejection)
                 if limits.per_minute is not None:
@@ -85,7 +89,10 @@ class ProviderQuotaGovernor:
                     minute_key = f"quota:provider:{prov}:min:{epoch_min}"
                     used_min = await redis_client.incrby(minute_key, count)
                     if used_min == count:
-                        await redis_client.expire(minute_key, 120)
+                        try:
+                            await redis_client.expire(minute_key, 120)
+                        except Exception:
+                            pass
                     if used_min > limits.per_minute:
                         try:
                             await redis_client.decrby(minute_key, count)
@@ -106,13 +113,18 @@ class ProviderQuotaGovernor:
                     daily_key = f"quota:provider:{prov}:daily:{today_str}"
                     try:
                         used_today = await redis_client.incrby(daily_key, count)
+                        daily_incremented = True
                         if used_today == count:
-                            await redis_client.expire(daily_key, 90000)
+                            try:
+                                await redis_client.expire(daily_key, 90000)
+                            except Exception:
+                                pass
                         if used_today > limits.per_day:
                             try:
                                 await redis_client.decrby(daily_key, count)
                             except Exception:
                                 pass
+                            daily_incremented = False
                             if minute_key:
                                 try:
                                     await redis_client.decrby(minute_key, count)
@@ -128,7 +140,12 @@ class ProviderQuotaGovernor:
                             )
                             return False
                     except Exception as daily_err:
-                        # Rollback minute reservation if daily operation raises an error
+                        if daily_incremented:
+                            try:
+                                await redis_client.decrby(daily_key, count)
+                            except Exception:
+                                pass
+                            daily_incremented = False
                         if minute_key:
                             try:
                                 await redis_client.decrby(minute_key, count)
@@ -139,7 +156,12 @@ class ProviderQuotaGovernor:
 
                 return True
             except Exception as e:
-                # Ensure minute reservation is rolled back if any uncaught error occurred
+                # Ensure daily and minute reservations are rolled back if any uncaught error occurred
+                if daily_incremented and daily_key:
+                    try:
+                        await redis_client.decrby(daily_key, count)
+                    except Exception:
+                        pass
                 if minute_key:
                     try:
                         await redis_client.decrby(minute_key, count)

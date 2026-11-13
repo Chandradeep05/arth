@@ -7,6 +7,8 @@ Resets to armed when condition reverses.
 """
 from __future__ import annotations
 
+import re
+
 from datetime import datetime, timezone
 from typing import Optional
 from uuid import UUID
@@ -22,6 +24,8 @@ def _currency_for_symbol(symbol: str) -> str:
     """Derive display currency from symbol suffix or canonical market."""
     return get_symbol_currency(symbol)
 
+_SYMBOL_RE = re.compile(r"^[A-Z0-9._-]{1,20}$")
+
 logger = get_logger(__name__)
 router = APIRouter(prefix="/user/alerts", tags=["alerts"])
 notifications_router = APIRouter(prefix="/user/notifications", tags=["notifications"])
@@ -35,7 +39,12 @@ class CreateAlertRequest(BaseModel):
     @field_validator("symbol")
     @classmethod
     def sym_upper(cls, v: str) -> str:
-        return normalize_symbol(v)
+        if not v or not isinstance(v, str):
+            raise ValueError("symbol is required")
+        cleaned = v.strip().upper()
+        if not _SYMBOL_RE.match(cleaned):
+            raise ValueError("symbol contains invalid characters or exceeds 20 characters")
+        return normalize_symbol(cleaned)
 
     @field_validator("alert_type")
     @classmethod

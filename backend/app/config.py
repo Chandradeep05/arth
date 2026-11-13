@@ -106,6 +106,7 @@ class Settings(BaseSettings):
     # ── Invite Code Security ──
     # Required in production. Fail-closed: invite creation raises if absent.
     invite_code_pepper: str = ""
+    invite_only_mode: bool = False
 
     # ── Twelve Data API (US stocks) ──
     # Free tier: 8 credits/min, 800/day. Used for US stocks only.
