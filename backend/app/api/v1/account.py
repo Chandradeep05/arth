@@ -82,20 +82,27 @@ async def delete_account(
             )
         logger.warning("supabase_auth_delete_skipped", reason="Supabase not configured (dev mode)")
 
-    # Step 2: Delete profile + CASCADE all child tables
-    # First disassociate invite_codes where created_by or used_by matches to prevent FK violation
-    await db.execute(
-        "UPDATE invite_codes SET created_by = NULL WHERE created_by = $1",
-        user.user_id,
-    )
-    # Disassociate user from redeemed invite codes while permanently invalidating the code
-    # Setting used_by = NULL satisfies the foreign key, while setting expires_at = now
-    # and retaining used_at prevents code reuse while preserving administrative audit history.
-    await db.execute(
-        "UPDATE invite_codes SET used_by = NULL, expires_at = now() WHERE used_by = $1",
-        user.user_id,
-    )
-    await db.execute("DELETE FROM profiles WHERE id = $1", user.user_id)
+    # Step 2: Delete profile + CASCADE all child tables — ATOMIC TRANSACTION
+    # All three mutations execute in one transaction so a mid-sequence failure
+    # (e.g. crash between invite disassociation and profile deletion) cannot
+    # leave the DB in a partially applied state:
+    #   - invite_codes.created_by  → NULL     (FK satisfied; code preserved for audit)
+    #   - invite_codes.used_by     → NULL     (FK satisfied; expires_at = now() prevents reuse)
+    #   - profiles row deleted     → cascades to alerts, notifications, watchlists, etc.
+    async with db.transaction():
+        # First disassociate invite_codes where created_by matches — prevents FK violation
+        await db.execute(
+            "UPDATE invite_codes SET created_by = NULL WHERE created_by = $1",
+            user.user_id,
+        )
+        # Disassociate user from redeemed invite codes while permanently invalidating the code.
+        # Setting used_by = NULL satisfies the foreign key, while setting expires_at = now()
+        # and retaining used_at prevents code reuse while preserving administrative audit history.
+        await db.execute(
+            "UPDATE invite_codes SET used_by = NULL, expires_at = now() WHERE used_by = $1",
+            user.user_id,
+        )
+        await db.execute("DELETE FROM profiles WHERE id = $1", user.user_id)
 
     logger.info(
         "account_deleted",
