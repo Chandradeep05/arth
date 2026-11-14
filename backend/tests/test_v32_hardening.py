@@ -184,13 +184,13 @@ async def test_live_fundamentals_are_nan():
         mock_hist = MagicMock()
         mock_hist.available = True
         
-        dates = pd.date_range(start="2023-01-01", periods=30)
+        dates = pd.date_range(start="2023-01-01", periods=50)
         df = pd.DataFrame({
-            "Open": np.random.rand(30)*100,
-            "High": np.random.rand(30)*100,
-            "Low": np.random.rand(30)*100,
-            "Close": np.random.rand(30)*100,
-            "Volume": np.random.rand(30)*1000
+            "Open": np.random.rand(50)*100,
+            "High": np.random.rand(50)*100,
+            "Low": np.random.rand(50)*100,
+            "Close": np.random.rand(50)*100,
+            "Volume": np.random.rand(50)*1000
         }, index=dates)
         mock_hist.data = df
         mock_md.get_history = AsyncMock(return_value=mock_hist)

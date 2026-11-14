@@ -18,6 +18,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Query
 from pydantic import BaseModel, field_validator
 
 from app.core.auth import UserContext, require_active_user
+from app.core.instrument_resolver import resolve_instrument
 from app.core.logging import get_logger
 from app.core.symbols import normalize_symbol, get_symbol_currency, AMBIGUOUS_SYMBOLS
 
@@ -25,7 +26,7 @@ def _currency_for_symbol(symbol: str) -> str:
     """Derive display currency from symbol suffix or canonical market."""
     return get_symbol_currency(symbol)
 
-_SYMBOL_RE = re.compile(r"^[A-Z0-9._&-]{1,20}$")
+_SYMBOL_RE = re.compile(r"^\^?[A-Z0-9][A-Z0-9._&-]{0,19}$")
 
 logger = get_logger(__name__)
 router = APIRouter(prefix="/user/alerts", tags=["alerts"])
@@ -43,14 +44,19 @@ class CreateAlertRequest(BaseModel):
         if not v or not isinstance(v, str):
             raise ValueError("symbol is required")
         cleaned = v.strip().upper()
-        if not _SYMBOL_RE.match(cleaned):
-            raise ValueError("symbol contains invalid characters or exceeds 20 characters")
-        if cleaned in AMBIGUOUS_SYMBOLS:
+        if len(cleaned) > 20 or not _SYMBOL_RE.match(cleaned):
+            raise ValueError("symbol contains invalid characters, misplaced carets, or exceeds 20 characters")
+        
+        resolved = resolve_instrument(cleaned)
+        if resolved.is_ambiguous:
             raise ValueError(
-                f"Symbol '{cleaned}' is ambiguous across exchanges (NSE: {cleaned}.NS vs NYSE: {cleaned}). "
+                resolved.ambiguity_note or f"Symbol '{cleaned}' is ambiguous across exchanges (NSE: {cleaned}.NS vs NYSE: {cleaned}). "
                 f"Please specify an explicit exchange suffix (e.g. {cleaned}.NS)."
             )
-        return normalize_symbol(cleaned)
+        if not resolved.is_supported:
+            raise ValueError(f"Instrument '{cleaned}' is not resolvable or unsupported for alerts.")
+        
+        return resolved.canonical_symbol
 
     @field_validator("alert_type")
     @classmethod

@@ -5,7 +5,8 @@ Computes RSI, MACD, Bollinger Bands, VWAP, and moving averages
 from OHLCV data. Each indicator includes an interpretive signal
 (e.g., "overbought", "bullish_crossover") for the frontend.
 
-Uses pandas-ta for robust calculations.
+Delegates core mathematical computations to the canonical indicator engine
+in app.core.indicators.
 """
 
 from __future__ import annotations
@@ -15,6 +16,16 @@ from typing import Any, Dict, Optional
 import numpy as np
 import pandas as pd
 
+from app.core.indicators import (
+    compute_bollinger_scalar,
+    compute_macd_scalar,
+    compute_rolling_vwap,
+    compute_rsi_scalar,
+    compute_sma_scalar,
+    interpret_bollinger,
+    interpret_macd,
+    interpret_rsi,
+)
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -51,7 +62,7 @@ def compute_indicators(ohlcv_data: list[Dict[str, Any]]) -> Optional[Dict[str, A
 
         # ── MACD (12, 26, 9) ──
         macd_val, signal_val, hist_val = _compute_macd(df["close"])
-        if macd_val is not None:
+        if macd_val is not None and signal_val is not None and hist_val is not None:
             result["macd"] = {
                 "value": round(macd_val, 4),
                 "signal": round(signal_val, 4),
@@ -64,7 +75,7 @@ def compute_indicators(ohlcv_data: list[Dict[str, Any]]) -> Optional[Dict[str, A
 
         # ── Bollinger Bands (20, 2) ──
         bb_upper, bb_middle, bb_lower = _compute_bollinger(df["close"])
-        if bb_upper is not None:
+        if bb_upper is not None and bb_middle is not None and bb_lower is not None:
             last_close = float(df["close"].iloc[-1])
             result["bollinger_bands"] = {
                 "upper": round(bb_upper, 2),
@@ -76,9 +87,10 @@ def compute_indicators(ohlcv_data: list[Dict[str, Any]]) -> Optional[Dict[str, A
             result["bollinger_bands"] = None
             result["bb_position"] = None
 
-        # ── VWAP ──
-        vwap = _compute_vwap(df)
-        result["vwap"] = round(vwap, 2) if vwap is not None else None
+        # ── VWAP (Rolling 20-bar VWAP for daily bars; M1.3) ──
+        vwap_20d = _compute_rolling_vwap(df, period=20)
+        result["vwap_20d"] = round(vwap_20d, 2) if vwap_20d is not None else None
+        result["vwap"] = result["vwap_20d"]  # Preserved backwards-compatibility alias
 
         # ── Moving Averages ──
         result["sma_20"] = _sma(df["close"], 20)
@@ -93,101 +105,57 @@ def compute_indicators(ohlcv_data: list[Dict[str, Any]]) -> Optional[Dict[str, A
 
 # ── RSI ──
 def _compute_rsi(closes: pd.Series, period: int = 14) -> Optional[float]:
-    """Compute Relative Strength Index."""
-    if len(closes) < period + 1:
-        return None
-    delta = closes.diff()
-    gain = delta.where(delta > 0, 0.0)
-    loss = -delta.where(delta < 0, 0.0)
-    avg_gain = gain.rolling(window=period, min_periods=period).mean()
-    avg_loss = loss.rolling(window=period, min_periods=period).mean()
-    last_gain = avg_gain.iloc[-1]
-    last_loss = avg_loss.iloc[-1]
-    # Edge case: all gains, no losses → RSI = 100
-    # Edge case: no gains, no losses → RSI = 50
-    if pd.isna(last_loss) or last_loss == 0:
-        if last_gain and not pd.isna(last_gain) and last_gain > 0:
-            return 100.0
-        return 50.0
-    rs = last_gain / last_loss
-    rsi = 100 - (100 / (1 + rs))
-    return float(rsi) if not pd.isna(rsi) else None
+    """Compute Relative Strength Index using canonical Wilder RMA."""
+    return compute_rsi_scalar(closes, period=period)
 
 
 def _interpret_rsi(rsi: Optional[float]) -> Optional[str]:
-    if rsi is None:
-        return None
-    if rsi >= 70:
-        return "overbought"
-    elif rsi <= 30:
-        return "oversold"
-    return "neutral"
+    return interpret_rsi(rsi)
 
 
 # ── MACD ──
 def _compute_macd(
     closes: pd.Series, fast: int = 12, slow: int = 26, signal: int = 9
 ) -> tuple[Optional[float], Optional[float], Optional[float]]:
-    """Compute MACD, Signal, and Histogram."""
-    if len(closes) < slow + signal:
-        return None, None, None
-    ema_fast = closes.ewm(span=fast, adjust=False).mean()
-    ema_slow = closes.ewm(span=slow, adjust=False).mean()
-    macd_line = ema_fast - ema_slow
-    signal_line = macd_line.ewm(span=signal, adjust=False).mean()
-    histogram = macd_line - signal_line
-    return (
-        float(macd_line.iloc[-1]),
-        float(signal_line.iloc[-1]),
-        float(histogram.iloc[-1]),
-    )
+    """Compute MACD, Signal, and Histogram using canonical SMA-seeded EMA."""
+    return compute_macd_scalar(closes, fast=fast, slow=slow, signal=signal)
 
 
 def _interpret_macd(macd: float, signal: float, histogram: float) -> str:
-    if histogram > 0 and macd > signal:
-        return "bullish"
-    elif histogram < 0 and macd < signal:
-        return "bearish"
-    return "neutral"
+    return interpret_macd(macd, signal, histogram)
 
 
 # ── Bollinger Bands ──
 def _compute_bollinger(
     closes: pd.Series, period: int = 20, std_dev: int = 2
 ) -> tuple[Optional[float], Optional[float], Optional[float]]:
-    """Compute Bollinger Bands."""
-    if len(closes) < period:
-        return None, None, None
-    sma = closes.rolling(window=period).mean()
-    std = closes.rolling(window=period).std()
-    upper = sma + (std * std_dev)
-    lower = sma - (std * std_dev)
-    return float(upper.iloc[-1]), float(sma.iloc[-1]), float(lower.iloc[-1])
+    """Compute Bollinger Bands using population standard deviation (ddof=0)."""
+    return compute_bollinger_scalar(closes, period=period, num_std=float(std_dev), ddof=0)
 
 
 def _interpret_bollinger(price: float, upper: float, lower: float) -> str:
-    if price >= upper:
-        return "above_upper"
-    elif price <= lower:
-        return "below_lower"
-    return "middle"
+    return interpret_bollinger(price, upper, lower)
 
 
 # ── VWAP ──
-def _compute_vwap(df: pd.DataFrame) -> Optional[float]:
-    """Compute Volume Weighted Average Price."""
+def _compute_rolling_vwap(df: pd.DataFrame, period: int = 20) -> Optional[float]:
+    """Compute 20-bar rolling Volume Weighted Average Price for daily bars."""
     try:
-        typical_price = (df["high"] + df["low"] + df["close"]) / 3
-        vwap = (typical_price * df["volume"]).cumsum() / df["volume"].cumsum()
-        val = vwap.iloc[-1]
+        if "volume" not in df.columns or df["volume"].sum() == 0:
+            return None
+        s = compute_rolling_vwap(df["high"], df["low"], df["close"], df["volume"], period=period)
+        val = s.iloc[-1]
         return float(val) if not pd.isna(val) else None
     except Exception:
         return None
 
 
+def _compute_vwap(df: pd.DataFrame) -> Optional[float]:
+    """Backwards-compatibility alias delegating to 20-bar rolling VWAP."""
+    return _compute_rolling_vwap(df, period=20)
+
+
 # ── Simple Moving Average ──
 def _sma(closes: pd.Series, period: int) -> Optional[float]:
-    if len(closes) < period:
-        return None
-    val = closes.rolling(window=period).mean().iloc[-1]
-    return round(float(val), 2) if not pd.isna(val) else None
+    return compute_sma_scalar(closes, period=period)
+

@@ -2,14 +2,16 @@
 ARTH Canonical Market Calendar & Exchange Session Engine.
 
 Authoritative exchange trading calendars and session state machine for:
-- National Stock Exchange of India (NSE)
-- New York Stock Exchange (NYSE) / NASDAQ
+- National Stock Exchange of India (NSE) (Asia/Kolkata, IST, UTC+5:30)
+- New York Stock Exchange (NYSE) / NASDAQ (America/New_York, ET)
 
 Features:
-- Official 2026 & 2027 exchange holiday schedules (verified against official NSE & NYSE notices)
-- NYSE early-close modeling (1:00 PM ET)
-- Canonical get_market_state(market_or_symbol, dt) engine
-- Extensible hook for dynamic calendar API integration if external provider key is configured
+- Strict separation between Confirmed and Provisional holidays.
+- Explicit calendar coverage boundaries and fail-closed validation for unsupported dates.
+- Timezone conversions preserving exact local exchange clock times.
+- Official NYSE early-close modeling (1:00 PM Eastern Time).
+- Muhurat special trading session modeling for Diwali.
+- Extensible architecture for dynamic exchange calendar data sources.
 """
 
 from __future__ import annotations
@@ -20,11 +22,17 @@ from zoneinfo import ZoneInfo
 
 from app.core.symbols import is_indian_symbol
 
+
+class CalendarCoverageError(ValueError):
+    """Raised when an operation requests a calendar date outside supported coverage."""
+    pass
+
+
 # ── Official Exchange Holidays (YYYY, MM, DD) ──────────────────────────
 
 # Official National Stock Exchange of India (NSE) Trading Holidays (Equity Segment)
 # Verified against official NSE India 2026 trading holiday circular
-NSE_HOLIDAYS_2026: Set[Tuple[int, int, int]] = {
+NSE_CONFIRMED_HOLIDAYS_2026: Set[Tuple[int, int, int]] = {
     (2026, 1, 15),   # Municipal Corporation Election - Maharashtra
     (2026, 1, 26),   # Republic Day
     (2026, 3, 3),    # Holi
@@ -43,8 +51,8 @@ NSE_HOLIDAYS_2026: Set[Tuple[int, int, int]] = {
     (2026, 12, 25),  # Christmas
 }
 
-# PROVISIONAL 2027 NSE Holidays (Provisional estimates pending official annual exchange gazette/TradingHours API feed)
-NSE_HOLIDAYS_2027: Set[Tuple[int, int, int]] = {
+# Provisional 2027 NSE Holidays (Kept strictly segregated from confirmed active set)
+NSE_PROVISIONAL_HOLIDAYS_2027: Set[Tuple[int, int, int]] = {
     (2027, 1, 26),   # Republic Day
     (2027, 3, 22),   # Holi
     (2027, 3, 26),   # Good Friday
@@ -56,12 +64,14 @@ NSE_HOLIDAYS_2027: Set[Tuple[int, int, int]] = {
     (2027, 12, 25),  # Christmas
 }
 
-NSE_HOLIDAYS = NSE_HOLIDAYS_2026 | NSE_HOLIDAYS_2027
+# Active confirmed NSE holidays (provisional holidays are NOT included by default)
+NSE_HOLIDAYS: Set[Tuple[int, int, int]] = set(NSE_CONFIRMED_HOLIDAYS_2026)
+NSE_HOLIDAYS_2026: Set[Tuple[int, int, int]] = NSE_CONFIRMED_HOLIDAYS_2026
 
 
 # Official New York Stock Exchange (NYSE) / NASDAQ Trading Holidays
 # Verified against official NYSE trading hours & calendar
-NYSE_HOLIDAYS_2026: Set[Tuple[int, int, int]] = {
+NYSE_CONFIRMED_HOLIDAYS_2026: Set[Tuple[int, int, int]] = {
     (2026, 1, 1),    # New Year's Day
     (2026, 1, 19),   # Martin Luther King, Jr. Day
     (2026, 2, 16),   # Washington's Birthday (Presidents' Day)
@@ -74,7 +84,7 @@ NYSE_HOLIDAYS_2026: Set[Tuple[int, int, int]] = {
     (2026, 12, 25),  # Christmas Day
 }
 
-NYSE_HOLIDAYS_2027: Set[Tuple[int, int, int]] = {
+NYSE_CONFIRMED_HOLIDAYS_2027: Set[Tuple[int, int, int]] = {
     (2027, 1, 1),    # New Year's Day
     (2027, 1, 18),   # Martin Luther King, Jr. Day
     (2027, 2, 15),   # Presidents' Day
@@ -87,15 +97,30 @@ NYSE_HOLIDAYS_2027: Set[Tuple[int, int, int]] = {
     (2027, 12, 24),  # Christmas Day (Observed - Dec 25 is Saturday)
 }
 
-US_HOLIDAYS = NYSE_HOLIDAYS_2026 | NYSE_HOLIDAYS_2027
+US_HOLIDAYS: Set[Tuple[int, int, int]] = NYSE_CONFIRMED_HOLIDAYS_2026 | NYSE_CONFIRMED_HOLIDAYS_2027
+NYSE_HOLIDAYS_2026: Set[Tuple[int, int, int]] = NYSE_CONFIRMED_HOLIDAYS_2026
+NYSE_HOLIDAYS_2027: Set[Tuple[int, int, int]] = NYSE_CONFIRMED_HOLIDAYS_2027
 
 # Official NYSE Early-Close Days (1:00 PM Eastern Time close)
-# Verified: Day after Thanksgiving & Christmas Eve
 NYSE_EARLY_CLOSES: Set[Tuple[int, int, int]] = {
     (2026, 11, 27),  # Day after Thanksgiving (1:00 PM ET close)
     (2026, 12, 24),  # Christmas Eve (1:00 PM ET close)
     (2027, 11, 26),  # Day after Thanksgiving (1:00 PM ET close)
 }
+
+# Special Sessions (e.g. Diwali Laxmi Pujan Muhurat Trading on NSE)
+# 2026 Diwali Muhurat Trading (estimated 18:15 to 19:15 IST)
+NSE_SPECIAL_SESSIONS_2026: Dict[Tuple[int, int, int], Tuple[time, time]] = {
+    (2026, 11, 8): (time(18, 15), time(19, 15)),  # Diwali Muhurat Trading Session
+}
+
+
+# ── Coverage Boundaries ────────────────────────────────────────────────
+NSE_COVERAGE_START = date(2026, 1, 1)
+NSE_COVERAGE_END = date(2026, 12, 31)
+
+NYSE_COVERAGE_START = date(2026, 1, 1)
+NYSE_COVERAGE_END = date(2027, 12, 31)
 
 
 # ── Exchange Timezones ──────────────────────────────────────────────────
@@ -103,19 +128,29 @@ TZ_IST = ZoneInfo("Asia/Kolkata")
 TZ_ET = ZoneInfo("America/New_York")
 
 
-def is_nse_holiday(dt: date | datetime) -> bool:
-    """Check if the given date is an official NSE trading holiday."""
-    return (dt.year, dt.month, dt.day) in NSE_HOLIDAYS
+def is_nse_holiday(dt: date | datetime, include_provisional: bool = False) -> bool:
+    """Check if the given date is an official confirmed NSE trading holiday."""
+    tup = (dt.year, dt.month, dt.day)
+    if tup in NSE_CONFIRMED_HOLIDAYS_2026:
+        return True
+    if include_provisional and tup in NSE_PROVISIONAL_HOLIDAYS_2027:
+        return True
+    return False
 
 
 def is_us_holiday(dt: date | datetime) -> bool:
-    """Check if the given date is an official NYSE/NASDAQ trading holiday."""
+    """Check if the given date is an official confirmed NYSE/NASDAQ trading holiday."""
     return (dt.year, dt.month, dt.day) in US_HOLIDAYS
 
 
 def is_us_early_close(dt: date | datetime) -> bool:
     """Check if the given date is an official NYSE early-close date (1:00 PM ET)."""
     return (dt.year, dt.month, dt.day) in NYSE_EARLY_CLOSES
+
+
+def is_nse_special_session(dt: date | datetime) -> Optional[Tuple[time, time]]:
+    """Return special session hours if date has an official special trading session."""
+    return NSE_SPECIAL_SESSIONS_2026.get((dt.year, dt.month, dt.day))
 
 
 def get_market_state(
@@ -125,13 +160,8 @@ def get_market_state(
     """
     Determine whether an exchange is open, pre-market, closed, or on holiday.
 
-    Returns:
-        tuple[market_state, session_label]
-        e.g., ("open", "Regular Trading"), ("closed", "Market Holiday"), ("closed", "Weekend")
-
-    Supported markets / symbols:
-        - "india", "nse", "bse", or Indian symbols (e.g., 'RELIANCE', 'TCS', 'INFY', 'RELIANCE.NS') -> NSE (IST)
-        - "us", "nyse", "nasdaq", or any US symbol ('AAPL', 'TSLA', 'MSFT') -> NYSE (ET)
+    Converts input UTC datetime to the exchange's native local timezone before
+    evaluating trading hours, early closes, or holidays.
     """
     now_utc = dt or datetime.now(timezone.utc)
     sym = (market_or_symbol or "us").upper()
@@ -142,9 +172,21 @@ def get_market_state(
         weekday = now_local.weekday()  # Monday=0, Sunday=6
         d_tuple = (now_local.year, now_local.month, now_local.day)
 
+        # Check special session first (e.g. Muhurat trading on Sunday/evening)
+        special_hours = NSE_SPECIAL_SESSIONS_2026.get(d_tuple)
+        if special_hours:
+            open_t, close_t = special_hours
+            t = now_local.time()
+            if open_t <= t < close_t:
+                return "open", "Special Trading Session (Muhurat)"
+            elif t < open_t:
+                return "closed", "Pre-Special Session"
+            else:
+                return "closed", "Post-Special Session"
+
         if weekday >= 5:
             return "closed", "Weekend"
-        if d_tuple in NSE_HOLIDAYS:
+        if is_nse_holiday(now_local):
             return "closed", "Market Holiday"
 
         t = now_local.time()
@@ -163,7 +205,7 @@ def get_market_state(
 
     if weekday >= 5:
         return "closed", "Weekend"
-    if d_tuple in US_HOLIDAYS:
+    if is_us_holiday(now_local):
         return "closed", "Market Holiday"
 
     t = now_local.time()

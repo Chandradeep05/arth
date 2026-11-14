@@ -23,6 +23,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
+from app.core.indicators import compute_bollinger_bands, compute_macd, compute_rsi
 from app.core.logging import get_logger
 from app.data.market_data_provider import market_data, DataStatus
 
@@ -44,7 +45,7 @@ def _safe(val, default=0.0) -> float:
 class FeatureEngineer:
     """Builds feature vectors from historical + fundamental data."""
 
-    FEATURE_NAMES = [
+    FEATURE_NAMES_V1 = [
         "return_1d", "return_5d", "return_20d",
         "volatility_20d", "gap",
         "rsi_14", "macd_signal", "bb_position",
@@ -52,6 +53,10 @@ class FeatureEngineer:
         "pe_ratio", "pb_ratio", "market_cap_log",
         "day_of_week", "month",
     ]
+    FEATURE_NAMES = FEATURE_NAMES_V1
+
+    # V2 features with scale-invariant normalized technical signals (M1.5)
+    FEATURE_NAMES_V2 = FEATURE_NAMES_V1 + ["macd_signal_norm"]
 
     async def build_features(
         self,
@@ -137,24 +142,25 @@ class FeatureEngineer:
         """Build feature vector for the most recent trading day (for prediction).
 
         Returns a dict of feature_name -> value for model input.
+        Enforces:
+        - 1-year lookback (250+ bars) for train/serve indicator warm-up parity (M1.1)
+        - Explicit abstention on missing/unwarmed technical indicators (M1.2)
+        - Scale-invariant feature compatibility (M1.5)
         """
-        history_result = await market_data.get_history(symbol, period='3mo', interval='1d')
+        # M1.1: 1y lookback (~252 trading days) ensures parity with training indicator convergence
+        history_result = await market_data.get_history(symbol, period='1y', interval='1d')
         if not history_result.available:
             reason = history_result.reason or 'Data unavailable'
             raise ValueError(f'Historical data unavailable for {symbol}: {reason}')
         hist = history_result.data
 
-        # Fundamentals not used for model input (NaN for consistency).
-        # Kept as comment for documentation.
-        # fund_result = await market_data.get_fundamentals(symbol)
-
-        if hist is None or hist.empty or len(hist) < 25:
-            raise ValueError(f"Insufficient recent data for {symbol}")
+        if hist is None or hist.empty or len(hist) < 35:
+            raise ValueError(f"Insufficient recent data for {symbol}: need 35+ daily bars for indicator warm-up")
 
         # No need to flatten — MarketDataProvider returns standardized columns
         df = hist.copy()
 
-        # Compute all features on last 3mo, take the last row
+        # Compute all features on history, take the last row
         df["return_1d"] = df["Close"].pct_change(1)
         df["return_5d"] = df["Close"].pct_change(5)
         df["return_20d"] = df["Close"].pct_change(20)
@@ -163,14 +169,13 @@ class FeatureEngineer:
         df["rsi_14"] = self._compute_rsi(df["Close"], 14)
         df["macd_signal"] = self._compute_macd_signal(df["Close"])
         df["bb_position"] = self._compute_bb_position(df["Close"], 20)
+        df["macd_signal_norm"] = df["macd_signal"] / df["Close"].replace(0, np.nan)
 
         vol_sma20 = df["Volume"].rolling(20).mean()
         df["volume_ratio_20d"] = df["Volume"] / vol_sma20.replace(0, np.nan)
         df["volume_trend_5d"] = df["Volume"].pct_change(5)
 
         # ── Fundamental features — match training behavior ──
-        # Training uses NaN for all fundamentals (no historical data available).
-        # Live must also use NaN for model consistency — XGBoost handles NaN natively.
         df["pe_ratio"] = np.nan
         df["pb_ratio"] = np.nan
         df["market_cap_log"] = np.nan
@@ -179,14 +184,31 @@ class FeatureEngineer:
 
         last = df.iloc[-1]
         features = {}
-        # Columns where NaN must be preserved for model consistency
+
+        # M1.2: Core price and technical features where missing values indicate insufficient warm-up
+        # Must ABSTAIN rather than silently converting to 0.0 false signals
+        _REQUIRED_PRICE_TECH_FEATURES = {
+            "return_1d", "return_5d", "return_20d", "volatility_20d", "gap",
+            "rsi_14", "macd_signal", "bb_position", "volume_ratio_20d"
+        }
         _NAN_PRESERVE_COLS = {"pe_ratio", "pb_ratio", "market_cap_log"}
+
         for col in self.FEATURE_NAMES:
             val = last.get(col)
             if col in _NAN_PRESERVE_COLS:
                 features[col] = np.nan  # Always NaN — match training
+            elif col in _REQUIRED_PRICE_TECH_FEATURES:
+                if val is None or pd.isna(val) or np.isinf(val):
+                    raise ValueError(
+                        f"Feature '{col}' could not be computed for {symbol} (insufficient history or incomplete warm-up). "
+                        f"Abstaining from prediction."
+                    )
+                features[col] = float(val)
             else:
                 features[col] = _safe(val, 0.0)
+
+        # Also store normalized MACD feature for V2 consumers
+        features["macd_signal_norm"] = float(last.get("macd_signal_norm", np.nan))
 
         return features
 
@@ -194,30 +216,23 @@ class FeatureEngineer:
 
     @staticmethod
     def _compute_rsi(close: pd.Series, period: int = 14) -> pd.Series:
-        """Compute RSI (0-100)."""
-        delta = close.diff()
-        gain = delta.where(delta > 0, 0.0).rolling(period).mean()
-        loss = (-delta.where(delta < 0, 0.0)).rolling(period).mean()
-        # When loss is 0: if gain > 0 -> 100, if gain == 0 -> 50
-        rsi = 100.0 - (100.0 / (1.0 + (gain / loss.replace(0, np.nan))))
-        rsi = rsi.where(loss > 0, np.where(gain > 0, 100.0, 50.0))
-        return rsi.where(~(gain.isna() | loss.isna()), np.nan)
+        """Compute RSI (0-100) using canonical Wilder RMA."""
+        return compute_rsi(close, period=period)
 
     @staticmethod
     def _compute_macd_signal(close: pd.Series) -> pd.Series:
-        """MACD signal line crossover value (MACD - Signal)."""
-        ema12 = close.ewm(span=12, adjust=False).mean()
-        ema26 = close.ewm(span=26, adjust=False).mean()
-        macd = ema12 - ema26
-        signal = macd.ewm(span=9, adjust=False).mean()
-        return macd - signal
+        """MACD signal line crossover value (MACD - Signal) using canonical SMA-seeded EMA."""
+        _, _, hist = compute_macd(close, fast=12, slow=26, signal=9)
+        return hist
 
     @staticmethod
     def _compute_bb_position(close: pd.Series, period: int = 20) -> pd.Series:
-        """Position within Bollinger Bands (0 = lower, 1 = upper)."""
-        sma = close.rolling(period).mean()
-        std = close.rolling(period).std()
-        upper = sma + 2 * std
-        lower = sma - 2 * std
-        width = (upper - lower).replace(0, np.nan)
-        return (close - lower) / width
+        """Position within Bollinger Bands (0 = lower, 1 = upper) using population std (ddof=0)."""
+        _, _, _, percent_b, _ = compute_bollinger_bands(close, period=period, num_std=2.0, ddof=0)
+        return percent_b
+
+
+# Module-level aliases for direct import
+FEATURE_NAMES_V1 = FeatureEngineer.FEATURE_NAMES_V1
+FEATURE_NAMES_V2 = FeatureEngineer.FEATURE_NAMES_V2
+FEATURE_NAMES = FeatureEngineer.FEATURE_NAMES

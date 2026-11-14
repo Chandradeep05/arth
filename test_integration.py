@@ -377,11 +377,12 @@ try:
 
     # Simulate what _fetch_ohlcv now does: DataFrame → dict records
     dates = pd.date_range("2024-01-01", periods=30, freq="B")
+    base = np.random.rand(30) * 100 + 100
     original_df = pd.DataFrame({
-        "Open": np.random.rand(30) * 100 + 100,
-        "High": np.random.rand(30) * 100 + 105,
-        "Low": np.random.rand(30) * 100 + 95,
-        "Close": np.random.rand(30) * 100 + 100,
+        "Open": base,
+        "High": base + np.random.rand(30) * 10 + 2,
+        "Low": base - np.random.rand(30) * 10 - 2,
+        "Close": base + (np.random.rand(30) - 0.5) * 2,
         "Volume": np.random.randint(1_000_000, 50_000_000, 30),
     }, index=dates)
 

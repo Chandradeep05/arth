@@ -153,33 +153,52 @@ def _calculate_fallback_market_cap(symbol: str, price: Optional[float]):
     return None
 
 
-def normalize_ohlcv(data: Any, source: str) -> pd.DataFrame | None:
+def normalize_ohlcv(data: Any, source: str = "unknown", adjustment_mode: str = "UNVERIFIED") -> pd.DataFrame | None:
     """
-    Takes raw data from ANY provider and returns a standardized DataFrame 
-    with columns: Open, High, Low, Close, Volume, sorted ascending by DatetimeIndex.
+    Takes raw data from ANY provider (DataFrame, dict, or list) and returns a standardized,
+    rigorously validated DataFrame with columns: Open, High, Low, Close, Volume, sorted
+    chronologically ascending by UTC DatetimeIndex.
+
+    Enforces:
+    - Same validation pipeline for DataFrame, dict with 'bars', and list inputs
+    - Required fields: Open, High, Low, Close, Volume
+    - Numeric conversion and non-finite / NaN rejection
+    - Strictly positive prices (Open, High, Low, Close > 0)
+    - Non-negative volume (Volume >= 0)
+    - Physical OHLC consistency: High >= Low, High >= Open, High >= Close, Low <= Open, Low <= Close
+    - Timestamp validity and deduplication
+    - Chronological ascending ordering
+    - Source and adjustment_mode metadata tracking in df.attrs
     """
     if data is None:
         return None
-    if isinstance(data, pd.DataFrame):
-        if data.empty:
-            return None
-        return data  # Already a DataFrame, return as-is
-        
+
     try:
-        if isinstance(data, dict) and 'bars' in data:
+        if isinstance(data, pd.DataFrame):
+            if data.empty:
+                return None
+            df = data.copy()
+        elif isinstance(data, dict) and 'bars' in data:
             bars = data['bars']
+            if not bars:
+                return None
+            df = pd.DataFrame(bars)
         elif isinstance(data, list):
-            bars = data
+            if not data:
+                return None
+            df = pd.DataFrame(data)
         else:
             return None
-            
-        if not bars:
-            return None
-            
-        df = pd.DataFrame(bars)
-        
+
+        # Reset index if already a DatetimeIndex so column mapper can inspect it
+        if isinstance(df.index, pd.DatetimeIndex):
+            df = df.reset_index()
+            # If the reset column is named 'index', rename to 'Datetime'
+            if 'index' in df.columns and 'Datetime' not in df.columns:
+                df = df.rename(columns={'index': 'Datetime'})
+
         # Select best datetime column among candidates to avoid duplicate 'Datetime' columns
-        dt_candidates = ['datetime', 'timestamp', 'date', 'time', 't']
+        dt_candidates = ['datetime', 'timestamp', 'date', 'time', 't', 'index']
         best_dt_col = None
         for cand in dt_candidates:
             for c in df.columns:
@@ -226,18 +245,55 @@ def normalize_ohlcv(data: Any, source: str) -> pd.DataFrame | None:
             else:
                 df['Datetime'] = pd.to_datetime(dt_series, utc=True)
             df = df.set_index('Datetime')
-            
-        # Sort ascending
-        df = df.sort_index(ascending=True)
-        
+
         # Select only required columns
         df = df[required]
 
-        # Numeric conversions
+        # Numeric conversions and non-finite rejection
         for col in required:
             df[col] = pd.to_numeric(df[col], errors='coerce')
 
-        return df.dropna(subset=['Close'])
+        import numpy as np
+        # Drop rows with NaN or infinite values
+        df = df.replace([np.inf, -np.inf], np.nan).dropna(subset=required)
+        if df.empty:
+            return None
+
+        # Price positivity and volume non-negativity filter
+        valid_pos = (
+            (df['Open'] > 0) &
+            (df['High'] > 0) &
+            (df['Low'] > 0) &
+            (df['Close'] > 0) &
+            (df['Volume'] >= 0)
+        )
+        df = df[valid_pos]
+        if df.empty:
+            return None
+
+        # Physical OHLC consistency filter: High is greatest, Low is smallest
+        # Allow tiny floating tolerance (1e-6) for rounding
+        valid_ohlc = (
+            (df['High'] >= df['Low'] - 1e-6) &
+            (df['High'] >= df['Open'] - 1e-6) &
+            (df['High'] >= df['Close'] - 1e-6) &
+            (df['Low'] <= df['Open'] + 1e-6) &
+            (df['Low'] <= df['Close'] + 1e-6)
+        )
+        df = df[valid_ohlc]
+        if df.empty:
+            return None
+
+        # Deduplicate timestamps, keeping last
+        if isinstance(df.index, pd.DatetimeIndex):
+            df = df[~df.index.duplicated(keep='last')]
+            df = df.sort_index(ascending=True)
+
+        # Record audit metadata in DataFrame attributes
+        df.attrs['source'] = source
+        df.attrs['adjustment_mode'] = adjustment_mode
+
+        return df
     except Exception as e:
         logger.error("ohlcv_normalization_failed", source=source, error=str(e))
         return None
@@ -644,8 +700,8 @@ class MarketDataProvider:
         """Batch quotes — route Indian symbols to Upstox/NSE, US to TwelveData."""
         results = []
         normalized_symbols = [self._normalize_symbol(s) for s in symbols]
-        us_symbols = [s for s in normalized_symbols if not s.upper().endswith(('.NS', '.BO'))]
-        indian_symbols = [s for s in normalized_symbols if s.upper().endswith(('.NS', '.BO'))]
+        indian_symbols = [s for s in normalized_symbols if is_indian_symbol(s)]
+        us_symbols = [s for s in normalized_symbols if not is_indian_symbol(s)]
 
         if us_symbols and self._twelve:
             try:
