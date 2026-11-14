@@ -277,7 +277,8 @@ async def test_alert_warmup_starvation_prevention():
     mock_request.app.state.redis = mock_redis
     mock_request.state.db = mock_db
 
-    with patch("app.data.market_data_provider.market_data.get_quote", new_callable=AsyncMock) as mock_get_quote:
+    with patch("app.data.market_data_provider.market_data.get_quote", new_callable=AsyncMock) as mock_get_quote, \
+         patch("app.api.v1.internal.get_market_state", return_value=("open", 0)):
         mock_quote_res = MagicMock()
         mock_quote_res.available = True
         mock_quote_res.data = {"price": 100.0}
